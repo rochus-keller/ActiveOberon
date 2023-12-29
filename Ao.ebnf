@@ -1,0 +1,107 @@
+// Copyright 2023 Rochus Keller <mailto:me@rochus-keller.ch>
+// Active Oberon syntax for EbnfStudio
+// - Converted syntax from appendix A of Reali, P. (2004): Active Oberon Language Report, Institut fur Computersysteme, 
+//   ETH Zurich, see https://web.archive.org/web/20110524062849/http://bluebottle.ethz.ch/languagereport/ActiveReport.pdf
+// - Moved statement terms to dedicated productions
+// - Moved type terms to dedicated productions
+// - Removed LL(1) ambigs from Qualident, Designator, Assignment vs Call, Typeguard vs Call
+// - Adopted syntax to Bluebottle version March 12, 2004 (see https://github.com/OberonSystem3/AOS_Bluebottle_Sources)
+
+Module ::= MODULE ident ';' [ImportList] {Definition} {DeclSeq} Body ident '.'
+ImportList ::= IMPORT ident [':=' ident] {',' ident [':=' ident ]} ';'
+Definition ::= DEFINITION ident [REFINES Qualident] {PROCEDURE ident [FormalPars] ';'} END ident
+DeclSeq ::= CONST {ConstDecl ';'} | TYPE {TypeDecl ';'} | VAR {VarDecl ';'} | {ProcDecl ';'}
+ConstDecl ::= IdentDef '=' ConstExpr
+TypeDecl ::= IdentDef '=' Type
+VarDecl ::= IdentList ':' Type
+Assembler ::= CODE END
+ProcDecl ::= PROCEDURE ( 
+                            ProcHead ';' {DeclSeq} (Body|Assembler) ident
+                            | '^' ProcHead ) // forward declaration was missing
+ProcHead ::= [SysFlag] ['*' | '&' | '-'] IdentDef [FormalPars]
+SysFlag ::= '[' ident ']'
+FormalPars ::= '(' [FPSection {';' FPSection}] ')' [':' Qualident]
+FPSection ::= [VAR] ident {',' ident} ':' Type
+ArrayType ::= ARRAY [SysFlag] [ConstExpr {',' ConstExpr}] OF Type
+RecordType ::= RECORD [SysFlag] ['(' Qualident ')'] [FieldList] END
+PointerType ::= POINTER [SysFlag] TO Type
+ObjectType ::= OBJECT [[SysFlag] ['(' Qualident ')'] [IMPLEMENTS Qualident] {DeclSeq} Body [ident] ]
+ProcedureType ::= PROCEDURE [SysFlag] [Attributes] [FormalPars]
+AliasType ::= Qualident
+Type ::= AliasType
+		| ArrayType
+		| RecordType
+		| PointerType
+		| ObjectType
+		| ProcedureType
+FieldDecl ::= [IdentList ':' Type]
+FieldList ::= FieldDecl {';' FieldDecl}
+Body ::= StatBlock | END
+Attributes ::= '{'[ExprList]'}' // original IdentList, but e.g. in AosActive.Mod line 151 is a function call; can even be empty
+StatBlock ::= BEGIN [Attributes] [StatSeq] END
+StatSeq ::= Statement {';' Statement}
+AssigOrCall ::= Designator [ ':=' Expr | '(' ExprList')' ]
+IfStat ::= IF Expr THEN StatSeq {ELSIF Expr THEN StatSeq}[ELSE StatSeq] END
+CaseStat ::= CASE Expr (DO|OF) Case {'|' Case} [ELSE StatSeq] END
+WhileStat ::= WHILE Expr DO StatSeq END
+RepeatStat ::= REPEAT StatSeq UNTIL Expr
+ForStat ::= FOR ident ':=' Expr TO Expr [BY ConstExpr] DO StatSeq END
+LoopStat ::= LOOP StatSeq END
+WithStat ::= WITH Qualident ':' Qualident DO StatSeq END
+ReturnStat ::= RETURN [Expr]
+Statement ::= [ AssigOrCall
+		| IfStat
+		| CaseStat
+		| WhileStat
+		| RepeatStat
+		| ForStat
+		| LoopStat
+		| WithStat
+		| EXIT
+		| ReturnStat
+		| StatBlock
+		]
+Case ::= [CaseLabels { ',' CaseLabels } ':' StatSeq]
+CaseLabels ::= ConstExpr ['..' ConstExpr]
+ConstExpr ::= Expr
+Expr ::= SimpleExpr [Relation SimpleExpr]
+SimpleExpr ::= Term {MulOp Term}
+Term ::= ['+'|'-'] Factor {AddOp Factor}
+Factor ::= Designator // this is now part of Designator ['(' ExprList')'] 
+                 | number | hexchar | string
+		| NIL | Set | '('Expr')'|'~'Factor
+Set ::= '{' [Element {',' Element}] '}'
+Element ::= Expr ['..' Expr]
+Relation ::= '=' | '#' | '<' | '<=' | '>' | '>=' | IN | IS
+MulOp ::= '*' | DIV | MOD | '/' | '&' 
+AddOp ::= '+' | '-' | OR 
+Designator ::= ident { \LL:2\ '.' ident | '['ExprList']' | '^' 
+                        | '(' [ExprList] ')' } // orig was Qualident, combined typeguard and call
+ExprList ::= Expr {',' Expr}
+IdentList ::= IdentDef {',' IdentDef}
+Qualident ::= ident [\LL:2\'.'ident ] 
+IdentDef ::= ident ['*'|'-'] [SysFlag] // happens e.g. in AosHeap.Mod line 58
+
+
+ident ::= // letter {letter | digit}
+
+integer ::= // digit {digit} | digit {hexDigit} 'H'
+
+real ::= // digit {digit} '.' {digit} [ScaleFactor]
+
+ScaleFactor- ::= // 'E' ['+' | '-'] digit {digit}
+
+number ::= integer | real
+
+string ::= // '"' {character} '"' | digit {hexDigit} 'X'
+hexchar ::=
+
+comment- ::= '(*' '*)' 
+
+/// Helper Tokens
+Comment ::=
+
+
+/// Pragmas
+%namespace ::= 'Ao'
+%suppress ::= ';' ',' '.' ':'
