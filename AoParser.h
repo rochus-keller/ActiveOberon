@@ -27,7 +27,6 @@ namespace Ao {
 	protected:
 		void Module(SynTree*);
 		void ImportList(SynTree*);
-		void Definition(SynTree*);
 		void DeclSeq(SynTree*);
 		void ConstDecl(SynTree*);
 		void TypeDecl(SynTree*);

@@ -1,6 +1,6 @@
 ## About this project
 
-This is a parser for the ActiveOberon language as specified [in the language report](https://web.archive.org/web/20110524062849/http://bluebottle.ethz.ch/languagereport/ActiveReport.pdf).
+This is a parser for the ActiveOberon language as specified [in the 2004 language report](https://web.archive.org/web/20110524062849/http://bluebottle.ethz.ch/languagereport/ActiveReport.pdf).
 
 The grammar in Ao.ebnf is compatible with [EbnfStudio](https://github.com/rochus-keller/EbnfStudio) which was also used to generate the included AoParser/AoSynTree/AoTokenType.h/.cpp. 
 

@@ -24,7 +24,6 @@ namespace Ao {
 			R_ConstDecl,
 			R_ConstExpr,
 			R_DeclSeq,
-			R_Definition,
 			R_Designator,
 			R_Element,
 			R_Expr,

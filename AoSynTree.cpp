@@ -23,7 +23,6 @@ const char* SynTree::rToStr( quint16 r ) {
 		case R_ConstDecl: return "ConstDecl";
 		case R_ConstExpr: return "ConstExpr";
 		case R_DeclSeq: return "DeclSeq";
-		case R_Definition: return "Definition";
 		case R_Designator: return "Designator";
 		case R_Element: return "Element";
 		case R_Expr: return "Expr";

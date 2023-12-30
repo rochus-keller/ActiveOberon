@@ -6,10 +6,19 @@
 // - Moved type terms to dedicated productions
 // - Removed LL(1) ambigs from Qualident, Designator, Assignment vs Call, Typeguard vs Call
 // - Adopted syntax to Bluebottle version March 12, 2004 (see https://github.com/OberonSystem3/AOS_Bluebottle_Sources)
+// - Removed DEFINITION (not used a single time in Bluebottle 2004 source tree)
 
-Module ::= MODULE ident ';' [ImportList] {Definition} {DeclSeq} Body ident '.'
+//#define HAVE_DEFINITION
+
+Module ::= MODULE ident ';' [ImportList] 
+#ifdef HAVE_DEFINITION
+    {Definition} 
+#endif
+    {DeclSeq} Body ident '.'
 ImportList ::= IMPORT ident [':=' ident] {',' ident [':=' ident ]} ';'
+#ifdef HAVE_DEFINITION
 Definition ::= DEFINITION ident [REFINES Qualident] {PROCEDURE ident [FormalPars] ';'} END ident
+#endif
 DeclSeq ::= CONST {ConstDecl ';'} | TYPE {TypeDecl ';'} | VAR {VarDecl ';'} | {ProcDecl ';'}
 ConstDecl ::= IdentDef '=' ConstExpr
 TypeDecl ::= IdentDef '=' Type
@@ -17,7 +26,7 @@ VarDecl ::= IdentList ':' Type
 Assembler ::= CODE END
 ProcDecl ::= PROCEDURE ( 
                             ProcHead ';' {DeclSeq} (Body|Assembler) ident
-                            | '^' ProcHead ) // forward declaration was missing
+                            | '^' ProcHead ) // forward declarations appear many times in Bluebottle source tree
 ProcHead ::= [SysFlag] ['*' | '&' | '-'] IdentDef [FormalPars]
 SysFlag ::= '[' ident ']'
 FormalPars ::= '(' [FPSection {';' FPSection}] ')' [':' Qualident]
@@ -25,7 +34,12 @@ FPSection ::= [VAR] ident {',' ident} ':' Type
 ArrayType ::= ARRAY [SysFlag] [ConstExpr {',' ConstExpr}] OF Type
 RecordType ::= RECORD [SysFlag] ['(' Qualident ')'] [FieldList] END
 PointerType ::= POINTER [SysFlag] TO Type
-ObjectType ::= OBJECT [[SysFlag] ['(' Qualident ')'] [IMPLEMENTS Qualident] {DeclSeq} Body [ident] ]
+ObjectType ::= OBJECT [[SysFlag] ['(' Qualident ')' ]  // NOTE: semi after base type most observed syntax error
+#ifdef HAVE_DEFINITION
+    [IMPLEMENTS Qualident] 
+#endif
+    {DeclSeq} // NOTE: missing semi after decls (in absence of procs) most observed syntax error
+    Body [ident] ] 
 ProcedureType ::= PROCEDURE [SysFlag] [Attributes] [FormalPars]
 AliasType ::= Qualident
 Type ::= AliasType

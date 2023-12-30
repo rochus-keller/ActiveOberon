@@ -39,7 +39,6 @@ namespace Ao {
 			case Tok_CASE: return "CASE";
 			case Tok_CODE: return "CODE";
 			case Tok_CONST: return "CONST";
-			case Tok_DEFINITION: return "DEFINITION";
 			case Tok_DIV: return "DIV";
 			case Tok_DO: return "DO";
 			case Tok_ELSE: return "ELSE";
@@ -48,7 +47,6 @@ namespace Ao {
 			case Tok_EXIT: return "EXIT";
 			case Tok_FOR: return "FOR";
 			case Tok_IF: return "IF";
-			case Tok_IMPLEMENTS: return "IMPLEMENTS";
 			case Tok_IMPORT: return "IMPORT";
 			case Tok_IN: return "IN";
 			case Tok_IS: return "IS";
@@ -62,7 +60,6 @@ namespace Ao {
 			case Tok_POINTER: return "POINTER";
 			case Tok_PROCEDURE: return "PROCEDURE";
 			case Tok_RECORD: return "RECORD";
-			case Tok_REFINES: return "REFINES";
 			case Tok_REPEAT: return "REPEAT";
 			case Tok_RETURN: return "RETURN";
 			case Tok_THEN: return "THEN";
@@ -119,7 +116,6 @@ namespace Ao {
 			case Tok_CASE: return "Tok_CASE";
 			case Tok_CODE: return "Tok_CODE";
 			case Tok_CONST: return "Tok_CONST";
-			case Tok_DEFINITION: return "Tok_DEFINITION";
 			case Tok_DIV: return "Tok_DIV";
 			case Tok_DO: return "Tok_DO";
 			case Tok_ELSE: return "Tok_ELSE";
@@ -128,7 +124,6 @@ namespace Ao {
 			case Tok_EXIT: return "Tok_EXIT";
 			case Tok_FOR: return "Tok_FOR";
 			case Tok_IF: return "Tok_IF";
-			case Tok_IMPLEMENTS: return "Tok_IMPLEMENTS";
 			case Tok_IMPORT: return "Tok_IMPORT";
 			case Tok_IN: return "Tok_IN";
 			case Tok_IS: return "Tok_IS";
@@ -142,7 +137,6 @@ namespace Ao {
 			case Tok_POINTER: return "Tok_POINTER";
 			case Tok_PROCEDURE: return "Tok_PROCEDURE";
 			case Tok_RECORD: return "Tok_RECORD";
-			case Tok_REFINES: return "Tok_REFINES";
 			case Tok_REPEAT: return "Tok_REPEAT";
 			case Tok_RETURN: return "Tok_RETURN";
 			case Tok_THEN: return "Tok_THEN";
@@ -303,25 +297,6 @@ namespace Ao {
 			break;
 		case 'D':
 			switch( at(str,i+1) ){
-			case 'E':
-				if( at(str,i+2) == 'F' ){
-					if( at(str,i+3) == 'I' ){
-						if( at(str,i+4) == 'N' ){
-							if( at(str,i+5) == 'I' ){
-								if( at(str,i+6) == 'T' ){
-									if( at(str,i+7) == 'I' ){
-										if( at(str,i+8) == 'O' ){
-											if( at(str,i+9) == 'N' ){
-												res = Tok_DEFINITION; i += 10;
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-				break;
 			case 'I':
 				if( at(str,i+2) == 'V' ){
 					res = Tok_DIV; i += 3;
@@ -376,29 +351,12 @@ namespace Ao {
 				break;
 			case 'M':
 				if( at(str,i+2) == 'P' ){
-					switch( at(str,i+3) ){
-					case 'L':
-						if( at(str,i+4) == 'E' ){
-							if( at(str,i+5) == 'M' ){
-								if( at(str,i+6) == 'E' ){
-									if( at(str,i+7) == 'N' ){
-										if( at(str,i+8) == 'T' ){
-											if( at(str,i+9) == 'S' ){
-												res = Tok_IMPLEMENTS; i += 10;
-											}
-										}
-									}
-								}
-							}
-						}
-						break;
-					case 'O':
+					if( at(str,i+3) == 'O' ){
 						if( at(str,i+4) == 'R' ){
 							if( at(str,i+5) == 'T' ){
 								res = Tok_IMPORT; i += 6;
 							}
 						}
-						break;
 					}
 				}
 				break;
@@ -504,17 +462,6 @@ namespace Ao {
 						if( at(str,i+4) == 'R' ){
 							if( at(str,i+5) == 'D' ){
 								res = Tok_RECORD; i += 6;
-							}
-						}
-					}
-					break;
-				case 'F':
-					if( at(str,i+3) == 'I' ){
-						if( at(str,i+4) == 'N' ){
-							if( at(str,i+5) == 'E' ){
-								if( at(str,i+6) == 'S' ){
-									res = Tok_REFINES; i += 7;
-								}
 							}
 						}
 					}
