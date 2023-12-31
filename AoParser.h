@@ -26,6 +26,7 @@ namespace Ao {
 		QList<Error> errors;
 	protected:
 		void Module(SynTree*);
+		void ImportDecl(SynTree*);
 		void ImportList(SynTree*);
 		void DeclSeq(SynTree*);
 		void ConstDecl(SynTree*);
@@ -73,6 +74,7 @@ namespace Ao {
 		void MulOp(SynTree*);
 		void AddOp(SynTree*);
 		void Designator(SynTree*);
+		void Selector(SynTree*);
 		void ExprList(SynTree*);
 		void IdentList(SynTree*);
 		void Qualident(SynTree*);

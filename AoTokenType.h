@@ -97,5 +97,6 @@ namespace Ao {
 	bool tokenTypeIsKeyword( int );
 	bool tokenTypeIsSpecial( int );
 	TokenType tokenTypeFromString( const QByteArray& str, int* pos = 0 );
+	TokenType tokenTypeFromString( const char* str, quint32 len, int* pos = 0 );
 }
 #endif // __AO_TOKENTYPE__

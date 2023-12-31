@@ -1,10 +1,10 @@
 /*
 * Copyright 2023 Rochus Keller <mailto:me@rochus-keller.ch>
 *
-* This file is part of the ActiveOberon parser/code model library.
+* This file is part of the ActiveOberon parser/navigator project.
 *
 * The following is the license that applies to this copy of the
-* library. For a license to use the library under conditions
+* file. For a license to use the file under conditions
 * other than those described here, please email to me@rochus-keller.ch.
 *
 * GNU General Public License Usage
@@ -433,8 +433,6 @@ Token Lexer::assembler()
     const int startLine = d_lineNr;
     const int startCol = d_colNr;
 
-    d_colNr += 4; // CODE
-
     int pos = d_line.indexOf("END", d_colNr);
     QByteArray str = pos==-1 ? d_line.mid(d_colNr) : d_line.mid(d_colNr,pos-d_colNr);
     while( pos == -1 && !d_in->atEnd() )
@@ -445,15 +443,19 @@ Token Lexer::assembler()
             str += '\n';
         str += pos==-1 ? d_line.mid(d_colNr) : d_line.mid(d_colNr,pos-d_colNr);
     }
-    if( pos == -1 )
+    if( d_packComments && pos == -1 )
     {
         Token t( Tok_Invalid, startLine, startCol, 4, tr("non-terminated CODE section").toLatin1() );
         return t;
     }
-    Token t( Tok_CODE, startLine, startCol, str.size(), str );
+    // Col + 1 weil wir immer bei Spalte 1 beginnen, nicht bei Spalte 0
+    Token t( Tok_CODE, startLine, startCol + 1, str.size(), str );
     t.d_sourcePath = d_sourcePath;
     d_lastToken = t;
-    d_colNr = pos;
+    if( pos != -1 )
+        d_colNr = pos;
+    else
+        d_colNr = d_line.size();
     return t;
 }
 

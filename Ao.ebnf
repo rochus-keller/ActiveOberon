@@ -15,7 +15,8 @@ Module ::= MODULE ident ';' [ImportList]
     {Definition} 
 #endif
     {DeclSeq} Body ident '.'
-ImportList ::= IMPORT ident [':=' ident] {',' ident [':=' ident ]} ';'
+ImportDecl ::= ident [':=' ident]
+ImportList ::= IMPORT ImportDecl {',' ImportDecl} ';'
 #ifdef HAVE_DEFINITION
 Definition ::= DEFINITION ident [REFINES Qualident] {PROCEDURE ident [FormalPars] ';'} END ident
 #endif
@@ -54,7 +55,7 @@ Body ::= StatBlock | END
 Attributes ::= '{'[ExprList]'}' // original IdentList, but e.g. in AosActive.Mod line 151 is a function call; can even be empty
 StatBlock ::= BEGIN [Attributes] [StatSeq] END
 StatSeq ::= Statement {';' Statement}
-AssigOrCall ::= Designator [ ':=' Expr | '(' ExprList')' ]
+AssigOrCall ::= Designator [ ':=' Expr  ] // designator already includes '(' ExprList')'
 IfStat ::= IF Expr THEN StatSeq {ELSIF Expr THEN StatSeq}[ELSE StatSeq] END
 CaseStat ::= CASE Expr (DO|OF) Case {'|' Case} [ELSE StatSeq] END
 WhileStat ::= WHILE Expr DO StatSeq END
@@ -89,11 +90,12 @@ Element ::= Expr ['..' Expr]
 Relation ::= '=' | '#' | '<' | '<=' | '>' | '>=' | IN | IS
 MulOp ::= '*' | DIV | MOD | '/' | '&' 
 AddOp ::= '+' | '-' | OR 
-Designator ::= ident { \LL:2\ '.' ident | '['ExprList']' | '^' 
-                        | '(' [ExprList] ')' } // orig was Qualident, combined typeguard and call
+Designator ::= ident { Selector } // original is Qualident instead of ident
+Selector ::= \LL:2\ '.' ident | '['ExprList']' | '^' 
+                        | '(' [ExprList] ')' // orig was Qualident, combined typeguard and call
 ExprList ::= Expr {',' Expr}
 IdentList ::= IdentDef {',' IdentDef}
-Qualident ::= ident [\LL:2\'.'ident ] 
+Qualident ::= \LA: 1:ident&2:'.'\ ident '.' ident | ident
 IdentDef ::= ident ['*'|'-'] [SysFlag] // happens e.g. in AosHeap.Mod line 58
 
 

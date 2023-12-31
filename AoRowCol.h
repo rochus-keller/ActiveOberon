@@ -4,10 +4,10 @@
 /*
 * Copyright 2023 Rochus Keller <mailto:me@rochus-keller.ch>
 *
-* This file is part of the ActiveOberon parser/code model library.
+* This file is part of the ActiveOberon parser/navigator project.
 *
 * The following is the license that applies to this copy of the
-* library. For a license to use the library under conditions
+* file. For a license to use the file under conditions
 * other than those described here, please email to me@rochus-keller.ch.
 *
 * GNU General Public License Usage
@@ -21,6 +21,7 @@
 */
 
 #include <QString>
+#include <QPair>
 
 namespace Ao
 {
@@ -49,6 +50,15 @@ namespace Ao
         Loc( quint32 row, quint32 col, const QString& f ):RowCol( row, col ),d_file(f) {}
         Loc( const RowCol& r, const QString& f):RowCol(r),d_file(f) {}
         QString d_file;
+    };
+
+    typedef QPair<RowCol,RowCol> Range;
+    typedef QList<Range> Ranges;
+    struct FilePos
+    {
+        RowCol d_pos;
+        QString d_filePath;
+        FilePos(RowCol pos = RowCol(), const QString& path = QString()):d_pos(pos),d_filePath(path){}
     };
 }
 

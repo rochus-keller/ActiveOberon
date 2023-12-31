@@ -4,10 +4,10 @@
 /*
 * Copyright 2023 Rochus Keller <mailto:me@rochus-keller.ch>
 *
-* This file is part of the ActiveOberon parser/code model library.
+* This file is part of the ActiveOberon parser/navigator project.
 *
 * The following is the license that applies to this copy of the
-* library. For a license to use the library under conditions
+* file. For a license to use the file under conditions
 * other than those described here, please email to me@rochus-keller.ch.
 *
 * GNU General Public License Usage

@@ -36,6 +36,7 @@ const char* SynTree::rToStr( quint16 r ) {
 		case R_IdentDef: return "IdentDef";
 		case R_IdentList: return "IdentList";
 		case R_IfStat: return "IfStat";
+		case R_ImportDecl: return "ImportDecl";
 		case R_ImportList: return "ImportList";
 		case R_LoopStat: return "LoopStat";
 		case R_Module: return "Module";
@@ -50,6 +51,7 @@ const char* SynTree::rToStr( quint16 r ) {
 		case R_Relation: return "Relation";
 		case R_RepeatStat: return "RepeatStat";
 		case R_ReturnStat: return "ReturnStat";
+		case R_Selector: return "Selector";
 		case R_Set: return "Set";
 		case R_SimpleExpr: return "SimpleExpr";
 		case R_StatBlock: return "StatBlock";
