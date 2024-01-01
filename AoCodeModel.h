@@ -82,7 +82,7 @@ public:
 
     typedef QList<Symbol*> SymList;
     typedef QHash<QString,SymList> Refs;
-    Refs d_refs; // file path -> Symbols in it
+    Refs d_refs; // file path -> Symbols in it, not owned
     Symbol* d_me; // this is the symbol by which the decl itself is represented in the file
 
     FilePos getLoc() const { return d_loc; }
@@ -113,7 +113,7 @@ public:
 class Symbol
 {
 public:
-    Thing* d_decl;
+    Declaration* d_decl;
     RowCol d_loc; // the position of the symbol in the file (declaration has other position, but same length)
     Symbol():d_decl(0){}
 };

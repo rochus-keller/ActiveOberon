@@ -119,7 +119,7 @@ public:
             d_hl1->setDocument(document());
         QByteArray buf = in.readAll();
         buf.chop(1);
-        setPlainText( QString::fromLatin1(buf) );
+        setPlainText( QString::fromUtf8(buf) );
         markMutes( that()->d_mdl->getMutes(path) );
         markMissing();
         that()->syncModuleList();
@@ -210,7 +210,20 @@ public:
     {
         if( sym == 0 || sym->d_decl == 0 )
             return;
-        setPosition(sym->d_decl->getLoc(), center, pushPosition );
+        FilePos pos = sym->d_decl->getLoc();
+        if( sym->d_loc == pos.d_pos )
+        {
+            // position on itself
+            if( sym->d_decl->d_kind == Thing::Import )
+            {
+                // make that a ctrl-click on an import decl jumps to the module name
+                Declaration* d = (sym->d_decl);
+                Q_ASSERT( d->d_me && d->d_body->d_owner->d_kind == Thing::Module );
+                Declaration* m = static_cast<Declaration*>(d->d_body->d_owner);
+                pos = m->getLoc();
+            }
+        }
+        setPosition( pos, center, pushPosition );
     }
     void setPosition(const FilePos& pos, bool center, bool pushPosition )
     {
@@ -688,7 +701,7 @@ void CodeNavigator::onCursorPositionChanged()
     Symbol* id = d_mdl->findSymbolBySourcePos(d_view->d_path,line,col);
     if( id && id->d_decl && id->d_decl->isDeclaration() )
     {
-        Declaration* d = static_cast<Declaration*>(id->d_decl);
+        Declaration* d = (id->d_decl);
         fillUsedBy( id, d );
 
         // mark all symbols in file which have the same declaration
@@ -846,7 +859,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.3.1");
+    a.setApplicationVersion("0.3.2");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX

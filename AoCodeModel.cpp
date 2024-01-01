@@ -120,6 +120,7 @@ public:
             }
         }
         Declaration* d = addDecl( pair.first(), Thing::Import );
+
         if( pair.last().d_val.constData() == d_mdl->getSystem()->d_name.constData() )
             d->d_body = d_mdl->getSystem()->d_body;
         else
@@ -131,6 +132,15 @@ public:
                     break;
                 }
             }
+
+        Q_ASSERT( d->d_me && d->d_body->d_owner->d_kind == Thing::Module );
+        Declaration* m = static_cast<Declaration*>(d->d_body->d_owner);
+        //d->d_me->d_decl = m; // No, since we want the list of uses of the import in the present module
+        // make that all imports of m appear in the uses list of the module name of m
+        m->d_refs[d->d_loc.d_filePath].append(d->d_me);
+        // make that the module name of m appears in the uses list of the declaration importing m
+        d->d_refs[m->d_loc.d_filePath].append(m->d_me);
+
     }
 
     void ImportList(SynTree* st) {
@@ -1249,7 +1259,7 @@ public:
                     Symbol* sym = addSym(scope,sub->d_tok);
                     if( sym && sym->d_decl && sym->d_decl->isDeclaration() )
                     {
-                        res = static_cast<Declaration*>(sym->d_decl);
+                        res = (sym->d_decl);
                         scope = res->d_body;
                     }
                 }
@@ -1276,19 +1286,19 @@ public:
                     Symbol* sym = addSym(s,sub->d_tok);
                     if( sym && sym->d_decl && sym->d_decl->isDeclaration() )
                     {
-                        d = static_cast<Declaration*>(sym->d_decl);
+                        d = (sym->d_decl);
                         t = d->d_type;
                     }
                 }else if( firstRun && d->d_type.data() && d->d_type->d_members )
                 {
                     Symbol* sym = addSym(d->d_type->d_members,sub->d_tok);
                     if( sym && sym->d_decl && sym->d_decl->isDeclaration() )
-                        t = static_cast<Declaration*>(sym->d_decl)->d_type.data();
+                        t = (sym->d_decl)->d_type.data();
                 }else if( t && t->d_members )
                 {
                     Symbol* sym = addSym(t->d_members,sub->d_tok);
                     if( sym && sym->d_decl && sym->d_decl->isDeclaration() )
-                        t = static_cast<Declaration*>(sym->d_decl)->d_type.data();
+                        t = (sym->d_decl)->d_type.data();
                 }
                 break;
             case Tok_Lbrack:
@@ -1369,7 +1379,7 @@ public:
                     Symbol* sym = addSym(scope,sub->d_tok);
                     if( sym && sym->d_decl && sym->d_decl->isDeclaration() )
                     {
-                        res = static_cast<Declaration*>(sym->d_decl);
+                        res = (sym->d_decl);
                         scope = res->d_body;
                     }
                     // TODO: defer if not resolved
@@ -1527,6 +1537,7 @@ CodeModel::CodeModel(QObject *parent) : ItemModel(parent),d_sloc(0),d_errCount(0
 
     d_predecls;
     addDecl( &d_predecls, "AWAIT", Thing::Proc);
+    addDecl( &d_predecls, "HALT", Thing::Proc);
 }
 
 bool CodeModel::load(const QString& rootDir)

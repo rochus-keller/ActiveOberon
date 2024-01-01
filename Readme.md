@@ -4,7 +4,7 @@ This is a parser and source code navigation tool for the ActiveOberon language a
 
 The main purpose of this project is to provide tools to analyze and study the source code of the [ETH Bluebottle Active Object System](https://github.com/OberonSystem3/AOS_Bluebottle_Sources). 
 
-[EbnfStudio](https://github.com/rochus-keller/EbnfStudio) was used to develop the grammar the grammar in Ao.ebnf, and also to generate the included AoParser/AoSynTree/AoTokenType.h/.cpp. 
+[EbnfStudio](https://github.com/rochus-keller/EbnfStudio) was used to develop the grammar in Ao.ebnf, and also to generate the included AoParser/AoSynTree/AoTokenType.h/.cpp. 
 
 Here is a screenshot of the code navigator:
 
