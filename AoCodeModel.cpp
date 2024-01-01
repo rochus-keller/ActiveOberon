@@ -78,6 +78,7 @@ public:
                     module->d_body = new Scope();
                     module->d_body->d_owner = module;
                     module->d_body->d_kind = Thing::Body;
+                    module->d_body->d_outer = d_mdl->getPredecls();
                     d_cf->d_module = module;
                 }
                 done = true;
@@ -362,6 +363,8 @@ public:
             name.d_val = Lexer::getSymbol("SELF");
             Declaration* self = addDecl(d->d_body, name, Thing::Self);
             self->d_type = scope->d_type;
+            d->d_body->d_altOuter = scope->d_altOuter;
+
         }
 
         return d;
@@ -556,7 +559,7 @@ public:
         res->d_kind = Type::Class;
         res->d_members = new Scope();
         res->d_members->d_kind = Thing::Members;
-        res->d_members->d_outer = d_scopes.back();
+        res->d_members->d_altOuter = d_scopes.back();
         res->d_members->d_type = res.data();
         d_scopes.push_back(res->d_members);
         Declaration* super;
@@ -575,7 +578,6 @@ public:
                 if( super && super->d_kind == Thing::TypeDecl )
                 {
                     res->d_type = super->d_type;
-                    res->d_members->d_altOuter = res->d_members->d_outer;
                     res->d_members->d_outer = super->d_type->d_members;
                 }
                 break;
@@ -1456,7 +1458,7 @@ public:
 
     Symbol* addSym(Scope* scope, const Token& t)
     {
-        Declaration* d = scope->findDecl(t.d_val.constData());
+        Declaration* d = scope->findDecl(t.d_val.constData(), true);
 #ifndef LISA_WITH_MISSING
         if( d )
 #else
@@ -1502,6 +1504,7 @@ CodeModel::CodeModel(QObject *parent) : ItemModel(parent),d_sloc(0),d_errCount(0
     addDecl(s, "PUT32", Thing::Proc);
     addDecl(s, "PUT16", Thing::Proc);
     addDecl(s, "PUT8", Thing::Proc);
+    addDecl(s, "PUT", Thing::Proc);
     addDecl(s, "GET", Thing::Proc);
     addDecl(s, "GET8", Thing::Proc);
     addDecl(s, "GET16", Thing::Proc);
@@ -1511,6 +1514,8 @@ CodeModel::CodeModel(QObject *parent) : ItemModel(parent),d_sloc(0),d_errCount(0
     addDecl(s, "HALT", Thing::Proc);
     addDecl(s, "CLI", Thing::Proc);
     addDecl(s, "STI", Thing::Proc);
+    addDecl(s, "BYTE", Thing::TypeDecl);
+    addDecl(s, "LSH", Thing::Proc);
 
     d_attrs;
     addDecl( &d_attrs, "DELEGATE", Thing::Attribute);
@@ -1910,23 +1915,21 @@ UnitFile*Scope::getUnitFile() const
         return 0; // happens in assembler
 }
 
-Declaration*Scope::findDecl(const char* id, bool withImports) const
+Declaration*Scope::findDecl(const char* id, bool useAlt) const
 {
     foreach( Declaration* d, d_order )
     {
         if( d->d_name.constData() == id )
             return d;
     }
-    if( d_altOuter )
-    {
-        foreach( Declaration* d, d_altOuter->d_order )
-        {
-            if( d->d_name.constData() == id )
-                return d;
-        }
-    }
     if( d_outer )
-        return d_outer->findDecl(id, withImports);
+    {
+        Declaration* d = d_outer->findDecl(id, false);
+        if( d )
+            return d;
+    }
+    if( d_altOuter && useAlt )
+        return d_altOuter->findDecl(id, false);
 
     return 0;
 }

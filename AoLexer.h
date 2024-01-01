@@ -46,6 +46,7 @@ namespace Ao
         QList<Token> tokens( const QString& code );
         QList<Token> tokens( const QByteArray& code, const QString& path = QString() );
         static QByteArray getSymbol( const QByteArray& );
+        static void parseComment( const QByteArray& str, int& pos, int& level );
     protected:
         Token nextTokenImp();
         int skipWhiteSpace();
@@ -57,7 +58,6 @@ namespace Ao
         Token string();
         Token comment();
         Token assembler();
-        void parseComment( const QByteArray& str, int& pos, int& level );
     private:
         QIODevice* d_in;
         quint32 d_lineNr;

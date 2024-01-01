@@ -14,19 +14,19 @@ Module ::= MODULE ident ';' [ImportList]
 #ifdef HAVE_DEFINITION
     {Definition} 
 #endif
-    {DeclSeq} Body ident '.'
+    DeclSeq Body ident '.'
 ImportDecl ::= ident [':=' ident]
 ImportList ::= IMPORT ImportDecl {',' ImportDecl} ';'
 #ifdef HAVE_DEFINITION
 Definition ::= DEFINITION ident [REFINES Qualident] {PROCEDURE ident [FormalPars] ';'} END ident
 #endif
-DeclSeq ::= CONST {ConstDecl ';'} | TYPE {TypeDecl ';'} | VAR {VarDecl ';'} | {ProcDecl ';'}
+DeclSeq ::= { CONST {ConstDecl ';'} | TYPE {TypeDecl ';'} | VAR {VarDecl ';'} | {ProcDecl ';'} }
 ConstDecl ::= IdentDef '=' ConstExpr
 TypeDecl ::= IdentDef '=' Type
 VarDecl ::= IdentList ':' Type
 Assembler ::= CODE END
 ProcDecl ::= PROCEDURE ( 
-                            ProcHead ';' {DeclSeq} (Body|Assembler) ident
+                            ProcHead ';' DeclSeq (Body|Assembler) ident
                             | '^' ProcHead ) // forward declarations appear many times in Bluebottle source tree
 ProcHead ::= [SysFlag] ['*' | '&' | '-'] IdentDef [FormalPars]
 SysFlag ::= '[' ident ']'
@@ -39,7 +39,7 @@ ObjectType ::= OBJECT [[SysFlag] ['(' Qualident ')' ]  // NOTE: semi after base 
 #ifdef HAVE_DEFINITION
     [IMPLEMENTS Qualident] 
 #endif
-    {DeclSeq} // NOTE: missing semi after decls (in absence of procs) most observed syntax error
+    DeclSeq // NOTE: missing semi after decls (in absence of procs) most observed syntax error
     Body [ident] ] 
 ProcedureType ::= PROCEDURE [SysFlag] [Attributes] [FormalPars]
 AliasType ::= Qualident

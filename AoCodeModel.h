@@ -99,12 +99,12 @@ class Scope : public Thing
 public:
     QList<Declaration*> d_order; // owns
     Thing* d_owner; // either declaration or unit file or class or 0
-    Scope* d_outer;
-    Scope* d_altOuter; // local outer scope in inheritance
-    Type* d_type; // for member scopes
+    Scope* d_outer; // surrounding scope for blocks, inherited scope for record/object
+    Scope* d_altOuter; // local scope of the record/object declaration
+    Type* d_type; // for object member scopes pointing to the object
 
     UnitFile* getUnitFile() const;
-    Declaration* findDecl(const char* id, bool withImports = true) const;
+    Declaration* findDecl(const char* id, bool useAlt = false) const;
     void clear();
     Scope():d_owner(0),d_outer(0),d_altOuter(0),d_type(0){}
     ~Scope();

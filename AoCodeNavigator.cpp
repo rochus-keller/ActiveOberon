@@ -619,8 +619,10 @@ void CodeNavigator::fillUsedBy(Symbol* id, Declaration* nt)
         {
             Symbol* sym = list[j];
             QTreeWidgetItem* item = new QTreeWidgetItem(d_usedBy);
-            item->setText( 0, QString("%1 %2:%3").arg(fileName)
-                        .arg(sym->d_loc.d_row).arg( sym->d_loc.d_col) );
+            const bool isDecl = sym == nt->d_me;
+            item->setText( 0, QString("%1 %2:%3%4").arg(fileName)
+                        .arg(sym->d_loc.d_row).arg( sym->d_loc.d_col)
+                           .arg( isDecl ? " decl" : "" ) );
             if( id && sym->d_loc == id->d_loc && path == d_view->d_path )
             {
                 QFont f = item->font(0);
@@ -844,7 +846,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.3.0");
+    a.setApplicationVersion("0.3.1");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX

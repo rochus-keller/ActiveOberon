@@ -103,10 +103,12 @@ void OberonPainter::highlightBlock(const QString& text)
     if( lexerState == 1 )
     {
         QTextCharFormat f = formatForCategory( C_Cmt );
-        int pos = text.indexOf("*)");
-        if( pos == -1 )
+        int pos = 0;
+        Lexer::parseComment( text.toLatin1(), pos, lexerState );
+        if( lexerState > 0 )
         {
             // the whole block ist part of comment
+            lexerState = 1; // lexerState can have higher value if nested
             setFormat( start, text.size(), f );
             setCurrentBlockState( (braceDepth << 8) | lexerState);
             return;
