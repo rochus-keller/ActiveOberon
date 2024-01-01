@@ -1,0 +1,54 @@
+# author: Rochus Keller (me@rochus-keller.ch)
+# License: GPL
+# https://github.com/rochus-keller/BUSY/blob/main/README.md on how to use this file
+
+if busy_version < "2023-01-15" {
+    error("this version of BUSY is not compatible with this build")
+}
+
+let mtconf : Config {
+    .cflags = [ "/O2", "/MT" ]
+}
+
+if (build_mode == `optimized) && (target_toolchain == `msvc) {
+    set_defaults(target_toolchain,mtconf)
+}
+
+submod qt = ../LeanQt (HAVE_ITEMVIEWS)
+
+let run_moc : Moc {
+    .sources += [
+        ./AoCodeNavigator.h
+        ./AoCodeModel.h
+    ]
+}
+
+let run_rcc : Rcc {
+    .deps += qt.copy_rcc;
+    .tool_dir = root_build_dir + relpath(qt);
+    .sources += ./AoCodeNavigator.qrc
+}
+
+let exe ! : Executable {
+    .configs += [ qt.qt_client_config ]
+    .sources = [
+		./AoRowCol.cpp 
+		./AoToken.cpp 
+		./AoLexer.cpp 
+		./AoParser.cpp 
+		./AoSynTree.cpp 
+		./AoTokenType.cpp 
+		./AoFileSystem.cpp 
+		./AoCodeModel.cpp 
+		./AoCodeNavigator.cpp 
+		./AoHighlighter.cpp
+    ]
+    .include_dirs += [ . .. ]
+    .deps += [ qt.copy_rcc qt.libqt run_rcc run_moc ]
+    if target_os == `win32 {
+        .deps += qt.libqtwinmain
+    }
+    .name = "AoCodeNavigator"
+}
+
+

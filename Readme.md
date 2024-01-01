@@ -8,7 +8,7 @@ The main purpose of this project is to provide tools to analyze and study the so
 
 Here is a screenshot of the code navigator:
 
-![AoCodeAnalyzer Screenshot](http://software.rochus-keller.ch/AoCodeNavigator_v0.3_screenshot.png)
+![AoCodeNavigator Screenshot](http://software.rochus-keller.ch/AoCodeNavigator_v0.3_screenshot.png)
 
 
 NOTE that this project is work in progress.
@@ -20,6 +20,15 @@ Not yet available.
 ### Build Steps
 
 This project can be built using qmake and Qt5. Use the .pro files to run the build as described in the Qt documentation. 
+
+Alternatively the Code Navigator can be built using LeanQt and the BUSY build system (with no other dependencies than a C++98 compiler); follow these steps:
+
+1. Create a new directory; we call it the root directory here
+1. Download https://github.com/rochus-keller/ActiveOberon/archive/refs/heads/master.zip and unpack it to the root directory; rename the resulting directory to "LisaPascal".
+1. Download https://github.com/rochus-keller/LeanQt/archive/refs/heads/master.zip and unpack it to the root directory; rename the resulting directory to "LeanQt".
+1. Download https://github.com/rochus-keller/BUSY/archive/refs/heads/master.zip and unpack it to the root directory; rename the resulting directory to "build".
+1. Open a command line in the build directory and type `cc *.c -O2 -lm -o lua` or `cl /O2 /MD /Fe:lua.exe *.c` depending on whether you are on a Unix or Windows machine; wait a few seconds until the Lua executable is built.
+1. Now type `./lua build.lua ../ActiveOberon` (or `lua build.lua ../ActiveOberon` on Windows); wait until the AoCodeNavigator executable is built; you find it in the output subdirectory.
 
 ## Support
 
