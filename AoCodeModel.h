@@ -46,13 +46,18 @@ public:
     };
     quint8 d_kind;
 
+    enum Visi { NA, ReadOnly, Public };
+    quint8 d_visi;
+    bool d_active;
+    quint8 d_exclusive; // count exclusive attrs in proc body
+
     virtual FilePos getLoc() const { return FilePos(); }
     virtual quint16 getLen() const { return 0; }
     virtual QString getName() const;
     virtual const FileSystem::File* getFile() const { return 0; }
     bool isDeclaration() const { return d_kind >= Const && d_kind <= Import; }
     const char* typeName() const;
-    Thing():d_kind(Undefined){}
+    Thing():d_kind(Undefined),d_visi(0),d_active(false),d_exclusive(0){}
     virtual ~Thing();
 };
 

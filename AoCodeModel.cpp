@@ -36,6 +36,14 @@ class AoModelVisitor
     UnitFile* d_cf;
     QList<Scope*> d_scopes;
 
+    struct Id {
+        Token t;
+        quint8 visi;
+        Id(const Token& t = Token()):t(t),visi(0){}
+    };
+
+    typedef QList<Id> IdList;
+
 public:
     AoModelVisitor(CodeModel* m):d_mdl(m) {}
 
@@ -66,6 +74,7 @@ public:
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_Module);
         Declaration* module = 0;
         bool done = false;
+        QByteArrayList attrs;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
@@ -97,13 +106,15 @@ public:
                 break;
             case SynTree::R_Body:
                 d_scopes.push_back(module->d_body);
-                Body(sub);
+                attrs = Body(sub);
                 d_scopes.pop_back();
                 break;
             case Tok_Dot:
                 break;
             }
         }
+        if( attrs.contains("ACTIVE") )
+            module->d_body->d_active = true;
     }
 
     void ImportDecl(SynTree* st) {
@@ -207,11 +218,10 @@ public:
             }
         }
 
+        // since the declarations can appear in any order, first declare all names,
+        // and only then resolve symbols.
         foreach( const Deferred& d, dd )
-        {
             (this->*d.handler)(d.st,d.decls);
-        }
-        dd.clear();
     }
 
     Decls ConstDecl1(SynTree* st) {
@@ -267,7 +277,11 @@ public:
         }
         foreach( Declaration* d, decls )
             if( d )
+            {
                 d->d_type = t;
+                if( t && t->d_members && t->d_members->d_active )
+                    d->d_active = true;
+            }
     }
 
     Decls VarDecl1(SynTree* st) {
@@ -277,7 +291,7 @@ public:
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
             case SynTree::R_IdentList:
-                foreach( const Token& id, IdentList(sub) )
+                foreach( const Id& id, IdentList(sub) )
                     res << addDecl(id, Thing::Var);
                 break;
             }
@@ -336,6 +350,7 @@ public:
             return;
 
         Declaration* d = decls.first();
+        QByteArrayList attrs;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
@@ -346,7 +361,7 @@ public:
                 break;
             case SynTree::R_Body:
                 d_scopes.push_back(d->d_body);
-                Body(sub);
+                attrs = Body(sub);
                 d_scopes.pop_back();
                 break;
             case SynTree::R_Assembler:
@@ -354,11 +369,12 @@ public:
                 break;
             }
         }
+        d->d_exclusive = attrs.count("EXCLUSIVE");
     }
 
-    Declaration* createProcDecl(const Token& id )
+    Declaration* createProcDecl(const Id& id )
     {
-        Scope* scope = d_scopes.back(); // TODO: scope can be Module or Class; if latter create SELF
+        Scope* scope = d_scopes.back();
 
         Declaration* d = addDecl(scope, id, Thing::Proc);
         d->d_body = new Scope();
@@ -451,7 +467,7 @@ public:
     void FPSection(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_FPSection);
         Type::Ref t;
-        TokenList ids;
+        IdList ids;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
@@ -469,7 +485,7 @@ public:
                 break;
             }
         }
-        foreach( const Token& id, ids )
+        foreach( const Id& id, ids )
         {
             Declaration* d = addDecl(id, Thing::Param);
             d->d_type = t;
@@ -573,6 +589,7 @@ public:
         res->d_members->d_type = res.data();
         d_scopes.push_back(res->d_members);
         Declaration* super;
+        QByteArrayList attrs;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
@@ -597,13 +614,22 @@ public:
                 DeclSeq(sub);
                 break;
             case SynTree::R_Body:
-                Body(sub);
+                attrs = Body(sub);
                 break;
             case Tok_ident:
                 break;
             }
         }
         d_scopes.pop_back();
+        if( attrs.contains("ACTIVE") )
+            res->d_members->d_active = true;
+
+        for( int i = 0; i < res->d_members->d_order.size(); i++ )
+        {
+            Declaration* d = res->d_members->d_order[i];
+            if( d->d_kind == Thing::Proc )
+                res->d_members->d_exclusive += d->d_exclusive;
+        }
         return res;
     }
 
@@ -614,6 +640,7 @@ public:
         res->d_members = new Scope();
         res->d_members->d_kind = Thing::Members;
         res->d_members->d_outer = d_scopes.back();
+        QByteArrayList attrs;
         d_scopes.push_back(res->d_members);
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
@@ -624,7 +651,7 @@ public:
                 SysFlag(sub);
                 break;
             case SynTree::R_Attributes:
-                Attributes(sub);
+                attrs = Attributes(sub);
                 break;
             case SynTree::R_FormalPars:
                 FormalPars(sub);
@@ -680,7 +707,7 @@ public:
 
     void FieldDecl(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_FieldDecl);
-        TokenList ids;
+        IdList ids;
         Type::Ref tp;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
@@ -695,7 +722,7 @@ public:
                 break;
             }
         }
-        foreach( const Token& id, ids )
+        foreach( const Id& id, ids )
         {
             Declaration* d = addDecl(id, Thing::Field);
             d->d_type = tp;
@@ -716,23 +743,50 @@ public:
         }
     }
 
-    void Body(SynTree* st) {
+    QByteArrayList Body(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_Body);
+        QByteArrayList attrs;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
             case SynTree::R_StatBlock:
-                StatBlock(sub);
+                attrs = StatBlock(sub);
                 break;
             case Tok_END:
                 break;
             }
         }
+        return attrs;
     }
 
-    void Attributes(SynTree* st) {
+    QByteArrayList fetchIdents(SynTree* st)
+    {
+        QByteArrayList res;
+        switch(st->d_tok.d_type)
+        {
+        case SynTree::R_ExprList:
+            for( int i = 0; i < st->d_children.size(); i++ )
+                res << fetchIdents(st->d_children[i]);
+            break;
+        case SynTree::R_Expr:
+        case SynTree::R_SimpleExpr:
+        case SynTree::R_Term:
+        case SynTree::R_Factor:
+        case SynTree::R_Designator:
+            if( !st->d_children.isEmpty() )
+                res << fetchIdents(st->d_children.first());
+            break;
+        case Tok_ident:
+            res << st->d_tok.d_val;
+            break;
+        }
+        return res;
+    }
+
+    QByteArrayList Attributes(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_Attributes);
         d_scopes.push_back(d_mdl->getAttrs());
+        QByteArrayList res;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
@@ -740,45 +794,51 @@ public:
                 break;
             case SynTree::R_ExprList:
                 ExprList(sub);
+                res = fetchIdents(sub);
                 break;
             case Tok_Rbrace:
                 break;
             }
         }
         d_scopes.pop_back();
+        return res;
     }
 
-    void StatBlock(SynTree* st) {
+    QByteArrayList StatBlock(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_StatBlock);
+        QByteArrayList attrs;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
             case Tok_BEGIN:
                 break;
             case SynTree::R_Attributes:
-                Attributes(sub);
+                attrs = Attributes(sub);
                 break;
             case SynTree::R_StatSeq:
-                StatSeq(sub);
+                attrs += StatSeq(sub);
                 break;
             case Tok_END:
                 break;
             }
         }
+        return attrs;
     }
 
-    void StatSeq(SynTree* st) {
+    QByteArrayList StatSeq(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_StatSeq);
+        QByteArrayList attrs;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
             case SynTree::R_Statement:
-                Statement(sub);
+                attrs += Statement(sub);
                 break;
             case Tok_Semi:
                 break;
             }
         }
+        return attrs;
     }
 
     void AssigOrCall(SynTree* st) {
@@ -985,8 +1045,9 @@ public:
         }
     }
 
-    void Statement(SynTree* st) {
+    QByteArrayList Statement(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_Statement);
+        QByteArrayList attrs;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
@@ -1020,10 +1081,11 @@ public:
                 ReturnStat(sub);
                 break;
             case SynTree::R_StatBlock:
-                StatBlock(sub);
+                attrs += StatBlock(sub);
                 break;
             }
         }
+        return attrs;
     }
 
     void Case(SynTree* st) {
@@ -1336,9 +1398,9 @@ public:
         }
     }
 
-    TokenList IdentList(SynTree* st) {
+    IdList IdentList(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_IdentList);
-        TokenList l;
+        IdList l;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
@@ -1394,24 +1456,20 @@ public:
         return res;
     }
 
-    struct Id {
-        Token t;
-        bool publ;
-        Id():publ(false){}
-    };
-
-    Token IdentDef(SynTree* st) {
+    Id IdentDef(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_IdentDef);
-        Token id;
+        Id id;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
             switch(sub->d_tok.d_type) {
             case Tok_ident:
-                id = sub->d_tok;
+                id.t = sub->d_tok;
                 break;
             case Tok_Star:
+                id.visi = Thing::Public;
                 break;
             case Tok_Minus:
+                id.visi = Thing::ReadOnly;
                 break;
             case SynTree::R_SysFlag:
                 SysFlag(sub);
@@ -1434,19 +1492,20 @@ public:
         }
     }
 
-    Declaration* addDecl(const Token& t, int type )
+    Declaration* addDecl(const Id& id, int type )
     {
-        return addDecl( d_scopes.back(), t, type );
+        return addDecl( d_scopes.back(), id, type );
     }
 
-    Declaration* addDecl(Scope* scope, const Token& t, int type )
+    Declaration* addDecl(Scope* scope, const Id& id, int type )
     {
         Declaration* d = new Declaration();
         d->d_kind = type;
-        d->d_name = t.d_val;
-        if( !t.d_sourcePath.isEmpty() )
-            d->d_loc.d_pos = t.toLoc();
-        d->d_loc.d_filePath = t.d_sourcePath;
+        d->d_name = id.t.d_val;
+        d->d_visi = id.visi;
+        if( !id.t.d_sourcePath.isEmpty() )
+            d->d_loc.d_pos = id.t.toLoc();
+        d->d_loc.d_filePath = id.t.d_sourcePath;
         d->d_owner = scope;
         scope->d_order.append(d);
 
@@ -1454,13 +1513,13 @@ public:
 
         Symbol* sy = new Symbol();
         sy->d_loc = d->d_loc.d_pos;
-        d_cf->d_syms[t.d_sourcePath].append(sy);
+        d_cf->d_syms[id.t.d_sourcePath].append(sy);
         d->d_me = sy;
 
-        if( !t.d_sourcePath.isEmpty() )
+        if( !id.t.d_sourcePath.isEmpty() )
         {
             sy->d_decl = d;
-            d->d_refs[t.d_sourcePath].append(sy);
+            d->d_refs[id.t.d_sourcePath].append(sy);
         }
 
         return d;
@@ -1492,6 +1551,7 @@ static void addDecl( Scope* scope, const char* name, int kind)
     Declaration* d = new Declaration();
     d->d_kind = kind;
     d->d_name = Lexer::getSymbol(name);
+    d->d_visi = Thing::Public;
     d->d_owner = scope;
     scope->d_order.append(d);
 }
@@ -1527,7 +1587,6 @@ CodeModel::CodeModel(QObject *parent) : ItemModel(parent),d_sloc(0),d_errCount(0
     addDecl(s, "BYTE", Thing::TypeDecl);
     addDecl(s, "LSH", Thing::Proc);
 
-    d_attrs;
     addDecl( &d_attrs, "DELEGATE", Thing::Attribute);
     addDecl( &d_attrs, "ACTIVE", Thing::Attribute);
     addDecl( &d_attrs, "EXCLUSIVE", Thing::Attribute);
@@ -1535,7 +1594,6 @@ CodeModel::CodeModel(QObject *parent) : ItemModel(parent),d_sloc(0),d_errCount(0
     addDecl( &d_attrs, "SAFE", Thing::Attribute);
     addDecl( &d_attrs, "PRIORITY", Thing::Proc);
 
-    d_predecls;
     addDecl( &d_predecls, "AWAIT", Thing::Proc);
     addDecl( &d_predecls, "HALT", Thing::Proc);
 }
@@ -1654,7 +1712,7 @@ QVariant CodeModel::data(const QModelIndex& index, int role) const
         switch( s->d_thing->d_kind )
         {
         case Thing::Unit:
-            return QPixmap(":/images/source.png");
+            return QPixmap(":/images/module.png");
         case Thing::Folder:
             return QPixmap(":/images/folder.png");
         }
@@ -1761,6 +1819,8 @@ void CodeModel::parseAndResolve(UnitFile* unit)
         }else
         {
             UnitFile* uf = d_map1.value(u);
+            if( uf == unit )
+                return;
             Q_ASSERT( uf );
             unit->d_import.append( uf );
             parseAndResolve(uf);
@@ -2076,25 +2136,96 @@ QVariant ModuleDetailMdl::data(const QModelIndex& index, int role) const
     switch( role )
     {
     case Qt::DisplayRole:
-        switch( s->d_thing->d_kind )
         {
-        default:
-            return s->d_thing->getName();
+            QString str;
+            if( s->d_thing->d_active || s->d_thing->d_exclusive )
+                str += "! ";
+            str += s->d_thing->getName();
+            return str;
         }
         break;
     case Qt::DecorationRole:
         switch( s->d_thing->d_kind )
         {
-        case Thing::Const:
-            return QPixmap(":/images/constant.png");
         case Thing::TypeDecl:
-            return QPixmap(":/images/type.png");
+            {
+                Declaration* d = static_cast<Declaration*>(s->d_thing);
+                if( d->d_type.data() )
+                {
+                    switch( d->d_type->d_kind )
+                    {
+                    case Type::Pointer:
+                        switch( s->d_thing->d_visi )
+                        {
+                        case Thing::NA:
+                            return QPixmap(":/images/pointer_priv.png");
+                        case Thing::Public:
+                            return QPixmap(":/images/pointer.png");
+                        }
+                        break;
+                    case Type::Array:
+                        switch( s->d_thing->d_visi )
+                        {
+                        case Thing::NA:
+                            return QPixmap(":/images/array_priv.png");
+                        case Thing::Public:
+                            return QPixmap(":/images/array.png");
+                        }
+                        break;
+                    case Type::Record:
+                        switch( s->d_thing->d_visi )
+                        {
+                        case Thing::NA:
+                            return QPixmap(":/images/struct_priv.png");
+                        case Thing::Public:
+                            return QPixmap(":/images/struct.png");
+                        }
+                        break;
+                    case Type::Class:
+                        switch( s->d_thing->d_visi )
+                        {
+                        case Thing::NA:
+                            return QPixmap(":/images/class_priv.png");
+                        case Thing::Public:
+                            return QPixmap(":/images/class.png");
+                        }
+                        break;
+                    case Type::Procedural:
+                        switch( s->d_thing->d_visi )
+                        {
+                        case Thing::NA:
+                            return QPixmap(":/images/alias_priv.png");
+                        case Thing::Public:
+                            return QPixmap(":/images/alias.png");
+                        }
+                        break;
+                    }
+                }
+            }
+            break;
         case Thing::Var:
-            return QPixmap(":/images/variable.png");
+        case Thing::Field:
+            switch( s->d_thing->d_visi )
+            {
+            case Thing::NA:
+                return QPixmap(":/images/var_priv.png");
+            case Thing::ReadOnly:
+                return QPixmap(":/images/var_prot.png");
+            case Thing::Public:
+                return QPixmap(":/images/var.png");
+            }
+            break;
         case Thing::Proc:
-            return QPixmap(":/images/procedure.png");
-        case Thing::Attribute:
-            return QPixmap(":/images/label.png");
+            switch( s->d_thing->d_visi )
+            {
+            case Thing::NA:
+                return QPixmap(":/images/func_priv.png");
+            case Thing::Public:
+                return QPixmap(":/images/func.png");
+            }
+            break;
+        case Thing::Import:
+            return QPixmap(":/images/module.png");
         }
         break;
     }
@@ -2103,28 +2234,24 @@ QVariant ModuleDetailMdl::data(const QModelIndex& index, int role) const
 
 static bool DeclLessThan(Declaration* lhs, Declaration* rhs)
 {
-    return lhs->getName() < rhs->getName();
+    return lhs->getName().compare(rhs->getName(),Qt::CaseInsensitive) < 0;
 }
 
 void ModuleDetailMdl::fillItems(ModelItem* parentItem, Scope* scope)
 {
-    QVector<QList<Declaration*> > elems(Thing::Attribute);
+    QList<Declaration*> decls;
     foreach( Declaration* d, scope->d_order )
     {
         if( d->d_kind > Thing::Const && d->d_kind < Thing::Attribute )
-            elems[ d->d_kind >= Thing::Proc ? d->d_kind-1 : d->d_kind ].append(d);
+            decls.append(d);
     }
-    for( int i = 1; i < elems.size()-1; i++ ) // leave out consts and labels
+    std::sort( decls.begin(), decls.end(), DeclLessThan );
+    for( int j = 0; j < decls.size(); j++ )
     {
-        QList<Declaration*>& d = elems[i];
-        std::sort( d.begin(), d.end(), DeclLessThan );
-        for( int j = 0; j < d.size(); j++ )
-        {
-            Declaration* dd = d[j];
-            ModelItem* item = new ModelItem(parentItem,dd);
-            if( dd->d_kind == Thing::TypeDecl && dd->d_type && dd->d_type->d_kind == Type::Class )
-                fillSubs(item,dd->d_type->d_members);
-        }
+        Declaration* dd = decls[j];
+        ModelItem* item = new ModelItem(parentItem,dd);
+        if( dd->d_kind == Thing::TypeDecl && dd->d_type && dd->d_type->d_kind == Type::Class )
+            fillSubs(item,dd->d_type->d_members);
     }
 }
 
