@@ -115,6 +115,10 @@ public:
         }
         if( attrs.contains("ACTIVE") )
             module->d_body->d_active = true;
+#if 0
+        // There are 635 modules, non of which is declared ACTIVE
+        qDebug() << "module\t" << (module->d_body->d_active?"ACTIVE":"") << "\t" << d_cf->d_file->d_name << "\t" << st->d_tok.d_lineNr;
+#endif
     }
 
     void ImportDecl(SynTree* st) {
@@ -278,8 +282,8 @@ public:
         foreach( Declaration* d, decls )
             if( d )
             {
-                d->d_type = t;
-                if( t && t->d_members && t->d_members->d_active )
+                 d->d_type = t;
+                 if( t && t->d_members && t->d_members->d_active )
                     d->d_active = true;
             }
     }
@@ -343,6 +347,7 @@ public:
         return res;
     }
 
+    //QList<Declaration*> procDeclLevel;
     void ProcDecl2(SynTree* st, const Decls& decls) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_ProcDecl);
 
@@ -350,6 +355,7 @@ public:
             return;
 
         Declaration* d = decls.first();
+        //procDeclLevel.push_back(d);
         QByteArrayList attrs;
         for(int i = 0; i < st->d_children.size(); i++ ) {
             SynTree* sub = st->d_children[i];
@@ -370,6 +376,7 @@ public:
             }
         }
         d->d_exclusive = attrs.count("EXCLUSIVE");
+        //procDeclLevel.pop_back();
     }
 
     Declaration* createProcDecl(const Id& id )
@@ -623,13 +630,48 @@ public:
         d_scopes.pop_back();
         if( attrs.contains("ACTIVE") )
             res->d_members->d_active = true;
-
+#if 0
+        // There are 735 OBJECT declarations in 222 modules
+        // 660 OBJECT declarations are passive and 75 are ACTIVE
+        qDebug() << "class\t" << (res->d_members->d_active?"ACTIVE":"") << "\t" << d_cf->d_file->d_name << "\t" << st->d_tok.d_lineNr;
+#endif
+#if 0
+        // 619 of the 735 OBJECT declarations have one or more procedures
+        // 441 of the OBJECTs with procedures have no EXCLUSIVE block, so only 178 have an EXCLUSIVE block
+        // Only 91 of the said 178 OBJECTs have public EXCLUSIVE procedures
+        // Of these 91 OBJECTs, 54 have more non EXCLUSIVE than EXCLUSIVE public procedures!
+        // Only one procedure has more than one EXCLUSIVE block: WMWindowManager.DoubleBufferWindow.Draw
+        // There are 419 passive objects with no exclusive block, 135 passive objects with one or more exclusive blocks,
+        // 21 active objects with no exclusive block, and 41 active objects with one or more exclusive blocks
+        int numProc = 0, numPublicProc = 0, numExclusiveProc = 0, numExclusivePublicProc = 0, numExclusiveBlocks = 0;
+        for( int i = 0; i < res->d_members->d_order.size(); i++ )
+        {
+            Declaration* d = res->d_members->d_order[i];
+            if( d->d_kind == Thing::Proc )
+            {
+                res->d_members->d_exclusive += d->d_exclusive;
+                numProc++;
+                if( d->d_visi > 0 )
+                    numPublicProc++;
+                if( d->d_exclusive > 0 )
+                    numExclusiveProc++;
+                numExclusiveBlocks += d->d_exclusive;
+                if( d->d_visi > 0 && d->d_exclusive > 0 )
+                    numExclusivePublicProc++;
+            }
+        }
+        if( numProc )
+            qDebug() << res->d_members->d_active << "\t" << numProc << "\t" << numPublicProc << "\t"
+                     << numExclusiveProc<< "\t"<< numExclusivePublicProc<< "\t" << numExclusiveBlocks
+                     << "\t" << d_cf->d_file->d_name << "\t" << st->d_tok.d_lineNr;
+#else
         for( int i = 0; i < res->d_members->d_order.size(); i++ )
         {
             Declaration* d = res->d_members->d_order[i];
             if( d->d_kind == Thing::Proc )
                 res->d_members->d_exclusive += d->d_exclusive;
         }
+#endif
         return res;
     }
 
@@ -652,6 +694,8 @@ public:
                 break;
             case SynTree::R_Attributes:
                 attrs = Attributes(sub);
+                // qDebug() << "ProcType Attrs" << attrs << d_cf->d_file->d_name << st->d_tok.d_lineNr;
+                // only DELEGATE seen here, 74 in total
                 break;
             case SynTree::R_FormalPars:
                 FormalPars(sub);
@@ -804,6 +848,7 @@ public:
         return res;
     }
 
+    //QList<QByteArrayList> statBlocks;
     QByteArrayList StatBlock(SynTree* st) {
         Q_ASSERT(st && st->d_tok.d_type == SynTree::R_StatBlock);
         QByteArrayList attrs;
@@ -814,9 +859,23 @@ public:
                 break;
             case SynTree::R_Attributes:
                 attrs = Attributes(sub);
+#if 0
+                // found 80 nested statblocks, all level 1, 32 in an ACTIVE block,
+                // the others in a normal block, no nested blocks where both levels are EXCLUSIVES!
+                // all ACTIVE are proclevel 0, all others are proclevel 1
+                // there is no nested block which is not EXCLUSIVE!
+                if( !statBlocks.isEmpty() )
+                    qDebug() << "StatBlock Attrs"
+                             << "level 0" << statBlocks.first()
+                             << "level 1" << attrs << statBlocks.size()
+                             << "proclevel" << procDeclLevel.size()
+                             << d_cf->d_file->d_name << st->d_tok.d_lineNr;
+#endif
                 break;
             case SynTree::R_StatSeq:
+                //statBlocks.push_back(attrs);
                 attrs += StatSeq(sub);
+                //statBlocks.pop_back();
                 break;
             case Tok_END:
                 break;
