@@ -116,7 +116,7 @@ public:
         if( attrs.contains("ACTIVE") )
             module->d_body->d_active = true;
 #if 0
-        // There are 635 modules, non of which is declared ACTIVE
+        // There are 635 modules; no ACTIVE attribute is associated with a module BEGIN block.
         qDebug() << "module\t" << (module->d_body->d_active?"ACTIVE":"") << "\t" << d_cf->d_file->d_name << "\t" << st->d_tok.d_lineNr;
 #endif
     }
@@ -1409,13 +1409,15 @@ public:
                     {
                         d = (sym->d_decl);
                         t = d->d_type;
+                        break;
                     }
-                }else if( firstRun && d->d_type.data() && d->d_type->d_members )
+                }else if( firstRun && d->d_type.data() )
                 {
-                    Symbol* sym = addSym(d->d_type->d_members,sub->d_tok);
-                    if( sym && sym->d_decl && sym->d_decl->isDeclaration() )
-                        t = (sym->d_decl)->d_type.data();
-                }else if( t && t->d_members )
+                    t = d->d_type.data();
+                    if( t && t->d_kind == Type::Pointer )
+                        t = t->d_type.data();
+                }
+                if( t && t->d_members )
                 {
                     Symbol* sym = addSym(t->d_members,sub->d_tok);
                     if( sym && sym->d_decl && sym->d_decl->isDeclaration() )
@@ -1428,10 +1430,12 @@ public:
                 ExprList(sub);
                 break;
             case Tok_Rbrack:
-                // TODO: t := array type
+                if( t && t->d_kind == Type::Array )
+                    t = t->d_type.data();
                 break;
             case Tok_Hat:
-                // TODO: t := t^
+                if( t && t->d_kind == Type::Pointer )
+                    t = t->d_type.data();
                 break;
             case Tok_Lpar:
                 break;
@@ -1906,8 +1910,8 @@ void CodeModel::parseAndResolve(UnitFile* unit)
 
     }
 
+    d_sloc += lex.lex.getSloc();
 #if 0
-    d_sloc += lex.lex.getSloc(); // TODO
     for( QHash<QString,Ranges>::const_iterator i = lex.lex.getMutes().begin(); i != lex.lex.getMutes().end(); ++i )
         d_mutes.insert(i.key(),i.value());
 #endif

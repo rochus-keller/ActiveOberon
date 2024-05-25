@@ -28,7 +28,7 @@ QHash<QByteArray,QByteArray> Lexer::d_symbols;
 
 Lexer::Lexer(QObject *parent) : QObject(parent),
     d_lastToken(Tok_Invalid),d_lineNr(0),d_colNr(0),d_in(0),
-    d_ignoreComments(true), d_packComments(true)
+    d_ignoreComments(true), d_packComments(true),d_sloc(0),d_lineCounted(false)
 {
 
 }
@@ -44,6 +44,8 @@ void Lexer::setStream(QIODevice* in, const QString& sourcePath)
         d_colNr = 0;
         d_sourcePath = sourcePath;
         d_lastToken = Tok_Invalid;
+        d_sloc = 0;
+        d_lineCounted = false;
     }
 }
 
@@ -177,6 +179,7 @@ void Lexer::nextLine()
     d_colNr = 0;
     d_lineNr++;
     d_line = d_in->readLine();
+    d_lineCounted = false;
 
     if( d_line.endsWith("\r\n") )
         d_line.chop(2);
@@ -195,6 +198,8 @@ int Lexer::lookAhead(int off) const
 
 Token Lexer::token(TokenType tt, int len, const QByteArray& val)
 {
+    if( tt != Tok_Invalid && tt != Tok_Comment && tt != Tok_Eof )
+        countLine();
     QByteArray v = val;
     if( tt != Tok_Comment && tt != Tok_Invalid )
         v = getSymbol(v);
@@ -457,6 +462,13 @@ Token Lexer::assembler()
     else
         d_colNr = d_line.size();
     return t;
+}
+
+void Lexer::countLine()
+{
+    if( !d_lineCounted )
+        d_sloc++;
+    d_lineCounted = true;
 }
 
 void Lexer::parseComment(const QByteArray& str, int& pos, int& level)

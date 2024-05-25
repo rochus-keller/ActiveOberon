@@ -23,7 +23,7 @@ using namespace Ao;
 RowCol::RowCol(quint32 row, quint32 col)
 {
     if( !setRowCol(row,col) )
-        qWarning() << "invalid row or column number";
+        ; // qWarning() << "invalid row or column number" << row << col;
 }
 
 bool RowCol::setRowCol(quint32 row, quint32 col)
