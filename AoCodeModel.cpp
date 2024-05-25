@@ -148,6 +148,9 @@ public:
                 }
             }
 
+        if( d->d_body == 0 )
+            return; // error already reported
+
         Q_ASSERT( d->d_me && d->d_body->d_owner->d_kind == Thing::Module );
         Declaration* m = static_cast<Declaration*>(d->d_body->d_owner);
         //d->d_me->d_decl = m; // No, since we want the list of uses of the import in the present module
@@ -1505,7 +1508,8 @@ public:
                     if( sym && sym->d_decl && sym->d_decl->isDeclaration() )
                     {
                         res = (sym->d_decl);
-                        scope = res->d_body;
+                        if( res && res->d_body )
+                            scope = res->d_body;
                     }
                     // TODO: defer if not resolved
                     //else
