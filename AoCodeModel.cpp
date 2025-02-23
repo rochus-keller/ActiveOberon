@@ -22,6 +22,7 @@
 #include "AoCodeModel.h"
 #include "AoLexer.h"
 #include "AoParser.h"
+#include "AoParser2.h"
 #include <QFile>
 #include <QPixmap>
 #include <QtDebug>
@@ -396,7 +397,7 @@ public:
         {
             Token name;
             name.d_type = Tok_ident;
-            name.d_val = Lexer::getSymbol("SELF");
+            name.d_val = Token::getSymbol("SELF");
             Declaration* self = addDecl(d->d_body, name, Thing::Self);
             self->d_type = scope->d_type;
             d->d_body->d_altOuter = scope->d_altOuter;
@@ -1617,7 +1618,7 @@ static void addDecl( Scope* scope, const char* name, int kind)
 {
     Declaration* d = new Declaration();
     d->d_kind = kind;
-    d->d_name = Lexer::getSymbol(name);
+    d->d_name = Token::getSymbol(name);
     d->d_visi = Thing::Public;
     d->d_owner = scope;
     scope->d_order.append(d);
@@ -1627,7 +1628,7 @@ CodeModel::CodeModel(QObject *parent) : ItemModel(parent),d_sloc(0),d_errCount(0
 {
     d_fs = new FileSystem(this);
     d_system.d_kind = Thing::Module;
-    d_system.d_name = Lexer::getSymbol("SYSTEM");
+    d_system.d_name = Token::getSymbol("SYSTEM");
     Scope* s = new Scope();
     s->d_kind = Thing::Body;
     s->d_owner = &d_system;
@@ -1866,6 +1867,23 @@ public:
     Lex( FileSystem* fs ):lex(fs) {}
 };
 
+class Lex2 : public Scanner2
+{
+public:
+    Lexer lex;
+    QString sourcePath;
+    Token next()
+    {
+        return lex.nextToken();
+    }
+
+    Token peek(int offset)
+    {
+        return lex.peekToken(offset);
+    }
+    QString source() const { return sourcePath; }
+};
+
 void CodeModel::parseAndResolve(UnitFile* unit)
 {
     if( unit->d_file->d_parsed )
@@ -1895,9 +1913,9 @@ void CodeModel::parseAndResolve(UnitFile* unit)
     }
 
     const_cast<FileSystem::File*>(unit->d_file)->d_parsed = true;
+#if 1
     Lex lex(d_fs);
     lex.lex.setStream(unit->d_file->d_realPath);
-
     Parser p(&lex);
     p.RunParser();
     const int off = d_fs->getRootPath().size();
@@ -1914,7 +1932,6 @@ void CodeModel::parseAndResolve(UnitFile* unit)
 
     }
 
-    d_sloc += lex.lex.getSloc();
 #if 0
     for( QHash<QString,Ranges>::const_iterator i = lex.lex.getMutes().begin(); i != lex.lex.getMutes().end(); ++i )
         d_mutes.insert(i.key(),i.value());
@@ -1922,6 +1939,28 @@ void CodeModel::parseAndResolve(UnitFile* unit)
 
     AoModelVisitor v(this);
     v.visit(unit,&p.root);
+#else
+    Lex2 lex;
+    lex.lex.setStream(unit->d_file->d_realPath);
+    Ast::AstModel mdl;
+    Parser2 p(&mdl,&lex);
+    p.RunParser();
+    const int off = d_fs->getRootPath().size();
+    if( !p.errors.isEmpty() )
+    {
+        foreach( const Parser2::Error& e, p.errors )
+        {
+            const FileSystem::File* f = d_fs->findFile(e.path);
+            const QString line = tr("%1:%2:%3: %4").arg( f ? f->getVirtualPath() : e.path.mid(off) ).arg(e.pos.d_row)
+                    .arg(e.pos.d_col).arg(e.msg);
+            qCritical() << line.toUtf8().constData();
+            d_errCount++;
+        }
+
+    }
+#endif
+
+    d_sloc += lex.lex.getSloc();
 
     QCoreApplication::processEvents();
 }

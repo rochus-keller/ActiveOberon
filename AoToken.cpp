@@ -18,7 +18,21 @@
 */
 
 #include "AoToken.h"
+
+#include <QHash>
 using namespace Ao;
+
+static QHash<QByteArray,QByteArray> symbols;
+
+QByteArray Token::getSymbol(const QByteArray& str)
+{
+    if( str.isEmpty() )
+        return str;
+    QByteArray& sym = symbols[str];
+    if( sym.isEmpty() )
+        sym = str;
+    return sym;
+}
 
 bool Token::isValid() const
 {

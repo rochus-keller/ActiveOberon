@@ -23,7 +23,9 @@ SOURCES += \
     AoFileSystem.cpp \
     AoCodeModel.cpp \
     AoCodeNavigator.cpp \
-    AoHighlighter.cpp
+    AoHighlighter.cpp \
+    AoParser2.cpp \
+    AoAst.cpp
 
 HEADERS += \
     AoRowCol.h \
@@ -35,7 +37,9 @@ HEADERS += \
     AoFileSystem.h \
     AoCodeModel.h \
     AoCodeNavigator.h \
-    AoHighlighter.h
+    AoHighlighter.h \
+    AoParser2.h \
+    AoAst.h
 
 
 

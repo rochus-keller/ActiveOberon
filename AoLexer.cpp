@@ -24,8 +24,6 @@
 #include <QtDebug>
 using namespace Ao;
 
-QHash<QByteArray,QByteArray> Lexer::d_symbols;
-
 Lexer::Lexer(QObject *parent) : QObject(parent),
     d_lastToken(Tok_Invalid),d_lineNr(0),d_colNr(0),d_in(0),
     d_ignoreComments(true), d_packComments(true),d_sloc(0),d_lineCounted(false)
@@ -110,16 +108,6 @@ QList<Token> Lexer::tokens(const QByteArray& code, const QString& path)
     return res;
 }
 
-QByteArray Lexer::getSymbol(const QByteArray& str)
-{
-    if( str.isEmpty() )
-        return str;
-    QByteArray& sym = d_symbols[str];
-    if( sym.isEmpty() )
-        sym = str;
-    return sym;
-}
-
 Token Lexer::nextTokenImp()
 {
     if( d_in == 0 )
@@ -202,7 +190,7 @@ Token Lexer::token(TokenType tt, int len, const QByteArray& val)
         countLine();
     QByteArray v = val;
     if( tt != Tok_Comment && tt != Tok_Invalid )
-        v = getSymbol(v);
+        v = Token::getSymbol(v);
     Token t( tt, d_lineNr, d_colNr + 1, len, v );
     d_lastToken = t;
     d_colNr += len;
@@ -437,6 +425,8 @@ Token Lexer::assembler()
 {
     const int startLine = d_lineNr;
     const int startCol = d_colNr;
+
+    // qDebug() << "CODE found in" << d_sourcePath << d_lineNr;
 
     int pos = d_line.indexOf("END", d_colNr);
     QByteArray str = pos==-1 ? d_line.mid(d_colNr) : d_line.mid(d_colNr,pos-d_colNr);

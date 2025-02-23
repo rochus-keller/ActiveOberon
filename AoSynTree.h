@@ -16,6 +16,7 @@ namespace Ao {
 			R_ArrayType,
 			R_Assembler,
 			R_AssigOrCall,
+			R_Attribute,
 			R_Attributes,
 			R_Body,
 			R_Case,

@@ -21,8 +21,7 @@
 */
 
 #include <QObject>
-#include <QHash>
-#include <AoToken.h>
+#include <ActiveOberon/AoToken.h>
 
 class QIODevice;
 
@@ -43,7 +42,6 @@ namespace Ao
         QList<Token> tokens( const QString& code );
         QList<Token> tokens( const QByteArray& code, const QString& path = QString() );
         quint32 getSloc() const { return d_sloc; }
-        static QByteArray getSymbol( const QByteArray& );
         static void parseComment( const QByteArray& str, int& pos, int& level );
     protected:
         Token nextTokenImp();
@@ -65,7 +63,6 @@ namespace Ao
         QString d_sourcePath;
         QByteArray d_line;
         QList<Token> d_buffer;
-        static QHash<QByteArray,QByteArray> d_symbols;
         Token d_lastToken;
         bool d_ignoreComments;  // don't deliver comment tokens
         bool d_packComments;    // Only deliver one Tok_Comment for /**/ instead of Tok_Lcmt and Tok_Rcmt

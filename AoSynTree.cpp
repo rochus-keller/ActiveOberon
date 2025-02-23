@@ -15,6 +15,7 @@ const char* SynTree::rToStr( quint16 r ) {
 		case R_ArrayType: return "ArrayType";
 		case R_Assembler: return "Assembler";
 		case R_AssigOrCall: return "AssigOrCall";
+		case R_Attribute: return "Attribute";
 		case R_Attributes: return "Attributes";
 		case R_Body: return "Body";
 		case R_Case: return "Case";

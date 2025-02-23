@@ -14,7 +14,7 @@ Module ::= MODULE ident ';' [ImportList]
 #ifdef HAVE_DEFINITION
     {Definition} 
 #endif
-    DeclSeq Body ident '.'
+    DeclSeq [Body] END ident '.'
 ImportDecl ::= ident [':=' ident]
 ImportList ::= IMPORT ImportDecl {',' ImportDecl} ';'
 #ifdef HAVE_DEFINITION
@@ -24,12 +24,12 @@ DeclSeq ::= { CONST {ConstDecl ';'} | TYPE {TypeDecl ';'} | VAR {VarDecl ';'} | 
 ConstDecl ::= IdentDef '=' ConstExpr
 TypeDecl ::= IdentDef '=' Type
 VarDecl ::= IdentList ':' Type
-Assembler ::= CODE END
+Assembler ::= CODE
 ProcDecl ::= PROCEDURE ( 
-                            ProcHead ';' DeclSeq (Body|Assembler) ident
+                            ProcHead ';' DeclSeq [Body|Assembler] END ident
                             | '^' ProcHead ) // forward declarations appear many times in Bluebottle source tree
 ProcHead ::= [SysFlag] ['*' | '&' | '-'] IdentDef [FormalPars]
-SysFlag ::= '[' ident ']'
+SysFlag ::= '[' ident ']' // NOTE: only used in IdentDef and only for 'UNTRACED' in AOS/Bluebottle source code
 FormalPars ::= '(' [FPSection {';' FPSection}] ')' [':' Qualident]
 FPSection ::= [VAR] ident {',' ident} ':' Type
 ArrayType ::= ARRAY [SysFlag] [ConstExpr {',' ConstExpr}] OF Type
@@ -40,7 +40,7 @@ ObjectType ::= OBJECT [[SysFlag] ['(' Qualident ')' ]  // NOTE: semi after base 
     [IMPLEMENTS Qualident] 
 #endif
     DeclSeq // NOTE: missing semi after decls (in absence of procs) most observed syntax error
-    Body [ident] ] 
+    [Body] END [ident] ] 
 ProcedureType ::= PROCEDURE [SysFlag] [Attributes] [FormalPars]
 AliasType ::= Qualident
 Type ::= AliasType
@@ -51,9 +51,10 @@ Type ::= AliasType
 		| ProcedureType
 FieldDecl ::= [IdentList ':' Type]
 FieldList ::= FieldDecl {';' FieldDecl}
-Body ::= StatBlock | END
-Attributes ::= '{'[ExprList]'}' // original IdentList, but e.g. in AosActive.Mod line 151 is a function call; can even be empty
-StatBlock ::= BEGIN [Attributes] [StatSeq] END
+Body ::= StatBlock
+Attributes ::= '{'[ Attribute { ',' Attribute } ]'}' // found 75 ACTIVE, 74 DELEGATE, 882 EXCLUSIVE, 8 PRIORITY and 10 SAFE
+Attribute ::= ident [ '(' ConstExpr ')' ] // PRIORITY (and only that) has one number argument
+StatBlock ::= BEGIN [Attributes] [StatSeq]
 StatSeq ::= Statement {';' Statement}
 AssigOrCall ::= Designator [ ':=' Expr  ] // designator already includes '(' ExprList')'
 IfStat ::= IF Expr THEN StatSeq {ELSIF Expr THEN StatSeq}[ELSE StatSeq] END
@@ -74,14 +75,14 @@ Statement ::= [ AssigOrCall
 		| WithStat
 		| EXIT
 		| ReturnStat
-		| StatBlock
+		| StatBlock END
 		]
 Case ::= [CaseLabels { ',' CaseLabels } ':' StatSeq]
 CaseLabels ::= ConstExpr ['..' ConstExpr]
 ConstExpr ::= Expr
 Expr ::= SimpleExpr [Relation SimpleExpr]
-SimpleExpr ::= Term {MulOp Term}
-Term ::= ['+'|'-'] Factor {AddOp Factor}
+SimpleExpr ::= ['+'|'-'] Term {AddOp Term}
+Term ::= Factor {MulOp Factor}
 Factor ::= Designator // this is now part of Designator ['(' ExprList')'] 
                  | number | hexchar | string
 		| NIL | Set | '('Expr')'|'~'Factor
@@ -121,3 +122,4 @@ Comment ::=
 /// Pragmas
 %namespace ::= 'Ao'
 %suppress ::= ';' ',' '.' ':'
+//%no_syntree ::= 'true'

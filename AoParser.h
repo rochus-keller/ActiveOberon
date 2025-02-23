@@ -49,6 +49,7 @@ namespace Ao {
 		void FieldList(SynTree*);
 		void Body(SynTree*);
 		void Attributes(SynTree*);
+		void Attribute(SynTree*);
 		void StatBlock(SynTree*);
 		void StatSeq(SynTree*);
 		void AssigOrCall(SynTree*);

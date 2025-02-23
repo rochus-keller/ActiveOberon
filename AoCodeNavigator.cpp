@@ -677,7 +677,7 @@ void CodeNavigator::syncModuleList()
         d_modules->scrollTo( i ,QAbstractItemView::EnsureVisible );
     }
     UnitFile* uf = d_mdl->getUnitFile(d_view->d_path);
-    if( uf )
+    if( uf && uf->d_module )
         d_mdl2->load( uf->d_module->d_body );
     d_module->expandAll();
     d_module->scrollToTop();
@@ -859,7 +859,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.4.3");
+    a.setApplicationVersion("0.4.4");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX
