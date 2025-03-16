@@ -20,6 +20,7 @@
 #include "AoParser2.h"
 #include "AoAst.h"
 #include <QtDebug>
+#include <limits>
 using namespace Ao;
 using namespace Ast;
 
@@ -420,10 +421,23 @@ Parser2::Parser2(AstModel* m, Scanner2* s):scanner(s),mdl(m),thisMod(0)
     predefSymbols[SAFE] = Token::getSymbol("SAFE");
 }
 
+Parser2::~Parser2()
+{
+    if( thisMod )
+        Declaration::deleteAll(thisMod);
+}
+
 void Parser2::RunParser() {
 	errors.clear();
 	next();
 	Module();
+}
+
+Declaration* Parser2::takeResult()
+{
+    Declaration* res = thisMod;
+    thisMod = 0;
+    return res;
 }
 
 void Parser2::next() {
@@ -476,6 +490,7 @@ void Parser2::Module() {
     if( thisMod )
         Declaration::deleteAll(thisMod);
     thisMod = m;
+
     mdl->openScope(m);
 
     expect(Tok_MODULE, false, "Module");
@@ -483,7 +498,7 @@ void Parser2::Module() {
     m->name = cur.d_val;
     m->pos = cur.toRowCol();
     ModuleData md;
-    md.source = scanner->source();
+    md.sourcePath = scanner->source();
     md.fullName = cur.d_val;
     expect(Tok_Semi, false, "Module");
 	if( FIRST_ImportList(la.d_type) ) {
@@ -524,6 +539,7 @@ void Parser2::ImportDecl() {
         return;
 
     Import import;
+    import.moduleName = module.d_val;
     import.importedAt = module.toRowCol();
     import.importer = thisMod;
     importDecl->data = QVariant::fromValue(import);
@@ -540,15 +556,15 @@ void Parser2::ImportList() {
     // done
 }
 
-void Parser2::DeclSeq() {
+void Parser2::DeclSeq(bool inObjectType) {
 	while( la.d_type == Tok_CONST || la.d_type == Tok_TYPE || la.d_type == Tok_VAR || FIRST_ProcDecl(la.d_type) ) {
-		if( la.d_type == Tok_CONST ) {
+        if( !inObjectType && la.d_type == Tok_CONST ) {
 			expect(Tok_CONST, false, "DeclSeq");
 			while( FIRST_ConstDecl(la.d_type) ) {
 				ConstDecl();
 				expect(Tok_Semi, false, "DeclSeq");
 			}
-		} else if( la.d_type == Tok_TYPE ) {
+        } else if( !inObjectType && la.d_type == Tok_TYPE ) {
 			expect(Tok_TYPE, false, "DeclSeq");
 			while( FIRST_TypeDecl(la.d_type) ) {
 				TypeDecl();
@@ -557,7 +573,7 @@ void Parser2::DeclSeq() {
 		} else if( la.d_type == Tok_VAR ) {
 			expect(Tok_VAR, false, "DeclSeq");
 			while( FIRST_VarDecl(la.d_type) ) {
-				VarDecl();
+                VarDecl(inObjectType);
 				expect(Tok_Semi, false, "DeclSeq");
 			}
 		} else if( FIRST_ProcDecl(la.d_type) || la.d_type == Tok_END || la.d_type == Tok_CONST || la.d_type == Tok_END || la.d_type == Tok_VAR || la.d_type == Tok_TYPE || la.d_type == Tok_CODE || la.d_type == Tok_BEGIN || la.d_type == Tok_PROCEDURE || la.d_type == Tok_END ) {
@@ -592,7 +608,7 @@ void Parser2::TypeDecl() {
     d->type = Type_();
 }
 
-void Parser2::VarDecl() {
+void Parser2::VarDecl(bool inObjectType) {
     const QList<ID> ids = IdentList();
 	expect(Tok_Colon, false, "VarDecl");
     Ast::Type* t = Type_();
@@ -605,7 +621,10 @@ void Parser2::VarDecl() {
                                      Declaration::VarDecl : Declaration::LocalDecl);
         if( d == 0 )
             continue;
-        d->outer = outer;
+        if( inObjectType )
+            d->kind = Declaration::Field;
+        else
+            d->outer = outer;
         d->type = t;
     }
 }
@@ -624,7 +643,7 @@ void Parser2::ProcDecl() {
         DeclSeq();
 		if( FIRST_Body(la.d_type) || FIRST_Assembler(la.d_type) ) {
 			if( FIRST_Body(la.d_type) ) {
-				Body();
+                procDecl->body = Body();
 			} else if( FIRST_Assembler(la.d_type) ) {
                 procDecl->data = Assembler();
                 procDecl->body = new Ast::Statement(Ast::Statement::Assembler);
@@ -634,10 +653,10 @@ void Parser2::ProcDecl() {
 		expect(Tok_END, false, "ProcDecl");
 		expect(Tok_ident, false, "ProcDecl");
         mdl->closeScope();
-	} else if( la.d_type == Tok_Hat ) {
+    } else if( la.d_type == Tok_Hat ) {
 		expect(Tok_Hat, false, "ProcDecl");
         ProcHead(true);
-	} else
+    } else
 		invalid("ProcDecl");
 }
 
@@ -828,13 +847,15 @@ Type* Parser2::ObjectType() {
         if( la.d_type == Tok_Lpar ) {
 			expect(Tok_Lpar, false, "ObjectType");
             obj->base = NamedType();
-			expect(Tok_Rpar, false, "ObjectType");
+            expect(Tok_Rpar, false, "ObjectType");
 		}
-		DeclSeq();
+        DeclSeq(true);
         obj->subs = AstModel::toList(mdl->closeScope(true));
+#if 0
         Declaration* outer = mdl->getTopScope();
         for( int i = 0; i < obj->subs.size(); i++ )
             obj->subs[i]->outer = outer;
+#endif
         if( FIRST_Body(la.d_type) ) {
             obj->body = Body();
 		}
@@ -1184,6 +1205,7 @@ Statement* Parser2::WithStat() {
 
     expect(Tok_Colon, false, "WithStat");
     res->rhs = new Expression(); // dummy to hold type
+    res->rhs->kind = Expression::Literal;
     res->rhs->type = NamedType();
 
 	expect(Tok_DO, false, "WithStat");
@@ -1358,8 +1380,8 @@ Expression* Parser2::Term(bool lvalue) {
 static QByteArray dequote(const QByteArray& str)
 {
     QByteArray res;
-    if( str.startsWith('\'') && str.endsWith('\'') ||
-            str.startsWith('"') && str.endsWith('"') )
+    if( (str.startsWith('\'') && str.endsWith('\'')) ||
+            (str.startsWith('"') && str.endsWith('"')) )
         res = str.mid(1,str.size()-2);
     else
         res = str;
@@ -1505,13 +1527,40 @@ quint8 Parser2::AddOp() {
     return cur.d_type;
 }
 
+Expression* Parser2::maybeQualident()
+{
+    expect(Tok_ident, false, "designator");
+    Token tok = cur;
+
+    Declaration* d = mdl->findDecl(cur.d_val);
+    if( d && d->kind == Declaration::Import )
+    {
+        // a full qualident; we require a dot
+        expect(Tok_Dot, false, "selector");
+        expect(Tok_ident, false, "selector");
+        Qualident q;
+        q.first = tok.d_val;
+        q.second = cur.d_val;
+        Expression* res = new Expression(Expression::NameRef, tok.toRowCol());
+        res->val = QVariant::fromValue(q);
+        return res;
+    }else
+    {
+        // A qualident without module reference; we save the dot (if presend) for the downstream
+        Expression* res = new Expression(Expression::NameRef, tok.toRowCol());
+        Qualident q;
+        q.second = tok.d_val;
+        res->val = QVariant::fromValue(q);
+        return res;
+    }
+}
+
 // designator results in an lvalue if possible, unless needsLvalue is false
 Expression* Parser2::Designator(bool needsLvalue) {
-    const Token t = la;
-    Qualident q = Qualident_();
-    Expression* res = new Expression(Expression::NameRef, t.toRowCol());
-    // we don't know here whether quali is real, or whether it is a select of a local
-    res->val = QVariant::fromValue(q);
+
+    Expression* res = maybeQualident();
+    if( !res )
+        return 0;
 
     while( FIRST_Selector(la.d_type) ) {
         // integrated Selector
@@ -1649,17 +1698,61 @@ Parser2::ID Parser2::IdentDef() {
     return res;
 }
 
+Type* Parser2::smallestIntType(quint64 i)
+{
+    if( i <= std::numeric_limits<qint8>::max() )
+        return mdl->getType(Type::SHORTINT);
+    else if( i <= std::numeric_limits<qint16>::max() )
+        return mdl->getType(Type::INTEGER);
+    else if( i <= std::numeric_limits<qint32>::max() )
+        return mdl->getType(Type::LONGINT);
+    else
+        return mdl->getType(Type::HUGEINT);
+}
+
 Expression* Parser2::number() {
     Expression* res = Expression::createFromToken(la.d_type,la.toRowCol());
     if( la.d_type == Tok_integer ) {
 		expect(Tok_integer, false, "number");
-        res->type = mdl->getType(Type::INTEGER); // TODO: resolve
+        quint64 i = 0;
+        if( cur.d_val.endsWith('h') || cur.d_val.endsWith('H') )
+            i = cur.d_val.left(cur.d_val.size()-2).toULongLong();
+        else
+            i = cur.d_val.toULongLong();
+        res->type = smallestIntType(i);
+        res->val = i;
 	} else if( la.d_type == Tok_real ) {
 		expect(Tok_real, false, "number");
-        res->type = mdl->getType(Type::REAL);
+        res->type = 0;
+        if( cur.d_val.contains('d') || cur.d_val.contains('D') )
+        {
+            cur.d_val.replace('d','e');
+            cur.d_val.replace('D','e');
+            res->type = mdl->getType(Type::LONGREAL);
+        }else if( cur.d_val.contains('s') || cur.d_val.contains('S') )
+        {
+            res->type = mdl->getType(Type::REAL);
+            cur.d_val.replace('s','e');
+            cur.d_val.replace('S','e');
+        }
+        const double d = cur.d_val.toDouble();
+        if( res->type == 0 )
+        {
+            const int dot = cur.d_val.indexOf('.');
+            int len = 0;
+            if( dot != -1 )
+            {
+                while( dot+1+len < cur.d_val.size() && isdigit(cur.d_val[dot+1+len]) )
+                    len++;
+            }
+            if( len > 5 )
+                res->type = mdl->getType(Type::LONGREAL);
+            else
+                res->type = mdl->getType(Type::REAL);
+        }
+        res->val = d;
     } else
 		invalid("number");
-    res->val = cur.d_val;
     return res;
 }
 

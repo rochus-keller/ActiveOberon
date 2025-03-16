@@ -42,6 +42,7 @@ const char* SynTree::rToStr( quint16 r ) {
 		case R_LoopStat: return "LoopStat";
 		case R_Module: return "Module";
 		case R_MulOp: return "MulOp";
+		case R_ObjectDeclSeq: return "ObjectDeclSeq";
 		case R_ObjectType: return "ObjectType";
 		case R_PointerType: return "PointerType";
 		case R_ProcDecl: return "ProcDecl";

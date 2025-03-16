@@ -37,8 +37,12 @@ namespace Ao {
 	class Parser2 {
 	public:
         Parser2(Ast::AstModel* m, Scanner2* s);
-		void RunParser();
-		struct Error {
+        ~Parser2();
+
+        void RunParser();
+        Ast::Declaration* takeResult(); // get module declaration and take ownership (otherwise deleted by parser)
+
+        struct Error {
 		    QString msg;
             RowCol pos;
             QString path;
@@ -48,7 +52,7 @@ namespace Ao {
 	protected:
         struct ID {
             Token name;
-            enum Visi { Private, ReadOnly, Public };
+            enum Visi { NA, Private, ReadOnly, Public };
             quint8 visi;
             bool untraced;
             ID():visi(Private),untraced(false){}
@@ -59,10 +63,10 @@ namespace Ao {
         void Module();
 		void ImportDecl();
 		void ImportList();
-		void DeclSeq();
+        void DeclSeq(bool inObjectType = false);
 		void ConstDecl();
 		void TypeDecl();
-		void VarDecl();
+        void VarDecl(bool inObjectType = false);
         QByteArray Assembler();
         void ProcDecl();
         Ast::Declaration* ProcHead(bool forwardDecl);
@@ -118,6 +122,8 @@ namespace Ao {
         void error( const Token&, const QString& msg);
         void error( const RowCol&, const QString& msg );
         Ast::Declaration* addHelper(Ast::Type* t);
+        Ast::Type* smallestIntType(quint64 i);
+        Ast::Expression* maybeQualident();
 
 	protected:
         Ast::Declaration* thisMod;
@@ -130,6 +136,6 @@ namespace Ao {
 		void invalid(const char* what);
 		bool expect(int tt, bool pkw, const char* where);
         QVector<QByteArray> predefSymbols; // MaxAttrs
-	};
+    };
 }
 #endif // include

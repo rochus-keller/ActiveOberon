@@ -43,6 +43,7 @@ namespace Ao {
 			R_LoopStat,
 			R_Module,
 			R_MulOp,
+			R_ObjectDeclSeq,
 			R_ObjectType,
 			R_PointerType,
 			R_ProcDecl,

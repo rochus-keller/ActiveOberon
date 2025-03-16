@@ -29,6 +29,7 @@ namespace Ao {
 		void ImportDecl(SynTree*);
 		void ImportList(SynTree*);
 		void DeclSeq(SynTree*);
+		void ObjectDeclSeq(SynTree*);
 		void ConstDecl(SynTree*);
 		void TypeDecl(SynTree*);
 		void VarDecl(SynTree*);

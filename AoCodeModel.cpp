@@ -22,7 +22,6 @@
 #include "AoCodeModel.h"
 #include "AoLexer.h"
 #include "AoParser.h"
-#include "AoParser2.h"
 #include <QFile>
 #include <QPixmap>
 #include <QtDebug>
@@ -34,7 +33,7 @@ using namespace Ao;
 class AoModelVisitor
 {
     CodeModel* d_mdl;
-    UnitFile* d_cf;
+    ModuleFile* d_cf;
     QList<Scope*> d_scopes;
 
     struct Id {
@@ -48,7 +47,7 @@ class AoModelVisitor
 public:
     AoModelVisitor(CodeModel* m):d_mdl(m) {}
 
-    void visit(UnitFile* cf, SynTree* top)
+    void visit(ModuleFile* cf, SynTree* top)
     {
         d_cf = cf;
         Q_ASSERT(cf->d_body == 0);
@@ -140,7 +139,7 @@ public:
         if( pair.last().d_val.constData() == d_mdl->getSystem()->d_name.constData() )
             d->d_body = d_mdl->getSystem()->d_body;
         else
-            foreach( UnitFile* uf, d_cf->d_import )
+            foreach( ModuleFile* uf, d_cf->d_import )
             {
                 if( uf->d_module && uf->d_module->d_name.constData() == pair.last().d_val.constData() )
                 {
@@ -214,6 +213,31 @@ public:
                 break;
             case SynTree::R_TypeDecl:
                 defer(dd, sub, TypeDecl1(sub), &AoModelVisitor::TypeDecl2);
+                break;
+            case Tok_VAR:
+                break;
+            case SynTree::R_VarDecl:
+                defer(dd, sub, VarDecl1(sub), &AoModelVisitor::VarDecl2);
+                break;
+            case SynTree::R_ProcDecl:
+                defer(dd, sub, ProcDecl1(sub), &AoModelVisitor::ProcDecl2);
+                break;
+            }
+        }
+
+        // since the declarations can appear in any order, first declare all names,
+        // and only then resolve symbols.
+        foreach( const Deferred& d, dd )
+            (this->*d.handler)(d.st,d.decls);
+    }
+
+    void ObjectDeclSeq(SynTree* st) {
+        Q_ASSERT(st && st->d_tok.d_type == SynTree::R_ObjectDeclSeq);
+        QList<Deferred> dd;
+        for(int i = 0; i < st->d_children.size(); i++ ) {
+            SynTree* sub = st->d_children[i];
+            switch(sub->d_tok.d_type) {
+            case Tok_Semi:
                 break;
             case Tok_VAR:
                 break;
@@ -621,8 +645,8 @@ public:
                 break;
             case Tok_Rpar:
                 break;
-            case SynTree::R_DeclSeq:
-                DeclSeq(sub);
+            case SynTree::R_ObjectDeclSeq:
+                ObjectDeclSeq(sub);
                 break;
             case SynTree::R_Body:
                 attrs = Body(sub);
@@ -1684,7 +1708,7 @@ bool CodeModel::load(const QString& rootDir)
         Q_ASSERT( s->d_thing );
         if( s->d_thing->d_kind != Thing::Unit )
             continue;
-        UnitFile* f = static_cast<UnitFile*>(s->d_thing);
+        ModuleFile* f = static_cast<ModuleFile*>(s->d_thing);
         Q_ASSERT( f->d_file );
         parseAndResolve(f);
     }
@@ -1718,9 +1742,9 @@ QVariant ItemModel::data(const QModelIndex& index, int role) const
 
 Symbol*CodeModel::findSymbolBySourcePos(const QString& path, int line, int col) const
 {
-    UnitFile::SymList syms;
+    ModuleFile::SymList syms;
 
-    UnitFile* uf = getUnitFile(path);
+    ModuleFile* uf = getFile(path);
     if( uf != 0 )
         syms = uf->d_syms.value(path);
 
@@ -1735,20 +1759,9 @@ Symbol*CodeModel::findSymbolBySourcePos(const QString& path, int line, int col) 
     return 0;
 }
 
-CodeFile*CodeModel::getCodeFile(const QString& path) const
+ModuleFile*CodeModel::getFile(const QString& path) const
 {
     return d_map2.value(path);
-}
-
-UnitFile*CodeModel::getUnitFile(const QString& path) const
-{
-    CodeFile* cf = d_map2.value(path);;
-    if( cf )
-    {
-        UnitFile* uf = cf->toUnit();
-        return uf;
-    }
-    return 0;
 }
 
 Ranges CodeModel::getMutes(const QString& path)
@@ -1766,10 +1779,10 @@ QVariant CodeModel::data(const QModelIndex& index, int role) const
         switch( s->d_thing->d_kind )
         {
         case Thing::Unit:
-            return static_cast<UnitFile*>(s->d_thing)->d_file->d_name;
+            return static_cast<ModuleFile*>(s->d_thing)->d_file->d_name;
         case Thing::Folder:
             {
-                CodeFolder* cf = static_cast<CodeFolder*>(s->d_thing);
+                Package* cf = static_cast<Package*>(s->d_thing);
                 if( cf->d_dir->d_name.isEmpty() && ( s->d_parent == 0 || s->d_parent->d_parent == 0 ) )
                     return "<root>";
                 return cf->d_dir->d_name;
@@ -1790,7 +1803,7 @@ QVariant CodeModel::data(const QModelIndex& index, int role) const
         {
         case Thing::Unit:
             {
-                UnitFile* cf = static_cast<UnitFile*>(s->d_thing);
+                ModuleFile* cf = static_cast<ModuleFile*>(s->d_thing);
                 return QString("<html><b>%1 %2</b><br>"
                                "<p>Logical path: %3</p>"
                                "<p>Real path: %4</p></html>")
@@ -1867,24 +1880,7 @@ public:
     Lex( FileSystem* fs ):lex(fs) {}
 };
 
-class Lex2 : public Scanner2
-{
-public:
-    Lexer lex;
-    QString sourcePath;
-    Token next()
-    {
-        return lex.nextToken();
-    }
-
-    Token peek(int offset)
-    {
-        return lex.peekToken(offset);
-    }
-    QString source() const { return sourcePath; }
-};
-
-void CodeModel::parseAndResolve(UnitFile* unit)
+void CodeModel::parseAndResolve(ModuleFile* unit)
 {
     if( unit->d_file->d_parsed )
         return; // already done
@@ -1903,7 +1899,7 @@ void CodeModel::parseAndResolve(UnitFile* unit)
             d_errCount++;
         }else
         {
-            UnitFile* uf = d_map1.value(u);
+            ModuleFile* uf = d_map1.value(u);
             if( uf == unit )
                 return;
             Q_ASSERT( uf );
@@ -1913,7 +1909,7 @@ void CodeModel::parseAndResolve(UnitFile* unit)
     }
 
     const_cast<FileSystem::File*>(unit->d_file)->d_parsed = true;
-#if 1
+
     Lex lex(d_fs);
     lex.lex.setStream(unit->d_file->d_realPath);
     Parser p(&lex);
@@ -1939,26 +1935,6 @@ void CodeModel::parseAndResolve(UnitFile* unit)
 
     AoModelVisitor v(this);
     v.visit(unit,&p.root);
-#else
-    Lex2 lex;
-    lex.lex.setStream(unit->d_file->d_realPath);
-    Ast::AstModel mdl;
-    Parser2 p(&mdl,&lex);
-    p.RunParser();
-    const int off = d_fs->getRootPath().size();
-    if( !p.errors.isEmpty() )
-    {
-        foreach( const Parser2::Error& e, p.errors )
-        {
-            const FileSystem::File* f = d_fs->findFile(e.path);
-            const QString line = tr("%1:%2:%3: %4").arg( f ? f->getVirtualPath() : e.path.mid(off) ).arg(e.pos.d_row)
-                    .arg(e.pos.d_col).arg(e.msg);
-            qCritical() << line.toUtf8().constData();
-            d_errCount++;
-        }
-
-    }
-#endif
 
     d_sloc += lex.lex.getSloc();
 
@@ -1986,11 +1962,11 @@ bool ModelItem::lessThan(const ModelItem* lhs, const ModelItem* rhs)
     return lhs->d_thing->getName().compare(rhs->d_thing->getName(),Qt::CaseInsensitive) < 0;
 }
 
-void CodeModel::fillFolders(ModelItem* root, const FileSystem::Dir* super, CodeFolder* top, QList<ModelItem*>& fileSlots)
+void CodeModel::fillFolders(ModelItem* root, const FileSystem::Dir* super, Package* top, QList<ModelItem*>& fileSlots)
 {
     for( int i = 0; i < super->d_subdirs.size(); i++ )
     {
-        CodeFolder* f = new CodeFolder();
+        Package* f = new Package();
         f->d_dir = super->d_subdirs[i];
         top->d_subs.append(f);
         ModelItem* s = new ModelItem(root,f);
@@ -2001,7 +1977,7 @@ void CodeModel::fillFolders(ModelItem* root, const FileSystem::Dir* super, CodeF
         const int t = super->d_files[i]->d_type;
         if( t == FileSystem::OberonModule )
         {
-            UnitFile* f = new UnitFile();
+            ModuleFile* f = new ModuleFile();
             f->d_file = super->d_files[i];
             f->d_folder = top;
             d_map1[f->d_file] = f;
@@ -2014,12 +1990,12 @@ void CodeModel::fillFolders(ModelItem* root, const FileSystem::Dir* super, CodeF
     std::sort( root->d_children.begin(), root->d_children.end(), ModelItem::lessThan );
 }
 
-QString CodeFile::getName() const
+QString ModuleFile::getName() const
 {
     return d_file->d_name;
 }
 
-QByteArrayList UnitFile::findUses() const
+QByteArrayList ModuleFile::findUses() const
 {
     QByteArrayList res;
     if( d_file == 0 || d_file->d_type != FileSystem::OberonModule )
@@ -2067,7 +2043,7 @@ QByteArrayList UnitFile::findUses() const
     return res;
 }
 
-UnitFile::~UnitFile()
+ModuleFile::~ModuleFile()
 {
     if( d_body )
         delete d_body;
@@ -2077,17 +2053,17 @@ UnitFile::~UnitFile()
             delete j.value()[i];
 }
 
-UnitFile*Scope::getUnitFile() const
+ModuleFile*Scope::getModule() const
 {
     if( d_owner == 0 )
         return 0; // happens in global scope
     if( d_owner->d_kind == Thing::Unit )
-        return static_cast<UnitFile*>(d_owner);
+        return static_cast<ModuleFile*>(d_owner);
     else if( d_owner->isDeclaration() )
     {
         Declaration* d = static_cast<Declaration*>(d_owner);
         Q_ASSERT( d->d_owner != 0 );
-        return d->d_owner->getUnitFile();
+        return d->d_owner->getModule();
     }else
         return 0; // happens in assembler
 }
@@ -2128,10 +2104,10 @@ QString Declaration::getName() const
     return d_name;
 }
 
-UnitFile*Declaration::getUnitFile() const
+ModuleFile*Declaration::getModule() const
 {
     Q_ASSERT( d_owner != 0 );
-    return d_owner->getUnitFile();
+    return d_owner->getModule();
 }
 
 Declaration::~Declaration()
@@ -2140,12 +2116,12 @@ Declaration::~Declaration()
         delete d_body;
 }
 
-QString CodeFolder::getName() const
+QString Package::getName() const
 {
     return d_dir->d_name;
 }
 
-void CodeFolder::clear()
+void Package::clear()
 {
     for( int i = 0; i < d_subs.size(); i++ )
     {
@@ -2196,24 +2172,11 @@ Thing::~Thing()
 {
 }
 
-UnitFile*CodeFile::toUnit()
-{
-    if( d_kind == Unit )
-        return static_cast<UnitFile*>(this);
-    else
-        return 0;
-}
-
-CodeFile::~CodeFile()
-{
-}
-
 Type::~Type()
 {
     if( d_members )
         delete d_members;
 }
-
 
 ModuleDetailMdl::ModuleDetailMdl(QObject* parent)
 {

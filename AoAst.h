@@ -36,14 +36,18 @@ namespace Ast
             ABS, ODD, CAP, ASH, LEN, MAX, MIN, SIZE, ORD, CHR, SHORT, LONG, ENTIER,
             // build-in procs
             INC, DEC, INCL, EXCL, COPY, NEW, HALT, AWAIT,
+            ASSERT,
+
+            SYSTEM,
             // system functions
-            SYSTEM_ADR, SYSTEM_BIT, SYSTEM_CC, SYSTEM_LSH, SYSTEM_ROT, SYSTEM_VAL,
+            SYSTEM_ADR, SYSTEM_BIT, SYSTEM_CC, SYSTEM_LSH, SYSTEM_ROT, SYSTEM_VAL, SYSTEM_TYPECODE,
             // system procs
             SYSTEM_GET, SYSTEM_PUT, SYSTEM_MOVE, SYSTEM_NEW,
             SYSTEM_PORTOUT, SYSTEM_PORTIN,
             SYSTEM_CLI, SYSTEM_STI,
             SYSTEM_GET8, SYSTEM_GET16, SYSTEM_GET32, SYSTEM_GET64,
             SYSTEM_PUT8, SYSTEM_PUT16, SYSTEM_PUT32, SYSTEM_PUT64,
+            SYSTEM_GETREG, SYSTEM_PUTREG,
             Max
         };
         static const char* name[];
@@ -64,7 +68,6 @@ namespace Ast
         uint delegate : 1;
         uint anonymous : 1;
         uint allocated : 1;
-        uint receiver : 1;
 
         // Declaration:
         uint varParam : 1; // var param
@@ -73,10 +76,12 @@ namespace Ast
         uint ownstype : 1;
         uint hasErrors : 1;
         uint hasSubs : 1; // class/method: has overrides; module: has clients
+        uint receiver : 1;
 
         // Expression:
         uint byVal : 1; // option for LocalVar, Param, ModuleVar, Select, Index
         uint needsLval : 1;
+        uint nonlocal : 1;
 
         // Statement:
         uint active : 1;
@@ -86,7 +91,7 @@ namespace Ast
 
         Node():meta(0),kind(0),validated(0),deferred(0),delegate(0),anonymous(0),allocated(0),receiver(0),
             varParam(0),constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),
-            byVal(0),needsLval(0),active(0),exclusive(0){}
+            byVal(0),needsLval(0),active(0),exclusive(0),nonlocal(0){}
     };
 
     class Expression;
@@ -106,9 +111,12 @@ namespace Ast
             BYTE,       // 1 byte, SYSTEM.BYTE
             INTEGER,    // 2 bytes
             LONGINT,    // 4 bytes
+            HUGEINT,    // 8 bytes
             REAL,       // 4 bytes
             LONGREAL,   // 8 bytes
             SET,        // 4 bytes
+            PTR,
+            ANY,
             MaxBasicType,
             Pointer,
             Procedure,
@@ -117,6 +125,8 @@ namespace Ast
             Object,
             NameRef
         };
+        static const char* name[];
+
         quint32 len; // array length
         Type* base; // array/pointer base type, return type
         QList<Declaration*> subs; // list of record fields or enum elements, or params for proc type
@@ -124,9 +134,9 @@ namespace Ast
         Expression* expr; // array len
         Statement* body;  // active object
 
-        bool isNumber() const { return kind == INTEGER || kind == REAL || kind == BYTE; }
-        bool isReal() const { return kind == REAL; }
-        bool isInteger() const { return kind == INTEGER || kind == BYTE;  }
+        bool isNumber() const { return kind >= SHORTINT && kind <= LONGREAL; }
+        bool isReal() const { return kind == REAL || kind == LONGREAL; }
+        bool isInteger() const { return kind >= SHORTINT && kind <= HUGEINT;  }
         bool isSet() const { return kind == SET; }
         bool isBoolean() const { return kind == BOOLEAN; }
         bool isStructured() const { return kind == Array || kind == Record; }
@@ -143,7 +153,6 @@ namespace Ast
 
         static QVariant getMax(quint8 form);
         static QVariant getMin(quint8 form);
-        static const char* name[];
 
         Type():base(0),expr(0),body(0),len(0),decl(0){meta = T;}
         ~Type();
@@ -160,6 +169,7 @@ namespace Ast
         Declaration* link; // member list or imported module decl
         Declaration* outer; // the owning declaration to reconstruct the qualident
         Declaration* super; // super class or overridden method
+        Declaration* next; // list of all declarations in outer scope
         Statement* body; // procs, owned
         Type* type;
         QByteArray name;
@@ -178,16 +188,16 @@ namespace Ast
         Declaration* getNext() const { return next; }
         Declaration* getLast() const;
         Declaration* find(const QByteArray& name, bool recursive = true);
-        Declaration* getModule();
+        Declaration* getModule() const;
         void appendMember(Declaration*);
         RowCol getEndPos() const;
+        QString getSourcePath() const;
         QByteArray scopedName(bool withModule = false, bool withPath = false) const;
         QByteArray getModuleFullName(bool dots = false) const;
         static void deleteAll(Declaration*);
 
     private:
         ~Declaration();
-        Declaration* next; // list of all declarations in outer scope
         friend class AstModel;
     };
     typedef QList<Declaration*> DeclList;
@@ -239,7 +249,7 @@ namespace Ast
     typedef QList<Expression*> ExpList;
 
     struct Import {
-        QByteArray path;    // full path incl. name
+        QByteArray moduleName;
         Declaration* importer;
         RowCol importedAt;
         Declaration* resolved; // module
@@ -274,10 +284,8 @@ namespace Ast
     typedef QList<Declaration*> MetaParamList;
 
     struct ModuleData {
-        QByteArrayList path;
-        QString source;
-        QByteArray suffix;
-        QByteArray fullName; // path.join('/') + suffix as symbol
+        QString sourcePath;
+        QByteArray fullName;
         RowCol end;
     };
 
@@ -317,7 +325,7 @@ namespace Ast
         Declaration* addDecl(const QByteArray&);
         Declaration* addHelper();
         Declaration* findDecl(const QByteArray&, bool recursive = true) const;
-        Declaration* findDecl(Declaration* import, const QByteArray&) const;
+        Declaration* findDeclInImport(Declaration* import, const QByteArray&) const;
         Declaration* getTopScope() const;
         QByteArray getTempName();
         Declaration* getTopModule() const;
@@ -326,11 +334,13 @@ namespace Ast
 
         static void cleanupGlobals();
         static DeclList toList(Declaration* d);
+        static Declaration* getSystem();
     protected:
         Type* newType(int form, int size);
         Type* addType(const QByteArray& name, int form, int size);
         void addTypeAlias(const QByteArray& name, Type*);
         void addBuiltin(const QByteArray& name, Builtin::Kind);
+        void addConst(const QByteArray& name, quint8, const QVariant& = QVariant());
     private:
         QList<Declaration*> scopes;
         Declaration* helper;

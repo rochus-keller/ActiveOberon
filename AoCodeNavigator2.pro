@@ -17,27 +17,29 @@ SOURCES += \
     AoRowCol.cpp \
     AoToken.cpp \
     AoLexer.cpp \
-    AoParser.cpp \
-    AoSynTree.cpp \
     AoTokenType.cpp \
     AoFileSystem.cpp \
-    AoCodeModel.cpp \
-    AoCodeNavigator.cpp \
-    AoHighlighter.cpp \
-    AoAst.cpp
+    AoParser2.cpp \
+    AoAst.cpp \
+    AoValidator.cpp \
+    AoProject.cpp \
+    AoCodeModel2.cpp \
+    AoCodeNavigator2.cpp \
+    AoHighlighter2.cpp
 
 HEADERS += \
     AoRowCol.h \
     AoToken.h \
     AoLexer.h \
-    AoParser.h \
-    AoSynTree.h \
     AoTokenType.h \
     AoFileSystem.h \
-    AoCodeModel.h \
-    AoCodeNavigator.h \
-    AoHighlighter.h \
-    AoAst.h
+    AoParser2.h \
+    AoAst.h \
+    AoValidator.h \
+    AoProject.h \
+    AoCodeModel2.h \
+    AoCodeNavigator2.h \
+    AoHighlighter2.h
 
 
 

@@ -21,6 +21,7 @@ ImportList ::= IMPORT ImportDecl {',' ImportDecl} ';'
 Definition ::= DEFINITION ident [REFINES Qualident] {PROCEDURE ident [FormalPars] ';'} END ident
 #endif
 DeclSeq ::= { CONST {ConstDecl ';'} | TYPE {TypeDecl ';'} | VAR {VarDecl ';'} | {ProcDecl ';'} }
+ObjectDeclSeq ::= { VAR {VarDecl ';'} | {ProcDecl ';'} }
 ConstDecl ::= IdentDef '=' ConstExpr
 TypeDecl ::= IdentDef '=' Type
 VarDecl ::= IdentList ':' Type
@@ -39,7 +40,7 @@ ObjectType ::= OBJECT [[SysFlag] ['(' Qualident ')' ]  // NOTE: semi after base 
 #ifdef HAVE_DEFINITION
     [IMPLEMENTS Qualident] 
 #endif
-    DeclSeq // NOTE: missing semi after decls (in absence of procs) most observed syntax error
+    ObjectDeclSeq // NOTE: missing semi after decls (in absence of procs) most observed syntax error
     [Body] END [ident] ] 
 ProcedureType ::= PROCEDURE [SysFlag] [Attributes] [FormalPars]
 AliasType ::= Qualident

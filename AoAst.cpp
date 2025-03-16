@@ -22,6 +22,7 @@ using namespace Ao;
 using namespace Ast;
 
 Declaration* AstModel::globalScope = 0;
+static Declaration* SYSTEM = 0;
 Type* AstModel::types[Type::MaxBasicType] = {0};
 
 const char* Type::name[] = {
@@ -38,20 +39,25 @@ const char* Type::name[] = {
     "REAL",
     "LONGREAL",
     "SET",
+    "PTR",
+    "ANY",
 };
 
 const char* Builtin::name[] = {
     "ABS", "ODD", "CAP", "ASH", "LEN", "MAX", "MIN", "SIZE", "ORD", "CHR", "SHORT", "LONG", "ENTIER",
     // build-in procs
     "INC", "DEC", "INCL", "EXCL", "COPY", "NEW", "HALT", "AWAIT",
+    "ASSERT",
+    "SYSTEM",
     // system functions
-    "ADR", "BIT", "CC", "LSH", "ROT", "VAL",
+    "ADR", "BIT", "CC", "LSH", "ROT", "VAL", "TYPECODE",
     // system procs
     "GET", "PUT", "MOVE", "NEW",
     "PORTOUT", "PORTIN",
     "CLI", "STI",
     "GET8", "GET16", "GET32", "GET64",
-    "PUT8", "PUT16", "PUT32", "PUT64"
+    "PUT8", "PUT16", "PUT32", "PUT64",
+    "GETREG", "PUTREG"
 };
 
 AstModel::AstModel():helper(0),helperId(0)
@@ -66,21 +72,46 @@ AstModel::AstModel():helper(0),helperId(0)
         types[Type::StrLit] = newType(Type::StrLit,1);
         types[Type::NIL] = newType(Type::NIL,1);
 
-        // TODO
         types[Type::BOOLEAN] = addType("BOOLEAN", Type::BOOLEAN, 1 );
         types[Type::CHAR] = addType("CHAR", Type::CHAR, 1 );
         types[Type::BYTE] = addType("BYTE", Type::BYTE, 1 );
-        types[Type::INTEGER] = addType("INTEGER", Type::INTEGER, 8 );
-        types[Type::REAL] = addType("REAL", Type::REAL, 8 );
+        types[Type::SHORTINT] = addType("SHORTINT", Type::SHORTINT, 1 );
+        types[Type::INTEGER] = addType("INTEGER", Type::INTEGER, 2 );
+        types[Type::LONGINT] = addType("LONGINT", Type::LONGINT, 4 );
+        types[Type::HUGEINT] = addType("HUGEINT", Type::HUGEINT, 8 );
+        types[Type::REAL] = addType("REAL", Type::REAL, 4 );
+        types[Type::LONGREAL] = addType("LONGREAL", Type::LONGREAL, 8 );
         types[Type::SET] = addType("SET", Type::SET, 4 );
+        types[Type::PTR] = addType("PTR", Type::PTR, 4 );
+        types[Type::ANY] = addType("ANY", Type::ANY, 4 );
 
         addTypeAlias("INT", types[Type::INTEGER] );
 
-        // for( int i = 0; i < Builtin::Max; i++ )
-        // TODO    addBuiltin(Builtin::name[i], Builtin::Kind(i));
+        for( int i = 0; i < Builtin::SYSTEM; i++ )
+            addBuiltin(Builtin::name[i], Builtin::Kind(i));
 
-        // TODO: TRUE und FALSE sind Idents, nicht Keywords
-        // TODO: HUGEINT
+        addConst("TRUE", Type::BOOLEAN, true);
+        addConst("FALSE", Type::BOOLEAN, false);
+
+        SYSTEM = addDecl(Token::getSymbol(Builtin::name[Builtin::SYSTEM]));
+        SYSTEM->kind = Declaration::Module;
+        openScope(SYSTEM);
+        for( int i = Builtin::SYSTEM+1; i < Builtin::Max; i++ )
+            addBuiltin(Builtin::name[i], Builtin::Kind(i));
+        addTypeAlias("PTR", types[Type::PTR] );
+        addTypeAlias("BYTE", types[Type::BYTE] );
+        addBuiltin(Builtin::name[Builtin::HALT], Builtin::HALT);
+
+        addConst("EBP", Type::BYTE, 5);
+        addConst("ESP", Type::BYTE, 4);
+        addConst("EAX", Type::BYTE, 0);
+        addConst("EDI", Type::BYTE, 0);
+        addConst("AX", Type::BYTE, 0);
+        addConst("DX", Type::BYTE, 0);
+        addConst("AL", Type::BYTE, 0);
+        addConst("DH", Type::BYTE, 0);
+
+        closeScope();
     }else
         openScope(globalScope);
 }
@@ -189,11 +220,11 @@ Declaration*AstModel::findDecl(const QByteArray& id, bool recursive) const
     return 0;
 }
 
-Declaration*AstModel::findDecl(Declaration* import, const QByteArray& id) const
+Declaration*AstModel::findDeclInImport(Declaration* import, const QByteArray& id) const
 {
     if( import == 0 )
         return findDecl(id);
-    Q_ASSERT(import && import->kind == Declaration::Import);
+    Q_ASSERT(import && (import->kind == Declaration::Import || import->kind == Declaration::Module));
     Declaration* obj = import->link;
     while( obj != 0 && obj->name.constData() != id.constData() )
         obj = obj->getNext();
@@ -260,10 +291,6 @@ void AstModel::addTypeAlias(const QByteArray& name, Type* t)
     d->type = t;
     if( t->decl == 0 )
         t->decl = d;
-    Declaration* d2 = addDecl(Token::getSymbol(name.toLower()));
-    d2->kind = Declaration::TypeDecl;
-    d2->type = t;
-    d2->validated = true;
 }
 
 void AstModel::addBuiltin(const QByteArray& name, Builtin::Kind t)
@@ -272,17 +299,22 @@ void AstModel::addBuiltin(const QByteArray& name, Builtin::Kind t)
     d->kind = Declaration::Builtin;
     d->type = types[Type::NoType];
     d->id = t;
-    d = addDecl(Token::getSymbol(name.toLower()));
-    d->kind = Declaration::Builtin;
-    d->type = types[Type::NoType];
-    d->id = t;
+    d->validated = true;
+}
+
+void AstModel::addConst(const QByteArray& name, quint8 t, const QVariant& data)
+{
+    Declaration* d = addDecl(Token::getSymbol(name));
+    d->kind = Declaration::ConstDecl;
+    d->type = types[t];
+    d->data = data;
     d->validated = true;
 }
 
 QPair<int, int> Type::countAllocRecordMembers(bool recursive)
 {
     QPair<int, int> counts;
-    if( kind != Record )
+    if( kind != Record && kind != Object )
         return counts;
     if( recursive && base )
         counts = base->deref()->countAllocRecordMembers(true);
@@ -370,15 +402,20 @@ Declaration*Type::find(const QByteArray& name, bool recursive) const
         if(d->name.constData() == name.constData())
             return d;
     }
-    if( recursive && kind == Record && base )
-        return base->deref()->find(name);
+    if( recursive && (kind == Record || kind == Object) && base )
+    {
+        Type* super = base->deref();
+        if( super->kind == Type::Pointer && super->base )
+            super = super->base->deref();
+        return super->find(name);
+    }
     return 0;
 }
 
 QList<Declaration*> Type::fieldList() const
 {
     QList<Declaration*> res;
-    if( kind == Record && base)
+    if( (kind == Record || kind == Object) && base)
         res = base->deref()->fieldList();
     foreach( Declaration* d, subs)
     {
@@ -392,7 +429,7 @@ QList<Declaration*> Type::fieldList() const
 QList<Declaration*> Type::methodList(bool recursive) const
 {
     QList<Declaration*> res;
-    if( recursive && kind == Record && base)
+    if( recursive && (kind == Record || kind == Object) && base)
         res = base->deref()->methodList();
     foreach( Declaration* d, subs)
     {
@@ -476,7 +513,7 @@ QList<Declaration*> Declaration::getParams(bool skipReceiver) const
     QList<Declaration*> res;
     while( d && d->kind == Declaration::ParamDecl )
     {
-        // TODO if( !skipReceiver || d->mode != Declaration::Receiver )
+        if( !skipReceiver || !d->receiver )
             res << d;
         d = d->next;
     }
@@ -520,10 +557,10 @@ Declaration*Declaration::find(const QByteArray& name, bool recursive)
     return 0;
 }
 
-Declaration*Declaration::getModule()
+Declaration*Declaration::getModule() const
 {
     if( kind == Module )
-        return this;
+        return const_cast<Declaration*>(this);
     else if( outer )
         return outer->getModule();
     else
@@ -556,6 +593,15 @@ RowCol Declaration::getEndPos() const
         return s->pos;
     else
         return pos;
+}
+
+QString Declaration::getSourcePath() const
+{
+    const Declaration* mod = getModule();
+    if( mod )
+        return mod->data.value<ModuleData>().sourcePath;
+    else
+        return QString();
 }
 
 QByteArray Declaration::scopedName(bool withModule, bool withPath) const
@@ -648,7 +694,6 @@ bool Expression::isConst() const
             return allConst(args);
         }else if(d && d->kind == Declaration::Builtin )
         {
-            // TODO: this is no longer required since Validator::callOp removes const calls of builtins
             switch( d->id )
             {
             case Builtin::LEN: {
@@ -659,7 +704,7 @@ bool Expression::isConst() const
                         return true;
                     Type* t = args->type ? args->type->deref() : 0;
                     if( t && t->kind == Type::Array )
-                        return t->len > 0;
+                        return t->expr && t->expr->isConst();
                     return true;
                 }
             case Builtin::MIN:
@@ -902,6 +947,11 @@ DeclList AstModel::toList(Declaration* d)
     return res;
 }
 
+Declaration*AstModel::getSystem()
+{
+    return SYSTEM;
+}
+
 void Symbol::deleteAll(Symbol* first)
 {
     if( first == 0 )
@@ -922,7 +972,7 @@ void Symbol::deleteAll(Symbol* first)
 
 bool Import::equals(const Import& other) const
 {
-    if( path.constData() != other.path.constData() )
+    if( moduleName.constData() != other.moduleName.constData() )
         return false;
 
     return true;

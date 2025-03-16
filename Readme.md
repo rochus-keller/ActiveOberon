@@ -24,7 +24,7 @@ This project can be built using qmake and Qt5. Use the .pro files to run the bui
 Alternatively the Code Navigator can be built using LeanQt and the BUSY build system (with no other dependencies than a C++98 compiler); follow these steps:
 
 1. Create a new directory; we call it the root directory here
-1. Download https://github.com/rochus-keller/ActiveOberon/archive/refs/heads/master.zip and unpack it to the root directory; rename the resulting directory to "LisaPascal".
+1. Download https://github.com/rochus-keller/ActiveOberon/archive/refs/heads/master.zip and unpack it to the root directory; rename the resulting directory to "ActiveOberon".
 1. Download https://github.com/rochus-keller/LeanQt/archive/refs/heads/master.zip and unpack it to the root directory; rename the resulting directory to "LeanQt".
 1. Download https://github.com/rochus-keller/BUSY/archive/refs/heads/master.zip and unpack it to the root directory; rename the resulting directory to "build".
 1. Open a command line in the build directory and type `cc *.c -O2 -lm -o lua` or `cl /O2 /MD /Fe:lua.exe *.c` depending on whether you are on a Unix or Windows machine; wait a few seconds until the Lua executable is built.
