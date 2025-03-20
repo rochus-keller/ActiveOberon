@@ -34,8 +34,6 @@ class QModelIndex;
 
 namespace Ao
 {
-class CodeModel;
-class ModuleDetailMdl;
 class Project;
 class FileSystem;
 
@@ -64,12 +62,17 @@ protected:
     void createDetails();
     void createUsedBy();
     void createLog();
+    void createHier();
     void pushLocation( const Place& );
     void showViewer( const Place& );
     void fillUsedBy(Ast::Symbol* id, Ast::Declaration*);
     void setPathTitle(const FileSystem::File* f, int row, int col);
     void syncModuleList();
     void fillMods();
+    void syncEditorMarks(Ast::Declaration* selected, Ast::Declaration* module);
+    void fillDetails(Ast::Declaration* m);
+    void syncDetailView(Ast::Declaration* decl);
+    void fillHier(Ast::Declaration* n);
 
     // overrides
     void closeEvent(QCloseEvent* event);
@@ -77,7 +80,7 @@ protected:
 protected slots:
     void onCursorPositionChanged();
     void onModsDblClicked(QTreeWidgetItem*, int);
-    void onItemDblClick(const QModelIndex&);
+    void onItemDblClick(QTreeWidgetItem*, int);
     void onUsedByDblClicked();
     void onGoBack();
     void onGoForward();
@@ -89,6 +92,7 @@ protected slots:
     void onRunReload();
     void onIncreaseSize();
     void onDecreaseSize();
+    void onHierDblClicked(QTreeWidgetItem*,int);
 
 private:
     class Viewer;
@@ -99,14 +103,20 @@ private:
     QPlainTextEdit* d_msgLog;
     QTreeWidget* d_mods;
     QTreeWidget* d_mod;
+    QTreeWidget* d_hier;
+    QLabel* d_modTitle;
     QLabel* d_usedByTitle;
+    QLabel* d_hierTitle;
     QTreeWidget* d_usedBy;
-    ModuleDetailMdl* d_mdl2;
     QString d_dir;
+    QHash<Ast::Declaration*,QTreeWidgetItem*> d_modIdx;
 
     QList<Place> d_backHisto; // d_backHisto.last() is current place
     QList<Place> d_forwardHisto;
     bool d_pushBackLock;
+    bool d_xrefLock;
+    bool d_detailLock;
+    bool d_hierLock;
 };
 }
 

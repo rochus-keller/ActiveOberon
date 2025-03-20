@@ -419,6 +419,7 @@ Parser2::Parser2(AstModel* m, Scanner2* s):scanner(s),mdl(m),thisMod(0)
     predefSymbols[EXCLUSIVE] = Token::getSymbol("EXCLUSIVE");
     predefSymbols[PRIORITY] = Token::getSymbol("PRIORITY");
     predefSymbols[SAFE] = Token::getSymbol("SAFE");
+    BEGIN = Token::getSymbol("BEGIN");
 }
 
 Parser2::~Parser2()
@@ -506,7 +507,7 @@ void Parser2::Module() {
 	}
 	DeclSeq();
 	if( FIRST_Body(la.d_type) ) {
-        la.d_val = "$begin";
+        la.d_val = BEGIN;
         Declaration* procDecl = addDecl(la, Declaration::Private, Declaration::Procedure);
         if( procDecl == 0 )
             return;
@@ -605,7 +606,12 @@ void Parser2::TypeDecl() {
     if( d == 0 )
         return;
 
-    d->type = Type_();
+    d->type = Type_(false);
+    if( d->type && d->type->decl == 0 )
+    {
+        d->type->decl = d;
+        d->ownstype = true;
+    }
 }
 
 void Parser2::VarDecl(bool inObjectType) {
@@ -850,16 +856,19 @@ Type* Parser2::ObjectType() {
             expect(Tok_Rpar, false, "ObjectType");
 		}
         DeclSeq(true);
-        obj->subs = AstModel::toList(mdl->closeScope(true));
-#if 0
-        Declaration* outer = mdl->getTopScope();
-        for( int i = 0; i < obj->subs.size(); i++ )
-            obj->subs[i]->outer = outer;
-#endif
+
         if( FIRST_Body(la.d_type) ) {
-            obj->body = Body();
-		}
-		expect(Tok_END, false, "ObjectType");
+            la.d_val = BEGIN;
+            Declaration* procDecl = addDecl(la, Declaration::Private, Declaration::Procedure);
+            Q_ASSERT(procDecl);
+            procDecl->begin = 1;
+            mdl->openScope(procDecl);
+            procDecl->body = Body();
+            mdl->closeScope();
+        }
+
+        obj->subs = AstModel::toList(mdl->closeScope(true));
+        expect(Tok_END, false, "ObjectType");
 		if( la.d_type == Tok_ident ) {
 			expect(Tok_ident, false, "ObjectType");
 		}
@@ -893,7 +902,7 @@ Type* Parser2::AliasType() {
     return NamedType();
 }
 
-Type* Parser2::Type_(bool deanonymize) {
+Type* Parser2::Type_(bool needsHelperDecl) {
     Type* res = 0;
     if( FIRST_AliasType(la.d_type) ) {
         res = AliasType();
@@ -909,8 +918,12 @@ Type* Parser2::Type_(bool deanonymize) {
         res = ProcedureType();
 	} else
 		invalid("Type");
-    if( res && res->kind != Type::Undefined && res->kind != Type::NameRef && deanonymize )
+    if( res && res->kind != Type::Undefined // only valid types are considered
+            && res->kind != Type::NameRef // NameRef already has a helper decl
+            && needsHelperDecl )
         addHelper(res);
+        // if the type is not directly owned by a declaration (because it is declared in place and anonymously)
+        // we need a helper declaration with a artificial ident so we can refer to it by name later.
     return res;
 }
 
@@ -1791,6 +1804,7 @@ Declaration*Parser2::addHelper(Ast::Type* t)
     decl->type = t;
     decl->ownstype = true;
     decl->outer = thisMod;
+    Q_ASSERT(t->decl == 0);
     t->decl = decl;
     t->anonymous = true;
     return decl;

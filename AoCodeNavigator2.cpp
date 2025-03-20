@@ -20,7 +20,6 @@
 
 #include "AoCodeNavigator2.h"
 #include "AoHighlighter2.h"
-#include "AoCodeModel2.h"
 #include "AoProject.h"
 #include <QApplication>
 #include <QFileInfo>
@@ -298,24 +297,21 @@ public:
         missing.setFontUnderline(true);
         missing.setUnderlineStyle(QTextCharFormat::WaveUnderline);
 #endif
-        ModuleFile* uf = 0; // TODO that()->d_mdl->getFile(d_path);
-        if( uf == 0 )
-            return;
         Symbol* syms = that()->d_pro->getSymbolsOfModule(that()->d_pro->findModuleByPath(d_path));
         Symbol* s = syms;
         while( s )
         {
-            if( s->decl != 0 )
-                continue; // we're not interested in Symbols pointing to a Declaration here
-
-            RowCol loc = s->pos;
-            QTextCursor c( document()->findBlockByNumber( loc.d_row - 1) );
-            c.setPosition( c.position() + loc.d_col - 1 );
-            c.movePosition(QTextCursor::EndOfWord,QTextCursor::KeepAnchor);
-            QTextEdit::ExtraSelection sel;
-            sel.format = missing;
-            sel.cursor = c;
-            d_missing << sel;
+            if( s->decl == 0 ) // we're not interested in Symbols pointing to a Declaration here
+            {
+                RowCol loc = s->pos;
+                QTextCursor c( document()->findBlockByNumber( loc.d_row - 1) );
+                c.setPosition( c.position() + loc.d_col - 1 );
+                c.movePosition(QTextCursor::EndOfWord,QTextCursor::KeepAnchor);
+                QTextEdit::ExtraSelection sel;
+                sel.format = missing;
+                sel.cursor = c;
+                d_missing << sel;
+            }
 
             s = s->next;
             if( s == syms )
@@ -385,7 +381,8 @@ public:
     }
 };
 
-CodeNavigator::CodeNavigator(QWidget *parent) : QMainWindow(parent),d_pushBackLock(false)
+CodeNavigator::CodeNavigator(QWidget *parent) : QMainWindow(parent),d_pushBackLock(false),
+    d_xrefLock(false), d_hierLock(false), d_detailLock(false)
 {
     QWidget* pane = new QWidget(this);
     QVBoxLayout* vbox = new QVBoxLayout(pane);
@@ -415,6 +412,7 @@ CodeNavigator::CodeNavigator(QWidget *parent) : QMainWindow(parent),d_pushBackLo
     createModuleList();
     createDetails();
     createUsedBy();
+    createHier();
     createLog();
 
     connect( d_view, SIGNAL( cursorPositionChanged() ), this, SLOT(  onCursorPositionChanged() ) );
@@ -507,16 +505,22 @@ void CodeNavigator::createDetails()
     dock->setObjectName("Declarations");
     dock->setAllowedAreas( Qt::AllDockWidgetAreas );
     dock->setFeatures( QDockWidget::DockWidgetMovable );
+    QWidget* pane = new QWidget(dock);
+    QVBoxLayout* vbox = new QVBoxLayout(pane);
+    vbox->setMargin(0);
+    vbox->setSpacing(0);
+    d_modTitle = new QLabel(pane);
+    d_modTitle->setMargin(2);
+    d_modTitle->setWordWrap(true);
+    vbox->addWidget(d_modTitle);
     d_mod = new QTreeWidget(dock);
-    d_mod->setAlternatingRowColors(true);
     d_mod->setHeaderHidden(true);
-    d_mod->setSortingEnabled(false);
-    d_mod->setAllColumnsShowFocus(true);
-    d_mod->setRootIsDecorated(true);
     d_mod->setExpandsOnDoubleClick(false);
-    dock->setWidget(d_mod);
+    d_mod->setAlternatingRowColors(true);
+    vbox->addWidget(d_mod);
+    dock->setWidget(pane);
     addDockWidget( Qt::LeftDockWidgetArea, dock );
-    connect( d_mod,SIGNAL(doubleClicked(QModelIndex)), this, SLOT(onItemDblClick(QModelIndex)) );
+    connect( d_mod,SIGNAL(itemDoubleClicked(QTreeWidgetItem*,int)), this, SLOT(onItemDblClick(QTreeWidgetItem*,int)) );
 }
 
 void CodeNavigator::createUsedBy()
@@ -576,73 +580,110 @@ void CodeNavigator::showViewer(const CodeNavigator::Place& p)
     d_view->verticalScrollBar()->setValue(p.d_yoff);
 }
 
-static bool SymsLessThan( const Symbol* lhs, const Symbol* rhs )
+static inline QString declKindName(Declaration* decl)
 {
-
-    return false; // TODO lhs->d_loc.packed() < rhs->d_loc.packed();
-}
-
-static bool FilesLessThan(const QPair<QString,Ast::SymList>& lhs, const QPair<QString,Ast::SymList>& rhs)
-{
-    return false; // TODO lhs.first < rhs.first;
-}
-
-void CodeNavigator::fillUsedBy(Symbol* id, Declaration* nt)
-{
-#if 0 // TODO
-    d_usedBy->clear();
-    if( !nt->name.isEmpty() )
-        d_usedByTitle->setText(QString("%1 '%2'").arg(nt->typeName()).arg(nt->name.data()) );
-    else
-        d_usedByTitle->setText(QString("%1").arg(nt->typeName()) );
-
-   QList< QPair<QString,Declaration::SymList> > all; // filePath -> syms in file
-    Declaration::Refs::const_iterator dri;
-    for( dri = nt->d_refs.begin(); dri != nt->d_refs.end(); ++dri )
+    switch( decl->kind )
     {
-        Declaration::SymList list = dri.value();
-        std::sort(list.begin(),list.end(), SymsLessThan);
-        all << qMakePair(dri.key(),list);
+    case Declaration::Field:
+        return "Field";
+    case Declaration::VarDecl:
+    case Declaration::LocalDecl:
+        return "Variable";
+    case Declaration::ParamDecl:
+        return "Parameter";
+    case Declaration::TypeDecl:
+        return "Type";
+    case Declaration::ConstDecl:
+        return "Const";
+    case Declaration::Import:
+        return "Import";
+    case Declaration::Builtin:
+        return "BuiltIn";
+    case Declaration::Procedure:
+        return "Procedure";
+    case Declaration::Module:
+        return "Module";
     }
-    std::sort(all.begin(),all.end(),FilesLessThan);
+    return "???";
+}
 
-
-    QTreeWidgetItem* curItem = 0;
-    for( int i = 0; i < all.size(); i++ )
+static const char* roleName( Symbol* e )
+{
+    switch( e->kind )
     {
-        const QString path = all[i].first;
-        if( path.isEmpty() )
-            continue; // happens e.g. with SELF
-        const FileSystem::File* file = d_mdl->getFs()->findFile(path);
-        const QString fileName = file ? file->getVirtualPath(false) : QFileInfo(path).fileName();
-        const Declaration::SymList& list = all[i].second;
-        for( int j = 0; j < list.size(); j++ )
+    case Symbol::Decl:
+    case Symbol::Module:
+        return "decl";
+    case Symbol::Lval:
+        return "lhs";
+    default:
+        break;
+    }
+    return "";
+}
+
+static bool sortExList( const Symbol* lhs, Symbol* rhs )
+{
+    Declaration* lm = lhs->decl;
+    Declaration* rm = rhs->decl;
+    const QByteArray ln = lm ? lm->name : QByteArray();
+    const QByteArray rn = rm ? rm->name : QByteArray();
+    const quint32 ll = lhs->pos.packed();
+    const quint32 rl = rhs->pos.packed();
+
+    return ln < rn || (!(rn < ln) && ll < rl);
+}
+
+void CodeNavigator::fillUsedBy(Symbol* sym, Declaration* module)
+{
+    d_usedBy->clear();
+
+    Declaration* decl = sym->decl;
+    Q_ASSERT( decl != 0 );
+
+    Project::UsageByMod usage = d_pro->getUsage(decl);
+
+    QFont f = d_usedBy->font();
+    f.setBold(true);
+
+    const QString type = declKindName(decl);
+
+    d_usedByTitle->setText(QString("%1 '%2'").arg(type).arg(decl->name.constData()));
+
+    QTreeWidgetItem* black = 0;
+    for( int i = 0; i < usage.size(); i++ )
+    {
+        SymList syms = usage[i].second;
+        std::sort( syms.begin(), syms.end(), sortExList );
+        QString modName;
+        if( usage[i].first )
+            modName = usage[i].first->name;
+        else
+            modName = "<global>";
+        foreach( Symbol* s, syms )
         {
-            Symbol* sym = list[j];
             QTreeWidgetItem* item = new QTreeWidgetItem(d_usedBy);
-            const bool isDecl = sym == nt->d_me;
-            item->setText( 0, QString("%1 %2:%3%4").arg(fileName)
-                        .arg(sym->d_loc.d_row).arg( sym->d_loc.d_col)
-                           .arg( isDecl ? " decl" : "" ) );
-            if( id && sym->d_loc == id->d_loc && path == d_view->d_path )
+            item->setText( 0, QString("%1 (%2:%3 %4)")
+                        .arg(modName)
+                        .arg(s->pos.d_row).arg(s->pos.d_col)
+                        .arg( roleName(s) ));
+            if( s == sym )
             {
-                QFont f = item->font(0);
-                f.setBold(true);
                 item->setFont(0,f);
-                curItem = item;
+                black = item;
             }
             item->setToolTip( 0, item->text(0) );
-            item->setData( 0, Qt::UserRole, QVariant::fromValue(FilePos(sym->d_loc,path)) );
-            item->setData( 0, Qt::UserRole+1, QVariant::fromValue(sym) );
-            if( path != d_view->d_path )
+            item->setData( 0, Qt::UserRole, QVariant::fromValue( s ) ); // symbol in module
+            item->setData( 1, Qt::UserRole, QVariant::fromValue( usage[i].first ) ); // module where the sym was found
+            if( usage[i].first != module )
                 item->setForeground( 0, Qt::gray );
-            else if( curItem == 0 )
-                curItem = item;
         }
     }
-    if( curItem )
-        d_usedBy->scrollToItem( curItem );
-#endif
+    if( black && !d_xrefLock )
+    {
+        d_usedBy->scrollToItem(black, QAbstractItemView::PositionAtCenter);
+        d_usedBy->setCurrentItem(black);
+    }
 }
 
 void CodeNavigator::setPathTitle(const FileSystem::File* f, int row, int col)
@@ -651,16 +692,69 @@ void CodeNavigator::setPathTitle(const FileSystem::File* f, int row, int col)
         d_pathTitle->setText("<no file>");
     else
         d_pathTitle->setText(QString("%1 - %2 - %3:%4").
-                         arg(f->getVirtualPath(true)).
+                         arg(f->d_moduleName.constData()).
                          arg(f->d_realPath).
                          arg(row).
                              arg(col));
 }
 
+static Declaration* adjustForModIdx( Declaration* decl )
+{
+    while( decl )
+    {
+        switch( decl->kind )
+        {
+        case Declaration::Procedure:
+        case Declaration::Module:
+            return decl;
+        }
+        decl = decl->outer;
+    }
+    return 0;
+}
+
+void CodeNavigator::syncDetailView(Declaration* decl)
+{
+    QTreeWidgetItem* mi = d_modIdx.value(decl);
+    if( mi == 0 )
+        mi = d_modIdx.value(adjustForModIdx(decl));
+    if( mi && !d_detailLock )
+    {
+        d_mod->scrollToItem(mi,QAbstractItemView::PositionAtCenter);
+        mi->setExpanded(true);
+        d_mod->setCurrentItem(mi);
+    }
+}
+
+void CodeNavigator::createHier()
+{
+    QDockWidget* dock = new QDockWidget( tr("Hierarchy"), this );
+    dock->setObjectName("Hierarchy");
+    dock->setAllowedAreas( Qt::AllDockWidgetAreas );
+    dock->setFeatures( QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable );
+    QWidget* pane = new QWidget(dock);
+    QVBoxLayout* vbox = new QVBoxLayout(pane);
+    vbox->setMargin(0);
+    vbox->setSpacing(0);
+    d_hierTitle = new QLabel(pane);
+    d_hierTitle->setMargin(2);
+    d_hierTitle->setWordWrap(true);
+    vbox->addWidget(d_hierTitle);
+    d_hier = new QTreeWidget(dock);
+    d_hier->setHeaderHidden(true);
+    d_hier->setExpandsOnDoubleClick(false);
+    d_hier->setAlternatingRowColors(true);
+    vbox->addWidget(d_hier);
+    dock->setWidget(pane);
+    addDockWidget( Qt::LeftDockWidgetArea, dock );
+    connect( d_hier, SIGNAL(itemDoubleClicked(QTreeWidgetItem*,int)),this,SLOT(onHierDblClicked(QTreeWidgetItem*,int)) );
+}
+
 void CodeNavigator::syncModuleList()
 {
-#if 0 // TODO
-    ModuleFile* uf = d_mdl->getFile(d_view->d_path);
+#if 0
+    // TODO
+    File* uf = d_pro->getFile(d_view->d_path);
     QModelIndex i = d_mdl->findThing( uf );
     if( i.isValid() )
     {
@@ -669,9 +763,10 @@ void CodeNavigator::syncModuleList()
     }
     if( uf && uf->d_module )
         d_mdl2->load( uf->d_module);
-#endif
     d_mod->expandAll();
     d_mod->scrollToTop();
+#endif
+    fillDetails(d_pro->findModuleByPath(d_view->d_path));
 }
 
 template<class T>
@@ -721,34 +816,46 @@ void CodeNavigator::closeEvent(QCloseEvent* event)
     event->setAccepted(true);
 }
 
+void CodeNavigator::syncEditorMarks(Declaration* selected, Declaration* module)
+{
+    Symbol* syms = d_pro->getSymbolsOfModule(module);
+    if( syms == 0 )
+    {
+        d_view->markNonTerms(SymList());
+        return;
+    }
+
+    Symbol* s = syms;
+    SymList marks;
+    while( s )
+    {
+        if( s->decl == selected )
+            marks << s;
+        s = s->next;
+        if( s == syms )
+            break;
+    }
+
+    d_view->markNonTerms(marks);
+}
+
 void CodeNavigator::onCursorPositionChanged()
 {
     QTextCursor cur = d_view->textCursor();
     const int line = cur.blockNumber() + 1;
     const int col = cur.positionInBlock() + 1;
 
-#if 0
-    setPathTitle(d_mdl->getFs()->findFile(d_view->d_path), line, col);
+    setPathTitle(d_fs->findFile(d_view->d_path), line, col);
 
-    // TODO
-    Symbol* id = d_mdl->findSymbolBySourcePos(d_view->d_path,line,col);
-    if( id && id->d_decl && id->d_decl->isDeclaration() )
+    Symbol* id = d_pro->findSymbolBySourcePos(d_view->d_path,line,col);
+    if( id && id->decl )
     {
-        Declaration* d = (id->d_decl);
-        fillUsedBy( id, d );
-
-        // mark all symbols in file which have the same declaration
-        QList<Symbol*> syms = d->d_refs.value(d_view->d_path);
-        d_view->markNonTerms(syms);
-
-        QModelIndex i = d_mdl2->findThing( d );
-        if( i.isValid() )
-        {
-            d_mod->setCurrentIndex(i);
-            d_mod->scrollTo( i ,QAbstractItemView::EnsureVisible );
-        }
+        Declaration* module = d_pro->findModuleByPath(d_view->d_path);
+        fillUsedBy( id, module );
+        syncEditorMarks(id->decl, module);
+        syncDetailView( id->decl );
+        fillHier(id->decl);
     }
-#endif
 }
 
 void CodeNavigator::onModsDblClicked(QTreeWidgetItem* item,int)
@@ -757,28 +864,38 @@ void CodeNavigator::onModsDblClicked(QTreeWidgetItem* item,int)
         return;
 
     d_view->loadFile(item->toolTip(0));
+    Declaration* module = d_pro->findModuleByPath(d_view->d_path);
+    fillDetails(module);
 }
 
-void CodeNavigator::onItemDblClick(const QModelIndex& i)
+void CodeNavigator::onItemDblClick(QTreeWidgetItem* item,int)
 {
-#if 0 // TODO
-    const Thing* nt = d_mdl->getThing(i);
-    if( nt == 0 || !nt->isDeclaration() )
+    Declaration* s = item->data(0,Qt::UserRole).value<Declaration*>();
+    if( s == 0 )
         return;
 
-    d_view->setPosition( nt->getLoc(), true, true );
-#endif
+    d_detailLock = true;
+    item->setExpanded(true);
+    d_view->setPosition( FilePos(s->pos,d_view->d_path), true, true );
+    d_detailLock = false;
 }
 
 void CodeNavigator::onUsedByDblClicked()
 {
-    if( d_usedBy->currentItem() == 0 )
-        return;
-
-    FilePos pos = d_usedBy->currentItem()->data(0,Qt::UserRole).value<FilePos>();
-    if( pos.d_filePath.isEmpty() )
-        return;
-    d_view->setPosition( pos, true, true );
+    QTreeWidgetItem* item = d_usedBy->currentItem();
+    if( item )
+    {
+        Symbol* sym = item->data(0,Qt::UserRole).value<Symbol*>();
+        Declaration* module = item->data(1,Qt::UserRole).value<Declaration*>();
+        Q_ASSERT( sym != 0 );
+        d_xrefLock = true;
+        if( module )
+        {
+            ModuleData md = module->data.value<ModuleData>();
+            d_view->setPosition( FilePos(sym->pos, md.sourcePath), true, true );
+        }
+        d_xrefLock = false;
+    }
 }
 
 void CodeNavigator::onGoBack()
@@ -843,12 +960,10 @@ void CodeNavigator::onFindAgain()
 void CodeNavigator::onGotoDefinition()
 {
     QTextCursor cur = d_view->textCursor();
-#if 0 // TODO
-    Symbol* id = d_mdl->findSymbolBySourcePos(
+    Symbol* id = d_pro->findSymbolBySourcePos(
                 d_view->d_path,cur.blockNumber() + 1,cur.positionInBlock() + 1);
     if( id )
         d_view->setPosition( id, true, true );
-#endif
 }
 
 void CodeNavigator::onOpen()
@@ -903,6 +1018,281 @@ void CodeNavigator::onDecreaseSize()
     d_view->setFont(f);
 }
 
+void CodeNavigator::onHierDblClicked(QTreeWidgetItem* item, int)
+{
+    Declaration* s = item->data(0,Qt::UserRole).value<Declaration*>();
+    if( s == 0 )
+        return;
+
+    d_hierLock = true;
+    Declaration* mod = s->getModule();
+    if( mod )
+    {
+        ModuleData md = mod->data.value<ModuleData>();
+        d_view->setPosition( FilePos(s->pos,md.sourcePath), true, true );
+        item->setExpanded(true);
+    }
+    d_hierLock = false;
+}
+
+template<class T>
+static QTreeWidgetItem* fillHierProc( T* parent, Declaration* p, Declaration* ref, Project* pro )
+{
+    QTreeWidgetItem* item = new QTreeWidgetItem(parent);
+    Q_ASSERT( p->receiver && p->link && p->link->receiver && p->link->type );
+
+    item->setText(0, p->link->type->decl->scopedName(true));
+    item->setData(0, Qt::UserRole, QVariant::fromValue(p) );
+    item->setIcon(0, QPixmap( p->visi >= Declaration::ReadWrite ? ":/images/func.png" : ":/images/func_priv.png" ) );
+    item->setToolTip(0,item->text(0));
+
+    QTreeWidgetItem* ret = 0;
+    DeclList subs = pro->getSubs(p);
+    foreach( Declaration* sub, subs )
+    {
+        QTreeWidgetItem* tmp = fillHierProc(item, sub, ref, pro);
+        if( tmp )
+            ret = tmp;
+    }
+    if( ret == 0 && p == ref )
+            ret = item;
+    return ret;
+}
+
+template<class T>
+static QTreeWidgetItem* fillHierClass( T* parent, Type* cur, Type* ref, Project* pro )
+{
+    QTreeWidgetItem* item = new QTreeWidgetItem(parent);
+    Declaration* name = cur->decl;
+    if( name )
+        item->setText(0, name->scopedName(true));
+    item->setData(0, Qt::UserRole, QVariant::fromValue( name ) );
+    item->setIcon(0, QPixmap( name->visi >= Declaration::ReadWrite ? ":/images/class.png" : ":/images/class_priv.png" ) );
+    item->setToolTip(0,item->text(0));
+    QTreeWidgetItem* ret = name == ref->decl ? item : 0;
+    DeclList subs = pro->getSubs(name);
+    foreach( Declaration* sub, subs )
+    {
+        QTreeWidgetItem* tmp = fillHierClass(item, sub->type, ref, pro);
+        if( tmp )
+            ret = tmp;
+    }
+    return ret;
+}
+
+void CodeNavigator::fillHier(Declaration* decl)
+{
+    if( d_hierLock )
+        return;
+    d_hier->clear();
+    d_hierTitle->clear();
+    if( decl == 0 )
+        return;
+    QFont f = d_hier->font();
+    f.setBold(true);
+    QTreeWidgetItem* ref = 0;
+    switch( decl->kind )
+    {
+    case Declaration::TypeDecl:
+        if( decl->type == 0 )
+            break;
+        switch( decl->type->kind )
+        {
+        case Type::Record:
+        case Type::Object:
+            {
+                Type* root = decl->type->deref();
+                Type* sub = root;
+                d_hierTitle->setText( QString("Inheritance of class '%1'").arg( decl->name.constData() ) );
+                while( root && root->base )
+                    root = root->base->deref();
+                ref = fillHierClass( d_hier, root, sub, d_pro );
+            }
+            break;
+        }
+        break;
+    case Declaration::Procedure:
+        {
+            Declaration* super = decl;
+            if( !super->receiver )
+                return;
+            d_hierTitle->setText( QString("Overrides of procedure '%1'").arg( decl->name.constData() ) );
+            while( super->super )
+                super = super->super;
+            ref = fillHierProc( d_hier, super, decl, d_pro );
+            Q_ASSERT( ref );
+        }
+        break;
+    }
+    d_hier->sortByColumn(0,Qt::AscendingOrder);
+    if( ref )
+    {
+        ref->setFont(0,f);
+        // d_hier->expandAll();
+        ref->setExpanded(true);
+        d_hier->scrollToItem(ref,QAbstractItemView::PositionAtCenter);
+        d_hier->setCurrentItem(ref);
+    }
+}
+
+static void decorateModItem(QTreeWidgetItem* item, Declaration* n, Type* r, QHash<Declaration*,QTreeWidgetItem*>& idx );
+
+template <class T>
+static void walkModItems(T* parent, Declaration* thisDecl, Type* declType, bool sort,
+                         QHash<Declaration*,QTreeWidgetItem*>& idx, Project* pro)
+{
+    typedef QMultiMap<QByteArray,Declaration*> Sort;
+    if( thisDecl && sort)
+    {
+        Sort tmp;
+        Declaration* sub = thisDecl->link;
+        while( sub )
+        {
+            tmp.insert( sub->name.toLower(), sub );
+            sub = sub->getNext();
+        }
+        Sort::const_iterator i;
+        for( i = tmp.begin(); i != tmp.end(); ++i )
+            createModItem(parent,i.value(),0, sort, idx, pro);
+    }else if( thisDecl )
+    {
+        Declaration* sub = thisDecl->link;
+        while( sub )
+        {
+            createModItem(parent,sub,0, sort, idx, pro);
+            sub = sub->getNext();
+        }
+    }
+    if( declType && sort )
+    {
+        Sort tmp;
+        foreach( Declaration* sub, declType->subs )
+        {
+            if( sub->kind == Declaration::Procedure )
+                tmp.insert( sub->name.toLower(), sub );
+        }
+        Sort::const_iterator i;
+        for( i = tmp.begin(); i != tmp.end(); ++i )
+            createModItem(parent,i.value(),0, sort, idx, pro);
+    }else if( declType )
+    {
+        foreach( Declaration* sub, declType->subs )
+        {
+            if( sub->kind == Declaration::Procedure )
+                createModItem(parent,sub,0, sort, idx, pro);
+        }
+    }
+}
+
+static void fillRecord(QTreeWidgetItem* item, Declaration* thisDecl, Type* declType, bool sort,
+                       QHash<Declaration*,QTreeWidgetItem*>& idx, Project* pro )
+{
+    decorateModItem(item,thisDecl, declType, idx);
+    walkModItems(item,thisDecl,declType,sort, idx, pro);
+    if( declType->base )
+        item->setText(0, item->text(0) + " ⇑");
+    if( thisDecl->hasSubs )
+    {
+        DeclList subs = pro->getSubs(thisDecl);
+        item->setText(0, item->text(0) + QString(" ⇓%1").arg(subs.size()));
+    }
+    item->setToolTip( 0, item->text(0) );
+}
+
+template<class T>
+static void createModItem(T* parent, Declaration* thisDecl, Type* declType, bool sort,
+                          QHash<Declaration*,QTreeWidgetItem*>& idx, Project* pro )
+{
+    if( declType == 0 )
+        declType = thisDecl->type;
+
+    if( idx.contains(thisDecl) )
+    {
+        // qWarning() << "fillMod recursion at" << n->getModule()->d_file << n->pos.d_row << n->name;
+        return; // can legally happen if record decl contains a typedef using record, as e.g. Meta.Item.ParamCallVal.IP
+    }
+    switch( thisDecl->kind )
+    {
+    case Declaration::TypeDecl:
+        if( declType == 0 )
+            return;
+        switch( declType->kind )
+        {
+        case Type::Record:
+        case Type::Object:
+            {
+                QTreeWidgetItem* item = new QTreeWidgetItem(parent);
+                fillRecord(item,thisDecl,declType,sort,idx, pro);
+            }
+            break;
+        case Type::Pointer:
+            if( declType->base && declType->base->kind == Type::Record )
+            {
+                // a pointer to an anonymous record (we don't need this for objects because they are already pointers)
+                QTreeWidgetItem* item = new QTreeWidgetItem(parent);
+                fillRecord(item,thisDecl,declType->base,sort,idx, pro);
+            }
+            break;
+#if 0
+        case Type::NameRef:
+            if( declType->deref()->kind == Type::Record || declType->deref()->kind == Type::Object )
+                createModItem(parent,thisDecl,declType->deref(), sort, idx, pro);
+            break;
+#endif
+        }
+        break;
+    case Declaration::Procedure:
+        {
+            QTreeWidgetItem* item = new QTreeWidgetItem(parent);
+            decorateModItem(item,thisDecl, 0, idx);
+            walkModItems(item,thisDecl,declType,sort, idx, pro);
+            if( thisDecl->super )
+                item->setText(0, item->text(0) + " ⇑");
+            if( thisDecl->hasSubs )
+            {
+                DeclList subs = pro->getSubs(thisDecl);
+                item->setText(0, item->text(0) + QString(" ⇓%1").arg(subs.size()));
+            }
+            item->setToolTip( 0, item->text(0) );
+        }
+        break;
+    }
+}
+
+static void decorateModItem( QTreeWidgetItem* item, Declaration* thisDecl, Type* declType,
+                          QHash<Declaration*,QTreeWidgetItem*>& idx )
+{
+    if( declType == 0 )
+        declType = thisDecl->type;
+    const bool pub = thisDecl->visi > Declaration::Private;
+    item->setText(0,thisDecl->name);
+    item->setData(0, Qt::UserRole, QVariant::fromValue(thisDecl) );
+    idx.insert(thisDecl,item);
+    switch( thisDecl->kind )
+    {
+    case Declaration::TypeDecl:
+        if( declType && declType->kind == Type::Record )
+            item->setIcon(0, QPixmap( pub ? ":/images/struct.png" : ":/images/struct_priv.png" ) );
+        else if( declType && declType->kind == Type::Object )
+            item->setIcon(0, QPixmap( pub ? ":/images/class.png" : ":/images/class_priv.png" ) );
+        break;
+    case Declaration::Procedure:
+        item->setIcon(0, QPixmap( pub ? ":/images/func.png" : ":/images/func_priv.png" ) );
+        break;
+    }
+}
+
+void CodeNavigator::fillDetails(Declaration* module)
+{
+    d_mod->clear();
+    d_modIdx.clear();
+    d_modTitle->clear();
+    if( module == 0 )
+        return;
+    d_modTitle->setText( QString("Module '%1'").arg(module->name.constData()) );
+    walkModItems(d_mod, module, 0, true, d_modIdx, d_pro );
+    d_mod->expandAll();
+}
 
 int main(int argc, char *argv[])
 {
@@ -949,3 +1339,4 @@ int main(int argc, char *argv[])
 
     return res;
 }
+

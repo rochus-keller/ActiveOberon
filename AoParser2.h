@@ -80,7 +80,7 @@ namespace Ao {
         Ast::Type* ProcedureType();
         Ast::Type* AliasType();
         Ast::Type* NamedType();
-        Ast::Type* Type_(bool deanonymize = true);
+        Ast::Type* Type_(bool needsHelperDecl = true);
 		void FieldDecl();
 		void FieldList();
         Ast::Statement* Body();
@@ -136,6 +136,7 @@ namespace Ao {
 		void invalid(const char* what);
 		bool expect(int tt, bool pkw, const char* where);
         QVector<QByteArray> predefSymbols; // MaxAttrs
+        QByteArray BEGIN;
     };
 }
 #endif // include

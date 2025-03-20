@@ -8,7 +8,7 @@ using namespace Ast;
 static QByteArray SELF;
 
 Validator::Validator(AstModel* mdl, Importer* imp, bool haveXref):module(0),mdl(mdl),imp(imp),
-    first(0),last(0),curObjectType(0)
+    first(0),last(0),curObjectTypeDecl(0)
 {
     Q_ASSERT(mdl);
     if( haveXref )
@@ -150,39 +150,46 @@ void Validator::visitDecl(Declaration* d)
     {
     case Declaration::TypeDecl:
         if( d->type && d->type->kind == Type::Object )
-            curObjectType = d;
+            curObjectTypeDecl = d;
         visitType(d->type);
         if( d->type && d->type->kind == Type::Object )
         {
             QList<Declaration*> bounds_ = boundProcs;
             boundProcs.clear();
-            foreach(Declaration* p, bounds_)
+            foreach(Declaration* proc, bounds_)
             {
-                Q_ASSERT(p->link && p->link->kind == Declaration::ParamDecl &&
-                         p->link->receiver && p->link->type );
-                if( p->link->type->deref()->base )
+                Q_ASSERT(proc->link && proc->link->kind == Declaration::ParamDecl &&
+                         proc->link->receiver && proc->link->type );
+                Type* objectType = proc->link->type->deref();
+                Q_ASSERT(objectType == d->type);
+                if( objectType->base )
                 {
-                    Declaration* super = findInType(p->link->type->deref()->base->deref(),p->name);
+                    Declaration* super = findInType(objectType->base->deref(),proc->name);
                     if( super )
                     {
                         super->hasSubs = true;
-                        p->super = super;
+                        proc->super = super;
                         if( first )
-                            subs[super].append(p);
+                            subs[super].append(proc);
                     }
                 }
-                visitScope(p);
+                visitScope(proc);
             }
-            curObjectType = 0;
-            if( first && d->type->base )
+            curObjectTypeDecl = 0;
+        }
+        if( d->type && (d->type->kind == Type::Object || d->type->kind == Type::Record) )
+        {
+            if( d->type->base )
             {
-                Q_ASSERT( d->type->base->kind == Type::NameRef );
-                if( !d->type->base->validated || d->type->base->base == 0 )
+                Type* baseType = d->type->base;
+                Q_ASSERT( baseType->kind == Type::NameRef );
+                if( !baseType->validated || baseType->base == 0 )
                     break;
-                Declaration* super = d->type->base->base->decl;
+                Declaration* super = baseType->base->deref()->decl;
                 super->hasSubs = true;
                 d->super = super;
-                subs[super].append(d);
+                if( first )
+                    subs[super].append(d);
             }
         }
         break;
@@ -209,7 +216,7 @@ void Validator::visitDecl(Declaration* d)
     case Declaration::Procedure: {
         // only header is evaluated here
         visitType(d->type);
-        const QList<Declaration*> params = d->getParams();
+        const QList<Declaration*> params = d->getParams(true);
         for( int i = 0; i < params.size(); i++ )
             visitDecl(params[i]);
         break;
@@ -746,8 +753,8 @@ Validator::ResolvedQ Validator::find(const Qualident& q, RowCol pos)
             nested = nested->outer;
         }
 
-        if( d == 0 && curObjectType )
-            d = findInType(deref(curObjectType->type),q.second);
+        if( d == 0 && curObjectTypeDecl )
+            d = findInType(deref(curObjectTypeDecl->type),q.second);
         if( d == 0 )
             d = module->find(q.second,false);
         if( d == 0 )
@@ -803,25 +810,25 @@ void Validator::visitType(Type* type)
             // resolve base objects if present
             // we have to disable curObjectType here because otherwise findInType is called with
             // curObjectType->type->base which leads to infinite loop
-            Declaration* tmp = curObjectType;
-            Q_ASSERT(curObjectType != 0);
-            curObjectType = 0;
+            Declaration* tmp = curObjectTypeDecl;
+            Q_ASSERT(curObjectTypeDecl != 0);
+            curObjectTypeDecl = 0;
             resolveIfNamedType(type->base);
-            curObjectType = tmp;
+            curObjectTypeDecl = tmp;
         }else
             visitType(type->base);
         foreach( Declaration* d, type->subs )
         {
-            if( d->kind == Declaration::Procedure && curObjectType )
+            if( d->kind == Declaration::Procedure && curObjectTypeDecl )
             {
                 d->receiver = true;
-                d->outer = curObjectType;
+                d->outer = curObjectTypeDecl;
                 boundProcs << d; // do body later
                 Declaration* self = new Declaration();
                 self->kind = Declaration::ParamDecl;
                 self->name = SELF;
-                self->type = curObjectType->type;
-                self->pos = curObjectType->pos;
+                self->type = curObjectTypeDecl->type;
+                self->pos = curObjectTypeDecl->pos;
                 self->receiver = true;
                 self->next = d->link;
                 d->link = self;

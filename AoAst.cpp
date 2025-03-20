@@ -604,7 +604,7 @@ QString Declaration::getSourcePath() const
         return QString();
 }
 
-QByteArray Declaration::scopedName(bool withModule, bool withPath) const
+QByteArray Declaration::scopedName(bool withModule) const
 {
     QByteArray res;
     const Declaration* d = this;
@@ -617,14 +617,7 @@ QByteArray Declaration::scopedName(bool withModule, bool withPath) const
     }
     Q_ASSERT( d && d->kind == Declaration::Module );
     if( withModule )
-    {
-        if( withPath )
-        {
-            ModuleData md = d->data.value<ModuleData>();
-            res = md.fullName + "." + res;
-        }else
-            res = d->name + "." + res;
-    }
+        res = d->name + "." + res;
     return res;
 }
 

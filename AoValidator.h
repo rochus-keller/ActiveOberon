@@ -59,7 +59,7 @@ namespace Ao
         Importer* imp;
         Ast::Declaration* module;
         QList<Ast::Declaration*> scopeStack, boundProcs;
-        Ast::Declaration* curObjectType;
+        Ast::Declaration* curObjectTypeDecl;
         Ast::Symbol* first;
         Ast::Symbol* last;
         QHash<Ast::Declaration*,Ast::SymList> xref;

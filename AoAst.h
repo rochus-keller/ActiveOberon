@@ -132,7 +132,6 @@ namespace Ast
         QList<Declaration*> subs; // list of record fields or enum elements, or params for proc type
         Declaration* decl; // if NameRef includes pos and name
         Expression* expr; // array len
-        Statement* body;  // active object
 
         bool isNumber() const { return kind >= SHORTINT && kind <= LONGREAL; }
         bool isReal() const { return kind == REAL || kind == LONGREAL; }
@@ -154,7 +153,7 @@ namespace Ast
         static QVariant getMax(quint8 form);
         static QVariant getMin(quint8 form);
 
-        Type():base(0),expr(0),body(0),len(0),decl(0){meta = T;}
+        Type():base(0),expr(0),len(0),decl(0){meta = T;}
         ~Type();
     };
 
@@ -192,7 +191,7 @@ namespace Ast
         void appendMember(Declaration*);
         RowCol getEndPos() const;
         QString getSourcePath() const;
-        QByteArray scopedName(bool withModule = false, bool withPath = false) const;
+        QByteArray scopedName(bool withModule = false) const;
         QByteArray getModuleFullName(bool dots = false) const;
         static void deleteAll(Declaration*);
 

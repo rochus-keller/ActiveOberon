@@ -23,7 +23,6 @@ SOURCES += \
     AoAst.cpp \
     AoValidator.cpp \
     AoProject.cpp \
-    AoCodeModel2.cpp \
     AoCodeNavigator2.cpp \
     AoHighlighter2.cpp
 
@@ -37,7 +36,6 @@ HEADERS += \
     AoAst.h \
     AoValidator.h \
     AoProject.h \
-    AoCodeModel2.h \
     AoCodeNavigator2.h \
     AoHighlighter2.h
 
