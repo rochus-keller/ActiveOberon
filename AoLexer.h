@@ -43,6 +43,13 @@ namespace Ao
         QList<Token> tokens( const QByteArray& code, const QString& path = QString() );
         quint32 getSloc() const { return d_sloc; }
         static void parseComment( const QByteArray& str, int& pos, int& level );
+
+        static bool isOberonFormat(QIODevice*);
+        static QByteArray extractText(QIODevice*); // recognizes Oberon file format and ASCII, returns Latin-1 UTF-8
+        static QPair<quint32,quint32> inferTextRange(QIODevice*); // offset, len (or 0 for all)
+        static bool isV4File( QIODevice* );
+        static QByteArray readV4Text(QIODevice*);
+        static bool skipBom( QIODevice* );
     protected:
         Token nextTokenImp();
         int skipWhiteSpace();

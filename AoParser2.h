@@ -58,7 +58,7 @@ namespace Ao {
             ID():visi(Private),untraced(false){}
             bool isValid() const { return name.d_type == Tok_ident; }
         };
-        enum Attrs { UNTRACED, ACTIVE, DELEGATE, EXCLUSIVE, PRIORITY, SAFE, MaxAttr };
+        enum Attrs { UNTRACED, ACTIVE, DELEGATE, EXCLUSIVE, PRIORITY, SAFE, FFI, MaxAttr };
 
         void Module();
 		void ImportDecl();

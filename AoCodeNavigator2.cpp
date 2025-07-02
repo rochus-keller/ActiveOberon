@@ -21,6 +21,7 @@
 #include "AoCodeNavigator2.h"
 #include "AoHighlighter2.h"
 #include "AoProject.h"
+#include "AoLexer.h"
 #include <QApplication>
 #include <QFileInfo>
 #include <QtDebug>
@@ -104,6 +105,8 @@ public:
 #endif
         if( !monospace.exactMatch() )
             monospace = QFont("DejaVu Sans Mono");
+        // monospace.setPointSizeF(monospace.pointSizeF()*1.0); // this strangely leads to a bigger font on my debian bookworm mate desktop
+        monospace.setPointSizeF(10.5);
         setFont(monospace);
     }
 
@@ -116,8 +119,7 @@ public:
         QFile in(d_path);
         if( !in.open(QIODevice::ReadOnly) )
             return false;
-        QByteArray buf = in.readAll();
-        buf.chop(1);
+        QByteArray buf = Ao::Lexer::extractText(&in);
         setPlainText( QString::fromUtf8(buf) );
         markMissing();
         that()->syncModuleList();
@@ -769,6 +771,11 @@ void CodeNavigator::syncModuleList()
     fillDetails(d_pro->findModuleByPath(d_view->d_path));
 }
 
+static bool FileSort( const FileSystem::File* lhs, const FileSystem::File* rhs )
+{
+    return lhs->d_moduleName < rhs->d_moduleName;
+}
+
 template<class T>
 static void fillDir(const FileSystem::Dir& dir, T* parent)
 {
@@ -785,16 +792,16 @@ static void fillDir(const FileSystem::Dir& dir, T* parent)
         item->setIcon(0, QPixmap(":/images/folder.png") );
         fillDir(*i.value(), item);
     }
-    typedef QMap<QString,const FileSystem::File*> SortFile;
+    typedef QList<const FileSystem::File*> SortFile;
     SortFile sortFile;
     foreach(const FileSystem::File* f, dir.d_files )
-        sortFile.insert(f->d_name,f);
-    SortFile::const_iterator j;
-    for( j = sortFile.begin(); j != sortFile.end(); ++j )
+        sortFile << f;
+    std::sort(sortFile.begin(), sortFile.end(), FileSort);
+    for( int j = 0; j < sortFile.size(); j++ )
     {
         QTreeWidgetItem* item = new QTreeWidgetItem(parent,2);
-        item->setText(0, j.value()->d_moduleName);
-        item->setToolTip( 0, j.value()->d_realPath );
+        item->setText(0, sortFile[j]->d_moduleName);
+        item->setToolTip( 0, sortFile[j]->d_realPath );
         item->setIcon(0, QPixmap(":/images/module.png") );
     }
 }
@@ -1300,12 +1307,12 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.5.0");
+    a.setApplicationVersion("0.5.1");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX
     QFontDatabase::addApplicationFont(":/fonts/NotoSans.ttf"); 
-    QFont af("Noto Sans",9);
+    QFont af("Noto Sans",10);
     a.setFont(af);
 #endif
 

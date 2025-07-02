@@ -419,6 +419,7 @@ Parser2::Parser2(AstModel* m, Scanner2* s):scanner(s),mdl(m),thisMod(0)
     predefSymbols[EXCLUSIVE] = Token::getSymbol("EXCLUSIVE");
     predefSymbols[PRIORITY] = Token::getSymbol("PRIORITY");
     predefSymbols[SAFE] = Token::getSymbol("SAFE");
+    predefSymbols[FFI] = Token::getSymbol("C");
     BEGIN = Token::getSymbol("BEGIN");
 }
 
@@ -521,7 +522,9 @@ void Parser2::Module() {
     md.end = cur.toRowCol();
     m->data = QVariant::fromValue(md);
     mdl->closeScope();
-    expect(Tok_Dot, false, "Module");
+    if( la.d_type != Tok_Dot )
+        // don't use expect here thus avoiding calling next() which might render an error in case of text after modules
+        errors << Error("expecting a dot at the end of a module",la.toRowCol(), la.d_sourcePath);
 }
 
 void Parser2::ImportDecl() {
@@ -712,10 +715,11 @@ Declaration* Parser2::ProcHead(bool forwardDecl) {
 bool Parser2::SysFlag() {
 	expect(Tok_Lbrack, false, "SysFlag");
 	expect(Tok_ident, false, "SysFlag");
-    const bool res = cur.d_val.constData() == predefSymbols[UNTRACED].constData();
+    const bool res = cur.d_val.constData() == predefSymbols[UNTRACED].constData() ||
+            cur.d_val.constData() == predefSymbols[FFI].constData();
     if( !res )
         error(cur, QString("unknown system flag '%1'").arg(cur.d_val.constData()));
-	expect(Tok_Rbrack, false, "SysFlag");
+    expect(Tok_Rbrack, false, "SysFlag");
     return res;
 }
 
