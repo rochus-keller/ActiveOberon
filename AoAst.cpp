@@ -60,7 +60,7 @@ const char* Builtin::name[] = {
     "GETREG", "PUTREG"
 };
 
-AstModel::AstModel():helper(0),helperId(0)
+AstModel::AstModel()
 {
     if( globalScope == 0 )
     {
@@ -121,7 +121,6 @@ AstModel::~AstModel()
     for( int i = 1; i < scopes.size(); i++ ) // start with 1, 0 is globalScope
         Declaration::deleteAll(scopes[i]);
     scopes.clear();
-    Declaration::deleteAll( helper );
 }
 
 void AstModel::openScope(Declaration* scope)
@@ -145,14 +144,6 @@ Declaration* AstModel::closeScope(bool takeMembers)
             Q_ASSERT(!res->inList);
         scopes.back()->link = 0;
         Declaration::deleteAll(scopes.back());
-    }else if( scopes.back()->kind == Declaration::Module )
-    {
-        // append the helpers to the module so they are guaranteed to have the same life span as the module
-        Q_ASSERT(scopes.back()->next == 0);
-        scopes.back()->next = helper;
-        helper = 0;
-        scopes.back()->id = helperId;
-        helperId = 0;
     }
     scopes.pop_back();
     return res;
@@ -188,17 +179,6 @@ Declaration* AstModel::addDecl(const QByteArray& name)
         d->next = decl;
         decl->inList = true;
     }
-    return decl;
-}
-
-Declaration*AstModel::addHelper()
-{
-    Declaration* decl = new Declaration();
-    decl->kind = Declaration::Helper;
-    decl->next = helper;
-    helper = decl;
-    decl->name = "$" + QByteArray::number(++helperId);
-    decl->outer = getTopModule();
     return decl;
 }
 
@@ -242,11 +222,6 @@ Declaration*AstModel::getTopScope() const
     return 0;
 }
 
-QByteArray AstModel::getTempName()
-{
-    return Token::getSymbol("$" + QByteArray::number(++helperId));
-}
-
 Declaration*AstModel::getTopModule() const
 {
     for( int i = 0; i < scopes.size(); i++ )
@@ -273,6 +248,7 @@ Type*AstModel::newType(int form, int size)
 {
     Type* t = new Type();
     t->kind = form;
+    t->owned = true;
     return t;
 }
 
@@ -288,7 +264,7 @@ void AstModel::addTypeAlias(const QByteArray& name, Type* t)
     Declaration* d = addDecl(Token::getSymbol(name.toUpper()));
     d->validated = true;
     d->kind = Declaration::TypeDecl;
-    d->type = t;
+    d->setType(t);
     if( t->decl == 0 )
         t->decl = d;
 }
@@ -297,7 +273,7 @@ void AstModel::addBuiltin(const QByteArray& name, Builtin::Kind t)
 {
     Declaration* d = addDecl(Token::getSymbol(name.toUpper()));
     d->kind = Declaration::Builtin;
-    d->type = types[Type::NoType];
+    d->setType(types[Type::NoType]);
     d->id = t;
     d->validated = true;
 }
@@ -306,7 +282,7 @@ void AstModel::addConst(const QByteArray& name, quint8 t, const QVariant& data)
 {
     Declaration* d = addDecl(Token::getSymbol(name));
     d->kind = Declaration::ConstDecl;
-    d->type = types[t];
+    d->setType(types[t]);
     d->data = data;
     d->validated = true;
 }
@@ -316,8 +292,8 @@ QPair<int, int> Type::countAllocRecordMembers(bool recursive)
     QPair<int, int> counts;
     if( kind != Record && kind != Object )
         return counts;
-    if( recursive && base )
-        counts = base->deref()->countAllocRecordMembers(true);
+    if( recursive && type() )
+        counts = type()->deref()->countAllocRecordMembers(true);
 
     if( allocated )
         foreach( Declaration* sub, subs )
@@ -354,7 +330,7 @@ bool Type::isSubtype(Type* super, Type* sub)
         return false;
     while( sub && super != sub )
     {
-        sub = sub->base;
+        sub = sub->type();
         if( sub )
             sub = sub->deref();
     }
@@ -364,9 +340,9 @@ bool Type::isSubtype(Type* super, Type* sub)
 bool Type::isDerefCharArray() const
 {
     Type* t = deref();
-    if( t && t->kind == Array && t->base )
+    if( t && t->kind == Array && t->type() )
     {
-        Type* b = t->base->deref();
+        Type* b = t->type()->deref();
         return b && b->kind == Type::CHAR;
     }
     return false;
@@ -375,9 +351,9 @@ bool Type::isDerefCharArray() const
 bool Type::isDerefByteArray() const
 {
     Type* t = deref();
-    if( t && t->kind == Array && t->base )
+    if( t && t->kind == Array && t->type() )
     {
-        Type* b = t->base->deref();
+        Type* b = t->type()->deref();
         return b && b->kind == Type::BYTE;
     }
     return false;
@@ -387,10 +363,10 @@ Type*Type::deref() const
 {
     if( kind == NameRef )
     {
-        if( base == 0 )
+        if( type() == 0 )
             return const_cast<Type*>(this);
         else
-            return base->deref();
+            return type()->deref();
     }
     return const_cast<Type*>(this);
 }
@@ -402,11 +378,11 @@ Declaration*Type::find(const QByteArray& name, bool recursive) const
         if(d->name.constData() == name.constData())
             return d;
     }
-    if( recursive && (kind == Record || kind == Object) && base )
+    if( recursive && (kind == Record || kind == Object) && type() )
     {
-        Type* super = base->deref();
-        if( super->kind == Type::Pointer && super->base )
-            super = super->base->deref();
+        Type* super = type()->deref();
+        if( super->kind == Type::Pointer && super->type() )
+            super = super->type()->deref();
         return super->find(name);
     }
     return 0;
@@ -415,8 +391,8 @@ Declaration*Type::find(const QByteArray& name, bool recursive) const
 QList<Declaration*> Type::fieldList() const
 {
     QList<Declaration*> res;
-    if( (kind == Record || kind == Object) && base)
-        res = base->deref()->fieldList();
+    if( (kind == Record || kind == Object) && type())
+        res = type()->deref()->fieldList();
     foreach( Declaration* d, subs)
     {
         if( d->kind == Declaration::Field )
@@ -429,8 +405,8 @@ QList<Declaration*> Type::fieldList() const
 QList<Declaration*> Type::methodList(bool recursive) const
 {
     QList<Declaration*> res;
-    if( recursive && (kind == Record || kind == Object) && base)
-        res = base->deref()->methodList();
+    if( recursive && (kind == Record || kind == Object) && type())
+        res = type()->deref()->methodList();
     foreach( Declaration* d, subs)
     {
         if( d->kind == Declaration::Procedure )
@@ -442,13 +418,12 @@ QList<Declaration*> Type::methodList(bool recursive) const
 
 Type::~Type()
 {
+    if( kind == NameRef && quali )
+        delete quali;
     if( expr )
         delete expr;
-    // if( base && base->form == NameRef && form != NameRef )
-        // A NameRef points to the resolved Type via base which cannot be owned by NameRef per definition
-        // On the other hand, each Type which has a base shall delete NameRef
-        // NOTE: this doesn't work; base could have been delete before we do the check here
-        // delete base;
+    foreach( Declaration* d, subs )
+        Declaration::deleteAll(d);
 }
 
 QVariant Type::getMax(quint8 form)
@@ -500,8 +475,6 @@ Declaration::~Declaration()
             && kind != Declaration::Import  // imports are just referenced, not owned
             )
         Declaration::deleteAll(link);
-    if( type && ownstype )
-        delete type;
     Statement::deleteAll(body);
     if( expr )
         delete expr;
@@ -695,7 +668,7 @@ bool Expression::isConst() const
                         return true; // error
                     if( args->isConst() )
                         return true;
-                    Type* t = args->type ? args->type->deref() : 0;
+                    Type* t = args->type() ? args->type()->deref() : 0;
                     if( t && t->kind == Type::Array )
                         return t->expr && t->expr->isConst();
                     return true;
@@ -742,11 +715,11 @@ void Expression::setByVal()
 
 bool Expression::isCharLiteral()
 {
-    if( type == 0 )
+    if( type() == 0 )
         return false;
     if( kind == Literal )
     {
-        Type* t = type->deref();
+        Type* t = type()->deref();
         if( t->kind == Type::CHAR )
             return true;
         if( t->kind == Type::StrLit )
@@ -767,9 +740,9 @@ qint64 Expression::getCaseValue(bool* ok) const
         v = val.value<Declaration*>()->data;
     else
         v = val;
-    if( type->isInteger() || type->kind == Type::CHAR )
+    if( type()->isInteger() || type()->kind == Type::CHAR )
         return v.toLongLong();
-    else if( type->kind == Type::StrLit )
+    else if( type()->kind == Type::StrLit )
     {
         const QByteArray str = v.toByteArray();
         // str ends with an explicit zero, thus str.size is 2
@@ -969,4 +942,30 @@ bool Import::equals(const Import& other) const
         return false;
 
     return true;
+}
+
+void Node::setType(Type * t)
+{
+    if( ty == t )
+        return;
+    Q_ASSERT(ty == 0);
+    if( t && !t->owned )
+    {
+        ownstype = true;
+        t->owned = true;
+    }
+    ty = t;
+}
+
+Type *Node::overrideType(Type * t)
+{
+    Type* old = ty;
+    ty = t;
+    return old;
+}
+
+Node::~Node()
+{
+    if( ty && ownstype )
+        delete ty;
 }

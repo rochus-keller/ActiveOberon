@@ -80,7 +80,7 @@ namespace Ao {
         Ast::Type* ProcedureType();
         Ast::Type* AliasType();
         Ast::Type* NamedType();
-        Ast::Type* Type_(bool needsHelperDecl = true);
+        Ast::Type* Type_();
 		void FieldDecl();
 		void FieldList();
         Ast::Statement* Body();
@@ -121,7 +121,6 @@ namespace Ao {
         Ast::Declaration* addDecl(const Token& id, quint8 visi, quint8 mode);
         void error( const Token&, const QString& msg);
         void error( const RowCol&, const QString& msg );
-        Ast::Declaration* addHelper(Ast::Type* t);
         Ast::Type* smallestIntType(quint64 i);
         Ast::Expression* maybeQualident();
 

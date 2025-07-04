@@ -53,10 +53,12 @@ namespace Ast
         static const char* name[];
     };
 
+    class Type;
+
     class Node
     {
     public:
-        enum Meta { T, D, E, S }; // Type, Declaration, Expression, Statement
+        enum Meta { T, D, E }; // Type, Declaration, Expression
         uint meta : 2;
         uint kind : 5;
 
@@ -66,8 +68,8 @@ namespace Ast
         // Type:
         uint deferred : 1;
         uint delegate : 1;
-        uint anonymous : 1;
         uint allocated : 1;
+        uint owned : 1;
 
         // Declaration:
         uint varParam : 1; // var param
@@ -83,19 +85,26 @@ namespace Ast
         uint needsLval : 1;
         uint nonlocal : 1;
 
-        // Statement:
-        uint active : 1;
-        uint exclusive : 1;
+        // 25 bits
 
         RowCol pos;
 
-        Node():meta(0),kind(0),validated(0),deferred(0),delegate(0),anonymous(0),allocated(0),receiver(0),
+        Type* type() const { return ty; }
+        void setType(Type*);
+        Type* overrideType(Type*);
+
+        Node():meta(0),kind(0),validated(0),deferred(0),delegate(0),allocated(0),receiver(0),
             varParam(0),constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),
-            byVal(0),needsLval(0),active(0),exclusive(0),nonlocal(0){}
+            byVal(0),needsLval(0),nonlocal(0),ty(0),owned(0){}
+        ~Node();
+    private:
+        Type* ty;
     };
 
     class Expression;
     class Statement;
+
+    typedef QPair<QByteArray,QByteArray> Quali;
 
     class Type : public Node
     {
@@ -127,8 +136,12 @@ namespace Ast
         };
         static const char* name[];
 
-        quint32 len; // array length
-        Type* base; // array/pointer base type, return type
+        union {
+            quint32 len; // array length
+            Quali* quali; // NameRef
+        };
+
+        // see Node Type* type; // array/pointer base type, return type
         QList<Declaration*> subs; // list of record fields or enum elements, or params for proc type
         Declaration* decl; // if NameRef includes pos and name
         Expression* expr; // array len
@@ -153,7 +166,7 @@ namespace Ast
         static QVariant getMax(quint8 form);
         static QVariant getMin(quint8 form);
 
-        Type():base(0),expr(0),len(0),decl(0){meta = T;}
+        Type():expr(0),quali(0),decl(0){meta = T;}
         ~Type();
     };
 
@@ -170,7 +183,6 @@ namespace Ast
         Declaration* super; // super class or overridden method
         Declaration* next; // list of all declarations in outer scope
         Statement* body; // procs, owned
-        Type* type;
         QByteArray name;
         enum Visi { NA, Private, ReadOnly, ReadWrite };
         uint visi : 2;
@@ -178,7 +190,7 @@ namespace Ast
         QVariant data; // value for Const and Enum, path for Import, name for Extern
         Expression* expr; // const decl, enum, meta actuals
 
-        Declaration():next(0),link(0),outer(0),super(0),type(0),body(0),id(NoSlot),expr(0),visi(0) { meta = D; }
+        Declaration():next(0),link(0),outer(0),super(0),body(0),id(NoSlot),expr(0),visi(0) { meta = D; }
 
         QList<Declaration*> getParams(bool skipReceiver = false) const;
         int getIndexOf(Declaration*) const;
@@ -223,7 +235,6 @@ namespace Ast
             Super,   // ^ supercall
             MAX
         };
-        Type* type;
         QVariant val; // set elements and call args are ExpList embedded in val
         Expression* lhs; // for unary and binary ops
         Expression* rhs; // for binary ops
@@ -241,7 +252,7 @@ namespace Ast
         static Expression* createFromToken(quint16,const RowCol&);
 
         Expression(Kind k = Invalid, const RowCol& rc = RowCol()):
-            type(0),lhs(0),rhs(0),next(0) {meta = E; kind = k; pos = rc; }
+            lhs(0),rhs(0),next(0) {meta = E; kind = k; pos = rc; }
         ~Expression();
     };
 
@@ -264,12 +275,16 @@ namespace Ast
             Assig, Call, If, Elsif, Else, Case, TypeCase, CaseLabel, With,
             Loop, While, Repeat, Exit, Return, ForAssig, ForToBy, End, Assembler
         };
+        quint8 kind;
+        bool active;
+        bool exclusive;
+        RowCol pos;
         Expression* lhs; // owns: proc, assig lhs
         Expression* rhs; // owns: rhs, args, cond, case, label, return
         Statement* body; // owns: then
 
-        Statement(Kind k = Invalid, const RowCol& p = RowCol()):lhs(0),rhs(0),
-            next(0),body(0) { meta = S; kind = k; pos = p;}
+        Statement(Kind k = Invalid, const RowCol& p = RowCol()):kind(k),active(0),exclusive(0),pos(p),lhs(0),rhs(0),
+            next(0),body(0) {}
         Statement* getLast() const;
         Statement* getNext() const { return next; }
         void append(Statement*s);
@@ -322,11 +337,9 @@ namespace Ast
         void openScope(Declaration* scope);
         Declaration* closeScope(bool takeMembers = false);
         Declaration* addDecl(const QByteArray&);
-        Declaration* addHelper();
         Declaration* findDecl(const QByteArray&, bool recursive = true) const;
         Declaration* findDeclInImport(Declaration* import, const QByteArray&) const;
         Declaration* getTopScope() const;
-        QByteArray getTempName();
         Declaration* getTopModule() const;
 
         Type* getType(quint8 basicType) const { return types[basicType]; }
@@ -342,8 +355,6 @@ namespace Ast
         void addConst(const QByteArray& name, quint8, const QVariant& = QVariant());
     private:
         QList<Declaration*> scopes;
-        Declaration* helper;
-        quint32 helperId;
         static Declaration* globalScope;
         static Type* types[Type::MaxBasicType];
 

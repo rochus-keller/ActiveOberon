@@ -605,7 +605,7 @@ bool Lexer::isV4File(QIODevice* in)
 
 static quint8 readUInt8(QIODevice* in)
 {
-    char ch;
+    char ch = 0;
     in->getChar(&ch);
     return ch;
 }

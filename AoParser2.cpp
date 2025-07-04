@@ -609,12 +609,9 @@ void Parser2::TypeDecl() {
     if( d == 0 )
         return;
 
-    d->type = Type_(false);
-    if( d->type && d->type->decl == 0 )
-    {
-        d->type->decl = d;
-        d->ownstype = true;
-    }
+    d->setType(Type_());
+    if( d->type() && d->type()->decl == 0 )
+        d->type()->decl = d;
 }
 
 void Parser2::VarDecl(bool inObjectType) {
@@ -624,8 +621,10 @@ void Parser2::VarDecl(bool inObjectType) {
     if( t == 0 )
         return;
     Declaration* outer = mdl->getTopScope();
-    foreach( const ID& id, ids )
+    for( int i = 0; i < ids.size(); i++ )
     {
+        const ID& id = ids[i];
+
         Declaration* d = addDecl(id.name, id.visi, outer->kind == Declaration::Module ?
                                      Declaration::VarDecl : Declaration::LocalDecl);
         if( d == 0 )
@@ -634,7 +633,7 @@ void Parser2::VarDecl(bool inObjectType) {
             d->kind = Declaration::Field;
         else
             d->outer = outer;
-        d->type = t;
+        d->setType(t);
     }
 }
 
@@ -691,7 +690,9 @@ Declaration* Parser2::ProcHead(bool forwardDecl) {
         // we just ignore forward declarations
         if( FIRST_FormalPars(la.d_type) ) {
             mdl->openScope(0);
-            FormalPars();
+            Type* ret = FormalPars();
+            if( ret && !ret->owned )
+                delete ret;
             Declaration* d = mdl->closeScope(true);
             Declaration::deleteAll(d);
         }
@@ -706,7 +707,7 @@ Declaration* Parser2::ProcHead(bool forwardDecl) {
     mdl->openScope(procDecl);
 
 	if( FIRST_FormalPars(la.d_type) ) {
-        procDecl->type = FormalPars();
+        procDecl->setType(FormalPars());
 	}
     mdl->closeScope();
     return procDecl;
@@ -765,13 +766,14 @@ void Parser2::FPSection() {
         if( d == 0 )
             continue;
         d->varParam = varParam;
-        d->type = t;
+        d->setType(t);
     }
 }
 
 Type* Parser2::ArrayType() {
     QList<Expression*> len;
     expect(Tok_ARRAY, false, "ArrayType");
+    const Token tok = cur;
 	if( FIRST_SysFlag(la.d_type) ) {
         SysFlag(); // ignore
 	}
@@ -792,26 +794,33 @@ Type* Parser2::ArrayType() {
     Type* et = Type_();
     Type* arr = new Type();
     arr->kind = Type::Array;
-    arr->base = et;
+    arr->pos = tok.toRowCol();
     if( !len.isEmpty() )
     {
-        Type* a = arr;
-        a->expr = len.first();
+        arr->expr = len.first();
+        arr->pos = len.first()->pos;
+
+        Type* curDim = arr;
+        // this is a multi-dim array; make sure that each dimension has an explicit Array type
         for( int i = 1; i < len.size(); i++ )
         {
-            a->base = new Type();
-            a->base->kind = Type::Array;
-            a->base->base = et;
-            a->base->expr = len[i];
-            a = a->base;
+            Type* nextDim = new Type();
+            nextDim->kind = Type::Array;
+            nextDim->pos = len[i]->pos;
+            nextDim->expr = len[i];
+            curDim->setType(nextDim);
+            curDim = nextDim;
         }
-    }
+        curDim->setType(et); // the highest dim gets the element type
+    }else
+        arr->setType(et);
     return arr;
 }
 
 Type* Parser2::RecordType() {
 	expect(Tok_RECORD, false, "RecordType");
     Type* rec = new Type();
+    rec->pos = cur.toRowCol();
     rec->kind = Type::Record;
     mdl->openScope(0);
     if( FIRST_SysFlag(la.d_type) ) {
@@ -819,7 +828,7 @@ Type* Parser2::RecordType() {
 	}
 	if( la.d_type == Tok_Lpar ) {
 		expect(Tok_Lpar, false, "RecordType");
-        rec->base = NamedType();
+        rec->setType(NamedType());
 		expect(Tok_Rpar, false, "RecordType");
 	}
 	if( FIRST_FieldList(la.d_type) ) {
@@ -835,19 +844,22 @@ Type* Parser2::RecordType() {
 
 Type* Parser2::PointerType() {
 	expect(Tok_POINTER, false, "PointerType");
+    const Token tok = cur;
 	if( FIRST_SysFlag(la.d_type) ) {
         SysFlag(); // ignore
 	}
     Type* ptr = new Type();
     ptr->kind = Type::Pointer;
+    ptr->pos = tok.toRowCol();
     expect(Tok_TO, false, "PointerType");
-    ptr->base = Type_();
+    ptr->setType(Type_());
     return ptr;
 }
 
 Type* Parser2::ObjectType() {
 	expect(Tok_OBJECT, false, "ObjectType");
     Type* obj = new Type();
+    obj->pos = cur.toRowCol();
     obj->kind = Type::Object;
     if( FIRST_SysFlag(la.d_type) || la.d_type == Tok_Lpar || FIRST_DeclSeq(la.d_type) || FIRST_Body(la.d_type) || la.d_type == Tok_END ) {
 		if( FIRST_SysFlag(la.d_type) ) {
@@ -856,7 +868,7 @@ Type* Parser2::ObjectType() {
         mdl->openScope(0);
         if( la.d_type == Tok_Lpar ) {
 			expect(Tok_Lpar, false, "ObjectType");
-            obj->base = NamedType();
+            obj->setType(NamedType());
             expect(Tok_Rpar, false, "ObjectType");
 		}
         DeclSeq(true);
@@ -885,6 +897,7 @@ Type* Parser2::ProcedureType() {
     mdl->openScope(0);
     Type* p = new Type();
     p->kind = Type::Procedure;
+    p->pos = cur.toRowCol();
     if( FIRST_SysFlag(la.d_type) ) {
 		SysFlag();
 	}
@@ -898,7 +911,7 @@ Type* Parser2::ProcedureType() {
         ret = FormalPars();
 	}
     p->subs = AstModel::toList(mdl->closeScope(true));
-    p->base = ret;
+    p->setType(ret);
     return p;
 }
 
@@ -906,7 +919,7 @@ Type* Parser2::AliasType() {
     return NamedType();
 }
 
-Type* Parser2::Type_(bool needsHelperDecl) {
+Type* Parser2::Type_() {
     Type* res = 0;
     if( FIRST_AliasType(la.d_type) ) {
         res = AliasType();
@@ -922,12 +935,6 @@ Type* Parser2::Type_(bool needsHelperDecl) {
         res = ProcedureType();
 	} else
 		invalid("Type");
-    if( res && res->kind != Type::Undefined // only valid types are considered
-            && res->kind != Type::NameRef // NameRef already has a helper decl
-            && needsHelperDecl )
-        addHelper(res);
-        // if the type is not directly owned by a declaration (because it is declared in place and anonymously)
-        // we need a helper declaration with a artificial ident so we can refer to it by name later.
     return res;
 }
 
@@ -941,7 +948,7 @@ void Parser2::FieldDecl() {
             Declaration* d = addDecl(ids[i].name,ids[i].visi,Declaration::Field);
             if( d == 0 )
                 continue;
-            d->type = t;
+            d->setType(t);
         }
     }
 }
@@ -1223,7 +1230,7 @@ Statement* Parser2::WithStat() {
     expect(Tok_Colon, false, "WithStat");
     res->rhs = new Expression(); // dummy to hold type
     res->rhs->kind = Expression::Literal;
-    res->rhs->type = NamedType();
+    res->rhs->setType(NamedType());
 
 	expect(Tok_DO, false, "WithStat");
     res->body = StatSeq();
@@ -1329,7 +1336,7 @@ Ast::Expression* Parser2::Expr(bool lvalue) {
         const Token tok = la;
         Expression* tmp = Expression::createFromToken(Relation(), tok.toRowCol());
         tmp->lhs = res;
-        tmp->type = mdl->getType(Type::BOOLEAN);
+        tmp->setType(mdl->getType(Type::BOOLEAN));
         res = tmp;
         res->rhs = SimpleExpr(false);
         if( res->rhs == 0 )
@@ -1360,7 +1367,7 @@ Expression* Parser2::SimpleExpr(bool lvalue) {
     if( op != 0 ) {
         Expression* tmp = new Expression(op == Tok_Plus ? Expression::Plus : Expression::Minus, tok.toRowCol());
         tmp->lhs = res;
-        tmp->type = res->type;
+        tmp->setType(res->type());
         res = tmp;
     }
     while( FIRST_AddOp(la.d_type) ) {
@@ -1415,19 +1422,19 @@ Expression* Parser2::Factor(bool lvalue) {
 	} else if( la.d_type == Tok_hexchar ) {
 		expect(Tok_hexchar, false, "Factor");
         res = new Expression(Expression::Literal,cur.toRowCol());
-        res->type = mdl->getType(Type::CHAR);
+        res->setType(mdl->getType(Type::CHAR));
         QByteArray tmp = cur.d_val;
         tmp.chop(1); // remove X postfix
         res->val = tmp.toUInt(0,16);
     } else if( la.d_type == Tok_string ) {
 		expect(Tok_string, false, "Factor");
         res = new Expression(Expression::Literal,cur.toRowCol());
-        res->type = mdl->getType(Type::StrLit);
+        res->setType(mdl->getType(Type::StrLit));
         res->val = dequote(cur.d_val);
     } else if( la.d_type == Tok_NIL ) {
 		expect(Tok_NIL, false, "Factor");
         res = new Expression(Expression::Literal,cur.toRowCol());
-        res->type = mdl->getType(Type::NIL);
+        res->setType(mdl->getType(Type::NIL));
         res->val = QVariant();
     } else if( FIRST_Set(la.d_type) ) {
         res = Set();
@@ -1687,11 +1694,11 @@ Qualident Parser2::Qualident_() {
 Ast::Type* Parser2::NamedType() {
     const Token t = la;
     Qualident q = Qualident_();
-    Ast::Type* res = new Ast::Type();
-    res->kind = Ast::Type::NameRef;
-    Declaration* helper = addHelper(res);
-    helper->pos = t.toRowCol();
-    helper->data = QVariant::fromValue(q);
+    Type* res = new Type();
+    res->kind = Type::NameRef;
+    res->quali = new Quali();
+    *res->quali = q;
+    res->pos = t.toRowCol();
     return res;
 }
 
@@ -1736,24 +1743,24 @@ Expression* Parser2::number() {
             i = cur.d_val.left(cur.d_val.size()-2).toULongLong();
         else
             i = cur.d_val.toULongLong();
-        res->type = smallestIntType(i);
+        res->setType(smallestIntType(i));
         res->val = i;
 	} else if( la.d_type == Tok_real ) {
 		expect(Tok_real, false, "number");
-        res->type = 0;
+        res->setType(0);
         if( cur.d_val.contains('d') || cur.d_val.contains('D') )
         {
             cur.d_val.replace('d','e');
             cur.d_val.replace('D','e');
-            res->type = mdl->getType(Type::LONGREAL);
+            res->setType(mdl->getType(Type::LONGREAL));
         }else if( cur.d_val.contains('s') || cur.d_val.contains('S') )
         {
-            res->type = mdl->getType(Type::REAL);
+            res->setType(mdl->getType(Type::REAL));
             cur.d_val.replace('s','e');
             cur.d_val.replace('S','e');
         }
         const double d = cur.d_val.toDouble();
-        if( res->type == 0 )
+        if( res->type() == 0 )
         {
             const int dot = cur.d_val.indexOf('.');
             int len = 0;
@@ -1763,9 +1770,9 @@ Expression* Parser2::number() {
                     len++;
             }
             if( len > 5 )
-                res->type = mdl->getType(Type::LONGREAL);
+                res->setType(mdl->getType(Type::LONGREAL));
             else
-                res->type = mdl->getType(Type::REAL);
+                res->setType(mdl->getType(Type::REAL));
         }
         res->val = d;
     } else
@@ -1801,17 +1808,5 @@ void Parser2::error(const RowCol& pos, const QString& msg)
     errors << Error(msg, pos, scanner->source());
 }
 
-Declaration*Parser2::addHelper(Ast::Type* t)
-{
-    Declaration* decl = mdl->addHelper();
-    // we need these syntetic declarations because emitter doesn't support anonymous types
-    decl->type = t;
-    decl->ownstype = true;
-    decl->outer = thisMod;
-    Q_ASSERT(t->decl == 0);
-    t->decl = decl;
-    t->anonymous = true;
-    return decl;
-}
 
 

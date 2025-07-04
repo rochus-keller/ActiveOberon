@@ -168,22 +168,22 @@ void Validator::visitDecl(Declaration* d)
     switch( d->kind )
     {
     case Declaration::TypeDecl:
-        if( d->type && d->type->kind == Type::Object )
+        if( d->type() && d->type()->kind == Type::Object )
             curObjectTypeDecl = d;
-        visitType(d->type);
-        if( d->type && d->type->kind == Type::Object )
+        visitType(d->type());
+        if( d->type() && d->type()->kind == Type::Object )
         {
             QList<Declaration*> bounds_ = boundProcs;
             boundProcs.clear();
             foreach(Declaration* proc, bounds_)
             {
                 Q_ASSERT(proc->link && proc->link->kind == Declaration::ParamDecl &&
-                         proc->link->receiver && proc->link->type );
-                Type* objectType = proc->link->type->deref();
-                Q_ASSERT(objectType == d->type);
-                if( objectType->base )
+                         proc->link->receiver && proc->link->type() );
+                Type* objectType = proc->link->type()->deref();
+                Q_ASSERT(objectType == d->type());
+                if( objectType->type() )
                 {
-                    Declaration* super = findInType(objectType->base->deref(),proc->name);
+                    Declaration* super = findInType(objectType->type()->deref(),proc->name);
                     if( super )
                     {
                         super->hasSubs = true;
@@ -196,15 +196,15 @@ void Validator::visitDecl(Declaration* d)
             }
             curObjectTypeDecl = 0;
         }
-        if( d->type && (d->type->kind == Type::Object || d->type->kind == Type::Record) )
+        if( d->type() && (d->type()->kind == Type::Object || d->type()->kind == Type::Record) )
         {
-            if( d->type->base )
+            if( d->type()->type() )
             {
-                Type* baseType = d->type->base;
+                Type* baseType = d->type()->type();
                 Q_ASSERT( baseType->kind == Type::NameRef );
-                if( !baseType->validated || baseType->base == 0 )
+                if( !baseType->validated || baseType->type() == 0 )
                     break;
-                Declaration* super = baseType->base->deref()->decl;
+                Declaration* super = baseType->type()->deref()->decl;
                 super->hasSubs = true;
                 d->super = super;
                 if( first )
@@ -216,25 +216,25 @@ void Validator::visitDecl(Declaration* d)
     case Declaration::LocalDecl:
     case Declaration::ParamDecl:
     case Declaration::Field:
-        visitType(d->type);
+        visitType(d->type());
         break;
     case Declaration::ConstDecl:
         if(d->expr)
         {
             visitExpr(d->expr);
-            d->type = d->expr->type;
+            d->setType(d->expr->type());
             d->data = d->expr->val;
-        }else if( d->type == 0 )
-            d->type = mdl->getType(Type::NoType);
+        }else if( d->type() == 0 )
+            d->setType(mdl->getType(Type::NoType));
         else
-            visitType(d->type);
+            visitType(d->type());
         break;
     case Declaration::Import:
         visitImport(d);
         break;
     case Declaration::Procedure: {
         // only header is evaluated here
-        visitType(d->type);
+        visitType(d->type());
         const QList<Declaration*> params = d->getParams(true);
         for( int i = 0; i < params.size(); i++ )
             visitDecl(params[i]);
@@ -290,10 +290,9 @@ void Validator::visitBody(Statement* s)
         {
             Q_ASSERT( s->lhs->kind == Expression::DeclRef );
             Declaration* d = s->lhs->val.value<Declaration*>();
-            Type* t = d->type;
-            d->type = s->rhs->type;
+            Type* t = d->overrideType(s->rhs->type());
             visitBody(s->body);
-            d->type = t;
+            d->overrideType(t);
         }else
             visitBody(s->body);
 
@@ -337,7 +336,7 @@ void Validator::visitExpr(Expression* e, bool followNext)
     case Expression::Literal:
     case Expression::DeclRef:
     case Expression::Cast:
-        resolveIfNamedType(e->type);
+        resolveIfNamedType(e->type());
         break;
     case Expression::NameRef:
         resolveDesig(e);
@@ -371,7 +370,7 @@ void Validator::visitExpr(Expression* e, bool followNext)
     case Expression::Range: // used in Constructor and LabelRange (as ConstExpr)
         visitExpr(e->lhs);
         visitExpr(e->rhs);
-        e->type = e->lhs->type;
+        e->setType(e->lhs->type());
         break;
     case Expression::Invalid:
     default:
@@ -384,9 +383,9 @@ void Validator::visitExpr(Expression* e, bool followNext)
 
 void Validator::unaryOp(Expression* e)
 {
-    if( e->lhs->type == 0 )
+    if( e->lhs->type() == 0 )
         return; // already reported
-    Type* lhsT = deref(e->lhs->type);
+    Type* lhsT = deref(e->lhs->type());
     if( e->kind == Expression::Plus )
     {
         if( !lhsT->isNumber() )
@@ -402,12 +401,12 @@ void Validator::unaryOp(Expression* e)
     }
     if( e->lhs == 0 )
         return; // already reported
-    e->type = lhsT;
+    e->setType(lhsT);
 }
 
 void Validator::binaryOp(Expression* e)
 {
-    if( e->lhs == 0 || e->rhs == 0 || e->lhs->type == 0 || e->rhs->type == 0 )
+    if( e->lhs == 0 || e->rhs == 0 || e->lhs->type() == 0 || e->rhs->type() == 0 )
         return; // already reported
 
     // NOTE: we don't do real type checking here because we assume that the code already passed the original compiler
@@ -422,7 +421,7 @@ void Validator::binaryOp(Expression* e)
     case Expression::Sub:
     case Expression::And:
     case Expression::Or:
-        e->type = deref(e->lhs->type);
+        e->setType(deref(e->lhs->type()));
         break;
     // Relation
     case Expression::Eq:
@@ -433,7 +432,7 @@ void Validator::binaryOp(Expression* e)
     case Expression::Geq:
     case Expression::In:
     case Expression::Is:
-        e->type = mdl->getType(Type::BOOLEAN);
+        e->setType(mdl->getType(Type::BOOLEAN));
         break;
     default:
         Q_ASSERT(false);
@@ -442,17 +441,17 @@ void Validator::binaryOp(Expression* e)
 
 void Validator::selectOp(Expression* e)
 {
-    if( e->lhs == 0 || e->lhs->type == 0 )
+    if( e->lhs == 0 || e->lhs->type() == 0 )
         return;
 
-    Type* lhsT = deref(e->lhs->type);
+    Type* lhsT = deref(e->lhs->type());
     if( lhsT->kind == Type::Pointer )
     {
         Expression* tmp = new Expression(Expression::Deref, e->lhs->pos );
         tmp->lhs = e->lhs;
-        tmp->type = lhsT->base;
+        tmp->setType(lhsT->type());
         e->lhs = tmp;
-        lhsT = deref(e->lhs->type);
+        lhsT = deref(e->lhs->type());
     }
     if( lhsT->kind == Type::Record || lhsT->kind == Type::Object )
     {
@@ -470,7 +469,7 @@ void Validator::selectOp(Expression* e)
             if( e->needsLval )
                 s->kind = Symbol::Lval;
             e->val = QVariant::fromValue(field); // Field or bound proc
-            e->type = field->type;
+            e->setType(field->type());
         }
     }else
         error(e->pos,"cannot select a field in given type");
@@ -478,7 +477,7 @@ void Validator::selectOp(Expression* e)
 
 void Validator::derefOp(Expression* e)
 {
-    if( e->lhs == 0 || e->lhs->type == 0 )
+    if( e->lhs == 0 || e->lhs->type() == 0 )
         return;
 
     if( (e->lhs->kind == Expression::Select || e->lhs->kind == Expression::DeclRef) &&
@@ -493,33 +492,33 @@ void Validator::derefOp(Expression* e)
         return;
     }
     // else
-    Type* lhsT = deref(e->lhs->type);
+    Type* lhsT = deref(e->lhs->type());
     if( lhsT->kind == Type::Pointer
             || lhsT->kind == Type::Object // this happens in some places and is likely an error
             )
-        e->type = lhsT->base;
+        e->setType(lhsT->type());
     else
         error(e->pos,"can only dereference a pointer");
 }
 
 void Validator::indexOp(Expression* e)
 {
-    if( e->lhs == 0 || e->lhs->type == 0 || e->rhs == 0 ||e->rhs->type == 0 )
+    if( e->lhs == 0 || e->lhs->type() == 0 || e->rhs == 0 ||e->rhs->type() == 0 )
         return;
 
-    Type* lhsT = deref(e->lhs->type);
-    Type* rhsT = deref(e->rhs->type);
+    Type* lhsT = deref(e->lhs->type());
+    Type* rhsT = deref(e->rhs->type());
 
     if( lhsT->kind == Type::Pointer )
     {
         Expression* tmp = new Expression(Expression::Deref, e->lhs->pos );
         tmp->lhs = e->lhs;
-        tmp->type = lhsT->base;
+        tmp->setType(lhsT->type());
         e->lhs = tmp;
-        lhsT = deref(e->lhs->type);
+        lhsT = deref(e->lhs->type());
     }
 
-    e->type = lhsT->base;
+    e->setType(lhsT->type());
     if( lhsT->kind == Type::Array )
     {
         if( !rhsT->isInteger() )
@@ -537,13 +536,13 @@ void Validator::callOp(Expression* e)
         supercall = true;
         lhs = lhs->lhs;
     }
-    if( lhs == 0 || lhs->type == 0 ) // e->rhs is null in case there are no args
+    if( lhs == 0 || lhs->type() == 0 ) // e->rhs is null in case there are no args
         return;
 
     Declaration* proc = lhs->val.value<Declaration*>();
     if( proc && proc->kind != Declaration::Procedure && proc->kind != Declaration::Builtin )
         proc = 0;
-    Type* procType = deref(lhs->type);
+    Type* procType = deref(lhs->type());
     if( procType && procType->kind != Type::Procedure )
         procType = 0;
 
@@ -557,17 +556,17 @@ void Validator::callOp(Expression* e)
             e->rhs->kind == Expression::DeclRef &&
             e->rhs->val.value<Declaration*>()->kind == Declaration::TypeDecl;
 
-    Type* lhsT = deref(lhs->type);
+    Type* lhsT = deref(lhs->type());
     if( isTypeCast )
     {
         if( supercall )
             return error(e->pos,"super call operator cannot be used here");
         e->kind = Expression::Cast;
-        e->type = deref(e->rhs->type);
+        e->setType(deref(e->rhs->type()));
         if( e->rhs->next )
             return error(e->rhs->next->pos,"type guard requires a single argument");
         if( lhsT->kind == Type::Pointer )
-            lhsT = deref(lhsT->base);
+            lhsT = deref(lhsT->type());
         if( lhsT->kind != Type::Record && lhsT->kind != Type::Object
                 && lhsT->kind != Type::PTR // this is used allover in AOS/Sys
                 && lhsT->kind != Type::ANY // this also happens
@@ -575,15 +574,16 @@ void Validator::callOp(Expression* e)
             return error(e->rhs->pos,"a type guard is not supported for this type");
     }else
     {
+        Type* ret = 0;
         if( proc )
         {
             if( proc->kind != Declaration::Procedure && proc->kind != Declaration::Builtin )
                 return error(lhs->pos,"this expression cannot be called");
-            e->type = proc->type;
+            ret = proc->type();
         }else if( lhsT->kind != Type::Procedure )
             return error(lhs->pos,"this expression cannot be called");
         else
-            e->type = lhsT->base;
+            ret = lhsT->type();
 
         if( supercall && (proc == 0 || !proc->receiver || proc->super == 0) )
             return error(e->pos,"super call operator cannot be used here");
@@ -592,7 +592,7 @@ void Validator::callOp(Expression* e)
 
         if( proc && proc->kind == Declaration::Builtin )
         {
-            if( checkBuiltinArgs(proc->id, actuals, &e->type, e->pos) )
+            if( checkBuiltinArgs(proc->id, actuals, &ret, e->pos) )
             {
                 // NOTE: no eval done here
             }
@@ -600,32 +600,23 @@ void Validator::callOp(Expression* e)
         {
             if( actuals.size() != formals.size() )
                 error(e->pos,"number of actual doesn't fit number of formal arguments");
-
-#if 0
-            // NOTE: no type checking here
-            for( int i = 0; i < formals.size() && i < actuals.size(); i++ )
-            {
-                if( !paramCompat(formals[i],actuals[i]) )
-                {
-                    paramCompat(formals[i],actuals[i]); // TEST
-                    error(actuals[i]->pos, "actual argument not compatible with formal parameter");
-                }
-            }
-#endif
+            // NOTE: no param type checking here
         }
+        if( ret )
+            e->setType(ret);
     }
 }
 
 void Validator::constructor(Expression* e)
 {
-    e->type = mdl->getType(Type::SET);
+    e->setType(mdl->getType(Type::SET));
     Expression* comp = e->rhs;
     while( comp )
     {
         if( comp->kind == Expression::Constructor )
             return error(comp->pos,"component type not supported for SET constructors");
         visitExpr(comp, false);
-        if( comp->type && !deref(comp->type)->isInteger() )
+        if( comp->type() && !deref(comp->type())->isInteger() )
             return error(comp->pos,"expecting integer compontents for SET constructors");
         comp = comp->next;
     }
@@ -643,15 +634,15 @@ Type* Validator::deref(Type* t)
             // This is necessary because declarations can follow their use, but all so far unvalidated NameRefs
             // must be local, assuming that all NameRefs in imported modules must already have been validated at
             // this point.
-#ifdef _DEBUG
-            Qualident q = t->decl->data.value<Qualident>();
-            if( t->decl->getModule() != module )
+#ifdef _DEBUG_ // TODO
+            Qualident q = t->quali;
+            if( q.first && q.first.constData() != module->name.constData() )
                 qWarning() << "Validator::deref: unvalidated quali" << q.first << "." << q.second << "in"
                            << module->name;
 #endif
             resolveIfNamedType(t);
         }
-        return deref(t->base);
+        return deref(t->type());
     }else
         return t;
 }
@@ -662,13 +653,13 @@ void Validator::resolveIfNamedType(Type* nameRef)
         return;
     if( nameRef->validated )
         return;
-    Q_ASSERT(nameRef->decl);
+    Q_ASSERT(nameRef->quali);
     Q_ASSERT(nameRef->expr == 0);
-    Qualident q = nameRef->decl->data.value<Qualident>();
-    ResolvedQ r = find(q, nameRef->decl->pos);
+    Qualident q = *nameRef->quali;
+    ResolvedQ r = find(q, nameRef->pos);
     if(r.second == 0)
         return;
-    RowCol pos = nameRef->decl->pos;
+    RowCol pos = nameRef->pos;
     if( r.first != 0 )
     {
         markRef(r.first, pos);
@@ -676,11 +667,11 @@ void Validator::resolveIfNamedType(Type* nameRef)
     }
     markRef(r.second, pos);
     nameRef->validated = true;
-    nameRef->base = r.second->type;
+    nameRef->setType(r.second->type());
     if( r.second->kind != Declaration::TypeDecl )
-        return error(nameRef->decl->pos,"identifier doesn't refer to a type declaration");
+        return error(nameRef->pos,"identifier doesn't refer to a type declaration");
 
-    resolveIfNamedType(r.second->type);
+    resolveIfNamedType(r.second->type());
 }
 
 void Validator::resolveDesig(Expression* nameRef)
@@ -711,11 +702,11 @@ void Validator::resolveDesig(Expression* nameRef)
     Symbol* s = markRef(r.second, pos);
     if( nameRef->needsLval )
         s->kind = Symbol::Lval;
-    resolveIfNamedType(r.second->type);
+    resolveIfNamedType(r.second->type());
 
     nameRef->kind = Expression::DeclRef;
     nameRef->val = QVariant::fromValue(r.second);
-    nameRef->type = r.second->type;
+    nameRef->setType(r.second->type());
 
     if( r.second->kind == Declaration::LocalDecl || r.second->kind == Declaration::ParamDecl )
     {
@@ -773,7 +764,7 @@ Validator::ResolvedQ Validator::find(const Qualident& q, RowCol pos)
         }
 
         if( d == 0 && curObjectTypeDecl )
-            d = findInType(deref(curObjectTypeDecl->type),q.second);
+            d = findInType(deref(curObjectTypeDecl->type()),q.second);
         if( d == 0 )
             d = module->find(q.second,false);
         if( d == 0 )
@@ -799,11 +790,11 @@ Declaration*Validator::findInType(Type* t, const QByteArray& field)
     return t->find(field);
 #else
     Declaration* res = t->find(field, false);
-    while( res == 0 && (t->kind == Type::Record || t->kind == Type::Object) && t->base )
+    while( res == 0 && (t->kind == Type::Record || t->kind == Type::Object) && t->type() )
     {
-        Type* super = deref(t->base);
-        if( super->kind == Type::Pointer && super->base )
-            super = deref(super->base);
+        Type* super = deref(t->type());
+        if( super->kind == Type::Pointer && super->type() )
+            super = deref(super->type());
         res = super->find(field, false);
         t = super;
     }
@@ -819,23 +810,23 @@ void Validator::visitType(Type* type)
     switch( type->kind )
     {
     case Type::Pointer:
-        visitType(type->base);
+        visitType(type->type());
         break;
     case Type::Record:
     case Type::Object:
     case Type::Procedure:
-        if( type->kind == Type::Object && type->base && !type->base->validated )
+        if( type->kind == Type::Object && type->type() && !type->type()->validated )
         {
             // resolve base objects if present
             // we have to disable curObjectType here because otherwise findInType is called with
-            // curObjectType->type->base which leads to infinite loop
+            // curObjectType->type()->base which leads to infinite loop
             Declaration* tmp = curObjectTypeDecl;
             Q_ASSERT(curObjectTypeDecl != 0);
             curObjectTypeDecl = 0;
-            resolveIfNamedType(type->base);
+            resolveIfNamedType(type->type());
             curObjectTypeDecl = tmp;
         }else
-            visitType(type->base);
+            visitType(type->type());
         foreach( Declaration* d, type->subs )
         {
             if( d->kind == Declaration::Procedure && curObjectTypeDecl )
@@ -846,7 +837,7 @@ void Validator::visitType(Type* type)
                 Declaration* self = new Declaration();
                 self->kind = Declaration::ParamDecl;
                 self->name = SELF;
-                self->type = curObjectTypeDecl->type;
+                self->setType(curObjectTypeDecl->type());
                 self->pos = curObjectTypeDecl->pos;
                 self->receiver = true;
                 self->next = d->link;
@@ -854,25 +845,25 @@ void Validator::visitType(Type* type)
             }
             visitDecl(d);
         }
-        if( type->kind == Type::Record && type->base )
+        if( type->kind == Type::Record && type->type() )
         {
-            Type* base = deref(type->base);
+            Type* base = deref(type->type());
             if( base->kind == Type::Pointer )
-                base = deref(base->base);
+                base = deref(base->type());
             if( base->kind != Type::Record &&
                     base->kind != Type::Object ) // this happens indeed
-                error(type->base->decl->pos,"invalid base record");
+                error(type->type()->decl->pos,"invalid base record");
         }
-        if( type->kind == Type::Object && type->base )
+        if( type->kind == Type::Object && type->type() )
         {
-            Type* base = deref(type->base);
+            Type* base = deref(type->type());
             if( base->kind == Type::Pointer )
-                base = deref(base->base);
+                base = deref(base->type());
             if( base->kind == Type::NameRef )
                 base = deref(base);
             if( base->kind != Type::Object &&
                     base->kind != Type::Record ) // this happens indeed
-                error(type->base->decl->pos,"invalid base object");
+                error(type->type()->decl->pos,"invalid base object");
             // TODO: connect to super methods
         }
         break;
@@ -882,7 +873,7 @@ void Validator::visitType(Type* type)
         {
             if( type->expr )
             {
-                if( !type->expr->isConst() || !deref(type->expr->type)->isInteger() )
+                if( !type->expr->isConst() || !deref(type->expr->type())->isInteger() )
                     error(type->expr->pos,"expecting constant integer expression");
                 else
                 {
@@ -898,7 +889,7 @@ void Validator::visitType(Type* type)
             if( type->expr->val.value<Declaration*>()->kind != Declaration::TypeDecl )
                 error(type->expr->pos,"expecting a type name");
         }
-        visitType(type->base);
+        visitType(type->type());
         break;
     case Type::NameRef:
         type->validated = false; // it was false when entering this proc, and resolveIfNamedType does nothing otherwise
@@ -914,7 +905,7 @@ static inline bool expectingNArgs(const ExpList& args,int n)
     if( args.size() != n )
         throw QString("expecting %1 arguments").arg(n);
     for( int i = 0; i < args.size(); i++ )
-        if( args[i]->type == 0 )
+        if( args[i]->type() == 0 )
             return false;
     return true;
 }
@@ -924,7 +915,7 @@ static inline bool expectingNMArgs(const ExpList& args,int n, int m)
     if( args.size() < n || args.size() > m)
         throw QString("expecting %1 to %2 arguments").arg(n).arg(m);
     for( int i = 0; i < args.size(); i++ )
-        if( args[i]->type == 0 )
+        if( args[i]->type() == 0 )
             return false;
     return true;
 }
@@ -945,7 +936,7 @@ bool Validator::checkBuiltinArgs(quint8 builtin, const ExpList& args, Type** ret
     case Builtin::ABS:
         if( !expectingNArgs(args,1) )
             break;
-        *ret = args.first()->type;
+        *ret = args.first()->type();
         break;
     case Builtin::CHR:
         if( !expectingNArgs(args,1) )
@@ -967,10 +958,10 @@ bool Validator::checkBuiltinArgs(quint8 builtin, const ExpList& args, Type** ret
     case Builtin::MIN:
         if(!expectingNMArgs(args,1,2))
             break;
-        if( deref(args[0]->type)->kind == Type::SET )
+        if( deref(args[0]->type())->kind == Type::SET )
             *ret = mdl->getType(Type::BYTE);
         else
-            *ret = args[0]->type;
+            *ret = args[0]->type();
         break;
     case Builtin::ODD:
         if( !expectingNArgs(args,1) )
@@ -1018,7 +1009,7 @@ bool Validator::checkBuiltinArgs(quint8 builtin, const ExpList& args, Type** ret
     case Builtin::SHORT:
     case Builtin::LONG:
         expectingNArgs(args,1);
-        *ret = args[0]->type; // TODO
+        *ret = args[0]->type(); // TODO
         break;
     case Builtin::SIZE:
         expectingNArgs(args,1);
@@ -1046,7 +1037,7 @@ bool Validator::checkBuiltinArgs(quint8 builtin, const ExpList& args, Type** ret
     case Builtin::SYSTEM_ROT:
     case Builtin::SYSTEM_VAL:
         expectingNArgs(args,2);
-        *ret = args[0]->type;
+        *ret = args[0]->type();
         break;
     case Builtin::SYSTEM_TYPECODE:
         expectingNArgs(args,1);

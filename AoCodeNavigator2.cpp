@@ -1046,9 +1046,9 @@ template<class T>
 static QTreeWidgetItem* fillHierProc( T* parent, Declaration* p, Declaration* ref, Project* pro )
 {
     QTreeWidgetItem* item = new QTreeWidgetItem(parent);
-    Q_ASSERT( p->receiver && p->link && p->link->receiver && p->link->type );
+    Q_ASSERT( p->receiver && p->link && p->link->receiver && p->link->type() );
 
-    item->setText(0, p->link->type->decl->scopedName(true));
+    item->setText(0, p->link->type()->decl->scopedName(true));
     item->setData(0, Qt::UserRole, QVariant::fromValue(p) );
     item->setIcon(0, QPixmap( p->visi >= Declaration::ReadWrite ? ":/images/func.png" : ":/images/func_priv.png" ) );
     item->setToolTip(0,item->text(0));
@@ -1080,7 +1080,7 @@ static QTreeWidgetItem* fillHierClass( T* parent, Type* cur, Type* ref, Project*
     DeclList subs = pro->getSubs(name);
     foreach( Declaration* sub, subs )
     {
-        QTreeWidgetItem* tmp = fillHierClass(item, sub->type, ref, pro);
+        QTreeWidgetItem* tmp = fillHierClass(item, sub->type(), ref, pro);
         if( tmp )
             ret = tmp;
     }
@@ -1101,18 +1101,18 @@ void CodeNavigator::fillHier(Declaration* decl)
     switch( decl->kind )
     {
     case Declaration::TypeDecl:
-        if( decl->type == 0 )
+        if( decl->type() == 0 )
             break;
-        switch( decl->type->kind )
+        switch( decl->type()->kind )
         {
         case Type::Record:
         case Type::Object:
             {
-                Type* root = decl->type->deref();
+                Type* root = decl->type()->deref();
                 Type* sub = root;
                 d_hierTitle->setText( QString("Inheritance of class '%1'").arg( decl->name.constData() ) );
-                while( root && root->base )
-                    root = root->base->deref();
+                while( root && root->type() )
+                    root = root->type()->deref();
                 ref = fillHierClass( d_hier, root, sub, d_pro );
             }
             break;
@@ -1196,7 +1196,7 @@ static void fillRecord(QTreeWidgetItem* item, Declaration* thisDecl, Type* declT
 {
     decorateModItem(item,thisDecl, declType, idx);
     walkModItems(item,thisDecl,declType,sort, idx, pro);
-    if( declType->base )
+    if( declType->type() )
         item->setText(0, item->text(0) + " ⇑");
     if( thisDecl->hasSubs )
     {
@@ -1211,7 +1211,7 @@ static void createModItem(T* parent, Declaration* thisDecl, Type* declType, bool
                           QHash<Declaration*,QTreeWidgetItem*>& idx, Project* pro )
 {
     if( declType == 0 )
-        declType = thisDecl->type;
+        declType = thisDecl->type();
 
     if( idx.contains(thisDecl) )
     {
@@ -1233,11 +1233,11 @@ static void createModItem(T* parent, Declaration* thisDecl, Type* declType, bool
             }
             break;
         case Type::Pointer:
-            if( declType->base && declType->base->kind == Type::Record )
+            if( declType->type() && declType->type()->kind == Type::Record )
             {
                 // a pointer to an anonymous record (we don't need this for objects because they are already pointers)
                 QTreeWidgetItem* item = new QTreeWidgetItem(parent);
-                fillRecord(item,thisDecl,declType->base,sort,idx, pro);
+                fillRecord(item,thisDecl,declType->type(),sort,idx, pro);
             }
             break;
 #if 0
@@ -1270,7 +1270,7 @@ static void decorateModItem( QTreeWidgetItem* item, Declaration* thisDecl, Type*
                           QHash<Declaration*,QTreeWidgetItem*>& idx )
 {
     if( declType == 0 )
-        declType = thisDecl->type;
+        declType = thisDecl->type();
     const bool pub = thisDecl->visi > Declaration::Private;
     item->setText(0,thisDecl->name);
     item->setData(0, Qt::UserRole, QVariant::fromValue(thisDecl) );
