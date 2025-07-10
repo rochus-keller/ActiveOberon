@@ -235,6 +235,9 @@ void Validator::visitDecl(Declaration* d)
     case Declaration::Procedure: {
         // only header is evaluated here
         visitType(d->type());
+        Type* ret = deref(d->type());
+        if( ret && ret->isStructured() )
+            error(d->pos, "return type cannot be structured");
         const QList<Declaration*> params = d->getParams(true);
         for( int i = 0; i < params.size(); i++ )
             visitDecl(params[i]);
@@ -865,6 +868,12 @@ void Validator::visitType(Type* type)
                     base->kind != Type::Record ) // this happens indeed
                 error(type->type()->decl->pos,"invalid base object");
             // TODO: connect to super methods
+        }
+        if( type->kind == Type::Procedure )
+        {
+            Type* ret = deref(type->type());
+            if( ret && ret->isStructured() )
+                error(type->pos, "return type cannot be structured");
         }
         break;
     case Type::Array:

@@ -452,6 +452,12 @@ Token Lexer::assembler()
     {
         nextLine();
         pos = d_line.indexOf("END", d_colNr);
+        if( pos != -1 )
+        {
+            const int semi = d_line.indexOf(';');
+            if( semi != -1 && semi < pos )
+                pos = -1;
+        }
         if( !str.isEmpty() )
             str += '\n';
         str += pos==-1 ? d_line.mid(d_colNr) : d_line.mid(d_colNr,pos-d_colNr);
