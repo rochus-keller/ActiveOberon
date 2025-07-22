@@ -472,10 +472,14 @@ void CodeNavigator::open(const QString& sourceTreePath)
     d_usedByTitle->clear();
     d_backHisto.clear();
     d_forwardHisto.clear();
-    d_dir = sourceTreePath;
-    QDir::setCurrent(sourceTreePath);
+    QFileInfo info(sourceTreePath);
+    if( info.isFile() )
+        d_dir = info.absolutePath();
+    else
+        d_dir = sourceTreePath;
+    QDir::setCurrent(d_dir);
     setWindowTitle( tr("%3 - %1 v%2").arg( qApp->applicationName() ).arg( qApp->applicationVersion() )
-                    .arg( QDir(sourceTreePath).dirName() ));
+                    .arg( QDir(d_dir).dirName() ));
     QTimer::singleShot(500,this,SLOT(onRunReload()));
 }
 
@@ -1307,7 +1311,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.5.1");
+    a.setApplicationVersion("0.5.3");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX

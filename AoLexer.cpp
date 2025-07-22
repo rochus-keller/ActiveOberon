@@ -151,7 +151,7 @@ Token Lexer::nextTokenImp()
 
         if( ch == '"' || ch == '\'' )
             return string();
-        else if( ::isalpha(ch) || ch == '_' )
+        else if( ::isalpha(ch) )
             return ident();
         else if( ::isdigit(ch) )
             return number();
@@ -222,7 +222,7 @@ Token Lexer::ident()
     while( true )
     {
         const char c = lookAhead(off);
-        if( !QChar(c).isLetterOrNumber() && c != '_' ) // QChar wegen möglichen Umlauten
+        if( !QChar(c).isLetterOrNumber() ) // QChar wegen möglichen Umlauten
             break;
         else
             off++;

@@ -24,6 +24,11 @@
 using namespace Ao;
 using namespace Ast;
 
+// NOTE: this is not a complete validator but assumes to check existing Oberon code known to compile with OP2
+// it mostly checks name resolution, not type compatibility
+
+// #define _ALLOW_POINTER_BASE_TYPE
+
 static QByteArray SELF;
 
 Validator::Validator(AstModel* mdl, Importer* imp, bool haveXref):module(0),mdl(mdl),imp(imp),
@@ -851,11 +856,13 @@ void Validator::visitType(Type* type)
         if( type->kind == Type::Record && type->type() )
         {
             Type* base = deref(type->type());
+#ifdef _ALLOW_POINTER_BASE_TYPE
             if( base->kind == Type::Pointer )
                 base = deref(base->type());
+#endif
             if( base->kind != Type::Record &&
                     base->kind != Type::Object ) // this happens indeed
-                error(type->type()->decl->pos,"invalid base record");
+                error(type->pos,"invalid base record");
         }
         if( type->kind == Type::Object && type->type() )
         {
