@@ -27,7 +27,7 @@ using namespace Ast;
 // NOTE: this is not a complete validator but assumes to check existing Oberon code known to compile with OP2
 // it mostly checks name resolution, not type compatibility
 
-// #define _ALLOW_POINTER_BASE_TYPE
+#define _ALLOW_POINTER_BASE_TYPE
 
 static QByteArray SELF;
 
@@ -798,6 +798,7 @@ Declaration*Validator::findInType(Type* t, const QByteArray& field)
     return t->find(field);
 #else
     Declaration* res = t->find(field, false);
+    QList<Type*> done;
     while( res == 0 && (t->kind == Type::Record || t->kind == Type::Object) && t->type() )
     {
         Type* super = deref(t->type());
@@ -805,6 +806,9 @@ Declaration*Validator::findInType(Type* t, const QByteArray& field)
             super = deref(super->type());
         res = super->find(field, false);
         t = super;
+        if( done.contains(t) ) // in OberonSystem3_Native_2.2_1997 there is a cycle over TextGadgets.FrameDesc, TextGadgets0.FrameDesc and Gadgets.ViewDesc
+            break;
+        done.append(t);
     }
     return res;
 #endif
