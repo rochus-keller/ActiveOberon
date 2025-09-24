@@ -16,7 +16,7 @@
 
 // Translated from C++ Qt5 implementation
 
-package ActiveOberonParser
+package ActiveOberon
 
 import (
 	"bufio"
@@ -24,9 +24,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
-	"strings"
-	"unicode"
 )
 
 // Scanner interface (equivalent to C++ abstract class)
@@ -190,7 +187,7 @@ func (l *Lexer) nextTokenImp() Token {
 
 	ch := l.line[l.colNr]
 
-	if ch == '"' || ch == ''' {
+	if ch == '"' || ch == '\'' {
 		return l.parseString()
 	} else if isAlpha(ch) {
 		return l.parseIdent()
@@ -231,16 +228,14 @@ func (l *Lexer) nextLine() {
 		return
 	}
 
-	line, err := l.reader.ReadBytes('
-')
+	line, err := l.reader.ReadBytes('\n')
 	if err != nil && err != io.EOF {
 		l.line = nil
 		return
 	}
 
 	// Remove line endings
-	line = bytes.TrimRight(line, "
-")
+	line = bytes.TrimRight(line, "\n")
 	l.line = line
 }
 
@@ -374,7 +369,7 @@ func (l *Lexer) parseNumber() Token {
 		}
 	}
 
-	str := l.line[start:start+length]
+	str := l.line[start:start+uint16(length)]
 
 	// Validate number format
 	if isHex && !l.checkHexNumber(str) {
@@ -444,8 +439,7 @@ func (l *Lexer) parseComment() Token {
 		pos = 0
 		l.parseCommentLevel(l.line, &pos, &level)
 		if len(commentText) > 0 {
-			commentText = append(commentText, '
-')
+			commentText = append(commentText, '\n')
 		}
 		commentText = append(commentText, l.line[:pos]...)
 	}
@@ -509,8 +503,7 @@ func (l *Lexer) parseAssembler() Token {
 		}
 
 		if len(codeText) > 0 {
-			codeText = append(codeText, '
-')
+			codeText = append(codeText, '\n')
 		}
 
 		if pos == -1 {
@@ -597,7 +590,7 @@ func (l *Lexer) parseCommentLevel(str []byte, pos *int, level *int) {
 // checkHexNumber validates hexadecimal number format
 func (l *Lexer) checkHexNumber(str []byte) bool {
 	// Remove single quote if present
-	if pos := bytes.IndexByte(str, '''); pos != -1 {
+	if pos := bytes.IndexByte(str, '\''); pos != -1 {
 		str = str[:pos]
 	}
 
@@ -650,9 +643,7 @@ func isHexDigit(c byte) bool {
 }
 
 func isSpace(c byte) bool {
-	return c == ' ' || c == '	' || c == '
-' || c == '
-'
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 // ParseComment is a static utility function for parsing comments

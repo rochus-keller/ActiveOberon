@@ -101,10 +101,10 @@ namespace Ao {
         Ast::Statement* Case();
         Ast::Expression* CaseLabels();
         Ast::Expression* ConstExpr();
-        Ast::Expression* Expr(bool lvalue = false);
-        Ast::Expression* SimpleExpr(bool lvalue);
-        Ast::Expression* Term(bool lvalue);
-        Ast::Expression* Factor(bool lvalue);
+        Ast::Expression* Expr();
+        Ast::Expression* SimpleExpr();
+        Ast::Expression* Term();
+        Ast::Expression* Factor();
         Ast::Expression* Set();
         Ast::Expression* Element();
         quint8 Relation();

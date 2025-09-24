@@ -16,10 +16,9 @@
 
 // Translated from C++ Qt5 implementation
 
-package ActiveOberonParser
+package ActiveOberon
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -83,7 +82,7 @@ const (
 	BUILTIN_SYSTEM_PUT64
 	BUILTIN_SYSTEM_GETREG
 	BUILTIN_SYSTEM_PUTREG
-	BUILTIN_MAX
+	MAX_BUILTIN
 )
 
 // BuiltinNames provides string names for built-ins
@@ -130,6 +129,8 @@ type Node struct {
 	ByVal      bool
 	NeedsLval  bool
 	Nonlocal   bool
+	Active     bool
+	Exclusive  bool
 }
 
 // GetType returns the node's type

@@ -16,11 +16,11 @@
 
 // Translated from C++ Qt5 implementation
 
-package ActiveOberonParser
+package ActiveOberon
 
 import (
-	"fmt"
 	"strings"
+	"fmt"
 )
 
 type TokenType int
@@ -325,9 +325,94 @@ func TokenTypeName(t TokenType) string {
 		return "TokRbrace"
 	case TokTilde:
 		return "TokTilde"
-	// ... continue for all tokens
+	case TokARRAY:
+		return "TokARRAY"
+	case TokBEGIN:
+		return "TokBEGIN"
+	case TokBY:
+		return "TokBY"
+	case TokCASE:
+		return "TokCASE"
+	case TokCODE:
+		return "TokCODE"
+	case TokCONST:
+		return "TokCONST"
+	case TokDIV:
+		return "TokDIV"
+	case TokDO:
+		return "TokDO"
+	case TokELSE:
+		return "TokELSE"
+	case TokELSIF:
+		return "TokELSIF"
+	case TokEND:
+		return "TokEND"
+	case TokEXIT:
+		return "TokEXIT"
+	case TokFOR:
+		return "TokFOR"
+	case TokIF:
+		return "TokIF"
+	case TokIMPORT:
+		return "TokIMPORT"
+	case TokIN:
+		return "TokIN"
+	case TokIS:
+		return "TokIS"
+	case TokLOOP:
+		return "TokLOOP"
+	case TokMOD:
+		return "TokMOD"
+	case TokMODULE:
+		return "TokMODULE"
+	case TokNIL:
+		return "TokNIL"
+	case TokOBJECT:
+		return "TokOBJECT"
+	case TokOF:
+		return "TokOF"
+	case TokOR:
+		return "TokOR"
+	case TokPOINTER:
+		return "TokPOINTER"
+	case TokPROCEDURE:
+		return "TokPROCEDURE"
+	case TokRECORD:
+		return "TokRECORD"
+	case TokREPEAT:
+		return "TokREPEAT"
+	case TokRETURN:
+		return "TokRETURN"
+	case TokTHEN:
+		return "TokTHEN"
+	case TokTO:
+		return "TokTO"
+	case TokTYPE:
+		return "TokTYPE"
+	case TokUNTIL:
+		return "TokUNTIL"
+	case TokVAR:
+		return "TokVAR"
+	case TokWHILE:
+		return "TokWHILE"
+	case TokWITH:
+		return "TokWITH"
+	case TokIdent:
+		return "TokIdent"
+	case TokInteger:
+		return "TokInteger"
+	case TokReal:
+		return "TokReal"
+	case TokString:
+		return "TokString"
+	case TokHexchar:
+		return "TokHexchar"
+	case TokComment:
+		return "TokComment"
+	case TokEof:
+		return "TokEof"
 	default:
-		return ""
+		return "TokUnknown"
 	}
 }
 
@@ -356,12 +441,16 @@ type RowCol struct {
 const (
 	ROWBitLen = 19
 	COLBitLen = 32 - ROWBitLen - 1
-	MSB       = 0x80000000
+	MSB  uint32     = 0x80000000
 )
 
 // NewRowCol creates a new RowCol
 func NewRowCol(row, col uint32) RowCol {
 	return RowCol{Row: row, Col: col}
+}
+
+func (rc RowCol) String() string {
+    return fmt.Sprintf("%d:%d", rc.Row, rc.Col)
 }
 
 // IsValid checks if position is valid

@@ -1328,8 +1328,8 @@ Expression* Parser2::ConstExpr() {
     return Expr(); // done
 }
 
-Ast::Expression* Parser2::Expr(bool lvalue) {
-    Expression* res = SimpleExpr(lvalue);
+Ast::Expression* Parser2::Expr() {
+    Expression* res = SimpleExpr();
     if( res == 0 )
         return 0;
     if( FIRST_Relation(la.d_type) ) {
@@ -1338,7 +1338,7 @@ Ast::Expression* Parser2::Expr(bool lvalue) {
         tmp->lhs = res;
         tmp->setType(mdl->getType(Type::BOOLEAN));
         res = tmp;
-        res->rhs = SimpleExpr(false);
+        res->rhs = SimpleExpr();
         if( res->rhs == 0 )
         {
             delete tmp;
@@ -1348,7 +1348,7 @@ Ast::Expression* Parser2::Expr(bool lvalue) {
     return res;
 }
 
-Expression* Parser2::SimpleExpr(bool lvalue) {
+Expression* Parser2::SimpleExpr() {
     quint8 op = 0;
     Token tok = la;
     if( la.d_type == Tok_Plus || la.d_type == Tok_Minus ) {
@@ -1361,7 +1361,7 @@ Expression* Parser2::SimpleExpr(bool lvalue) {
         } else
             invalid("Term");
     }
-    Expression* res = Term(lvalue);
+    Expression* res = Term();
     if( res == 0 )
         return 0;
     if( op != 0 ) {
@@ -1375,7 +1375,7 @@ Expression* Parser2::SimpleExpr(bool lvalue) {
         Expression* tmp = Expression::createFromToken(AddOp(), tok.toRowCol());
         tmp->lhs = res;
         res = tmp;
-        res->rhs = Term(false);
+        res->rhs = Term();
         if( res->rhs == 0 )
         {
             delete tmp;
@@ -1385,8 +1385,8 @@ Expression* Parser2::SimpleExpr(bool lvalue) {
     return res;
 }
 
-Expression* Parser2::Term(bool lvalue) {
-    Expression* res = Factor(lvalue);
+Expression* Parser2::Term() {
+    Expression* res = Factor();
     if( res == 0 )
         return 0;
     while( FIRST_MulOp(la.d_type) ) {
@@ -1394,7 +1394,7 @@ Expression* Parser2::Term(bool lvalue) {
         Expression* tmp = Expression::createFromToken(MulOp(),tok.toRowCol());
         tmp->lhs = res;
         res = tmp;
-        res->rhs = Factor(false);
+        res->rhs = Factor();
         if( res->rhs == 0 )
             return 0;
     }
@@ -1413,10 +1413,10 @@ static QByteArray dequote(const QByteArray& str)
     return res;
 }
 
-Expression* Parser2::Factor(bool lvalue) {
+Expression* Parser2::Factor() {
     Expression* res = 0;
     if( FIRST_Designator(la.d_type) ) {
-        res = Designator(lvalue);
+        res = Designator(false);
 	} else if( FIRST_number(la.d_type) ) {
         res = number();
 	} else if( la.d_type == Tok_hexchar ) {
@@ -1444,7 +1444,7 @@ Expression* Parser2::Factor(bool lvalue) {
 		expect(Tok_Rpar, false, "Factor");
 	} else if( la.d_type == Tok_Tilde ) {
 		expect(Tok_Tilde, false, "Factor");
-        Expression* tmp = Factor(false);
+        Expression* tmp = Factor();
         if( tmp == 0 )
             return 0;
         res = new Expression(Expression::Not, cur.toRowCol());
