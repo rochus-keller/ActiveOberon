@@ -249,7 +249,7 @@ namespace Ast
         static int getCount(const Expression* list);
         static void append(Expression* list, Expression* elem);
         static QList<Expression*> getList(Expression* exp);
-        static Expression* createFromToken(quint16);
+        static Expression* createFromToken(quint16, const RowCol& rc);
 
         Expression(Kind k = Invalid, const RowCol& rc = RowCol()):
             lhs(0),rhs(0),next(0) {meta = E; kind = k; pos = rc; }

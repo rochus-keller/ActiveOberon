@@ -534,33 +534,105 @@ func (p *Parser) parseRecordType() *Type {
 	return t
 }
 
-// parseObjectType parses object types
+func (p *Parser) firstSysFlag() bool {
+	return p.la.Type == TokLbrack
+}
+
+func (p *Parser) parseSysFlag() bool {
+	p.expect(TokLbrack, "SysFlag")
+	p.expect(TokIdent, "SysFlag")
+
+	// Check if this is a known system flag
+	flagName := string(p.cur.Val)
+	isKnown := false
+
+	for _, symbol := range p.predefSymbols {
+		if symbol != nil && string(symbol) == flagName {
+			isKnown = true
+			break
+		}
+	}
+
+	if !isKnown {
+		switch flagName {
+		case "UNTRACED", "SAFE", "C":
+			isKnown = true
+		}
+	}
+
+	if !isKnown {
+		p.syntaxError("unknown system flag: " + flagName)
+	}
+
+	p.expect(TokRbrack, "SysFlag")
+	return isKnown
+}
+
 func (p *Parser) parseObjectType() *Type {
+	pos := p.la.ToRowCol()
 	p.expect(TokOBJECT, "ObjectType")
 
-	t := NewType()
-	t.Kind = int(TYPE_Object)
+	// Create new object type
+	obj := NewType()
+	obj.Kind = int(TYPE_Object)
+	obj.Pos = pos
 
-	// Parse base class
-	if p.la.Type == TokLpar {
-		p.expect(TokLpar, "ObjectType")
-		t.TypeRef = p.parseType()
-		p.expect(TokRpar, "ObjectType")
+	if p.firstSysFlag() || p.la.Type == TokLpar || p.firstDeclSeq() || p.firstBody() || p.la.Type == TokEND {
+		// Check for system flags (like {SAFE}, {UNTRACED}, etc.)
+		if p.firstSysFlag() {
+			_ = p.parseSysFlag() // Parse but ignore for now
+		}
+
+		// Open new scope for object members
+		p.model.OpenScope(nil)
+
+		// Parse optional base class in parentheses: OBJECT (BaseClass)
+		if p.la.Type == TokLpar {
+			p.expect(TokLpar, "ObjectType")
+			obj.TypeRef = p.parseNamedType()
+			p.expect(TokRpar, "ObjectType")
+		}
+
+		// Parse object member declarations (fields, methods, etc.)
+		p.parseDeclSeq(true) // true = inObjectType
+
+		// Parse optional object body (constructor/initializer)
+		if p.firstBody() {
+			// Create implicit constructor procedure
+			beginToken := p.la
+			beginToken.Val = p.beginSymbol
+
+			procDecl := p.addDecl(beginToken, VISI_Private, DECL_Procedure)
+			if procDecl != nil {
+				procDecl.Begin = true // Mark as constructor/initializer
+				p.model.OpenScope(procDecl)
+				procDecl.Body = p.parseBody()
+				p.model.CloseScope()
+			}
+		}
+
+		// Get all members that were declared in this object
+		members := p.model.CloseScope() // TODO true
+
+		// Add members to object type
+		obj.Subs = make([]*Declaration, len(members))
+		for i, member := range members {
+			obj.Subs[i] = member
+			// Set proper outer scope for members
+			if obj.Decl != nil {
+				member.Outer = obj.Decl
+			}
+		}
+
+		p.expect(TokEND, "ObjectType")
+
+		// Optional object type identifier after END
+		if p.la.Type == TokIdent {
+			p.expect(TokIdent, "ObjectType")
+		}
 	}
 
-	p.model.OpenScope(NewDeclaration())
-
-	// Parse declarations
-	p.parseDeclSeq(true)
-
-	members := p.model.CloseScope()
-	for _, member := range members {
-		t.Subs = append(t.Subs, member)
-	}
-
-	p.expect(TokEND, "ObjectType")
-
-	return t
+	return obj
 }
 
 // parsePointerType parses pointer types
@@ -994,13 +1066,15 @@ func (p *Parser) parseNumber() *Expression {
 		// Handle suffix-based type determination
 		var explicitType *Type
 
-		if strings.HasSuffix(val, "d") || strings.HasSuffix(val, "D") {
+		if strings.Contains(val, "d") || strings.Contains(val, "D") {
 			// Double precision (LONGREAL) - remove D suffix
-			val = val[:len(val)-1]
+			val = strings.ReplaceAll(val, "d", "e")
+			val = strings.ReplaceAll(val, "D", "e")
 			explicitType = p.model.GetType(TYPE_LONGREAL)
-		} else if strings.HasSuffix(val, "s") || strings.HasSuffix(val, "S") {
+		} else if strings.Contains(val, "s") || strings.Contains(val, "S") {
 			// Single precision (REAL) - remove S suffix
-			val = val[:len(val)-1]
+			val = strings.ReplaceAll(val, "s", "e")
+			val = strings.ReplaceAll(val, "D", "e")
 			explicitType = p.model.GetType(TYPE_REAL)
 		}
 
@@ -1301,8 +1375,12 @@ func (p *Parser) parseConstExpr() *Expression {
 
 // Statement parsing methods
 
-// parseBody parses procedure/module bodies
 func (p *Parser) parseBody() *Statement {
+	return p.parseBlock()
+}
+
+// parseBody parses procedure/module bodies
+func (p *Parser) parseBlock() *Statement {
 	p.expect(TokBEGIN, "Body")
 	stmt := p.parseStatSeq()
 	p.expect(TokEND, "Body")
