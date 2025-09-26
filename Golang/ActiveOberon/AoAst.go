@@ -12,7 +12,7 @@
 ** following information to ensure the GNU Lesser General Public License
 ** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
 ** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-*/
+ */
 
 // Translated from C++ Qt5 implementation
 
@@ -101,36 +101,36 @@ type Meta int
 
 const (
 	MetaType Meta = iota // T
-	MetaDecl             // D  
+	MetaDecl             // D
 	MetaExpr             // E
 )
 
 // Node is the base AST node
 type Node struct {
-	Meta     Meta
-	Kind     int
-	Pos      RowCol
-	TypeRef  *Type
+	Meta    Meta
+	Kind    int
+	Pos     RowCol
+	TypeRef *Type
 
 	// Flags
-	Validated  bool
-	InList     bool
-	Deferred   bool
-	Delegate   bool
-	Allocated  bool
-	Owned      bool
-	VarParam   bool
+	Validated   bool
+	InList      bool
+	Deferred    bool
+	Delegate    bool
+	Allocated   bool
+	Owned       bool
+	VarParam    bool
 	Constructor bool
-	Begin      bool
-	OwnsType   bool
-	HasErrors  bool
-	HasSubs    bool
-	Receiver   bool
-	ByVal      bool
-	NeedsLval  bool
-	Nonlocal   bool
-	Active     bool
-	Exclusive  bool
+	Begin       bool
+	OwnsType    bool
+	HasErrors   bool
+	HasSubs     bool
+	Receiver    bool
+	ByVal       bool
+	NeedsLval   bool
+	Nonlocal    bool
+	Active      bool
+	Exclusive   bool
 }
 
 // GetType returns the node's type
@@ -182,18 +182,11 @@ var TypeNames = []string{
 // Type represents a type in the AST
 type Type struct {
 	Node
-	Len   uint32 // array length
-	Quali *Qualident // for NameRef
+	Len   uint32         // array length
+	Quali *Qualident     // for NameRef
 	Subs  []*Declaration // record fields, enum elements, or proc params
-	Decl  *Declaration // if NameRef includes pos and name
-	Expr  *Expression // array length expression
-}
-
-// NewType creates a new type
-func NewType() *Type {
-	t := &Type{}
-	t.Meta = MetaType
-	return t
+	Decl  *Declaration   // if NameRef includes pos and name
+	Expr  *Expression    // array length expression
 }
 
 // IsNumber checks if type is numeric
@@ -294,7 +287,7 @@ type Declaration struct {
 	Body  *Statement   // procedure body
 	Name  []byte
 	Visi  Visi
-	ID    uint16 // used for built-in code and local/param number
+	ID    uint16      // used for built-in code and local/param number
 	Data  interface{} // value for const/enum, path for import
 	Expr  *Expression // const decl, enum, meta actuals
 }
@@ -360,7 +353,7 @@ func (d *Declaration) AppendMember(decl *Declaration) {
 		d.Link = decl
 	} else {
 		current := d.Link
-		for current.Next != nil {
+		for current != nil && current.Next != nil {
 			current = current.Next
 		}
 		current.Next = decl
@@ -396,18 +389,18 @@ const (
 	EXPR_Mod
 	EXPR_And // MulOp
 
-	EXPR_DeclRef    // val is declaration
+	EXPR_DeclRef // val is declaration
 	EXPR_Deref
-	EXPR_Select     // f.g, val is field declaration
-	EXPR_Index      // a[i]
+	EXPR_Select // f.g, val is field declaration
+	EXPR_Index  // a[i]
 	EXPR_Cast
 	EXPR_Call
 	EXPR_Literal
 	EXPR_Constructor
 	EXPR_Range
-	EXPR_NameRef    // temporary, resolved by validator
+	EXPR_NameRef // temporary, resolved by validator
 	EXPR_ConstVal
-	EXPR_Super      // ^ supercall
+	EXPR_Super // ^ supercall
 	EXPR_MAX
 )
 
@@ -416,7 +409,7 @@ type Expression struct {
 	Node
 	Val  interface{} // literal value or declaration reference
 	Lhs  *Expression // left-hand side
-	Rhs  *Expression // right-hand side  
+	Rhs  *Expression // right-hand side
 	Next *Expression // for argument lists
 }
 
@@ -429,18 +422,151 @@ func NewExpression(kind ExprKind, pos RowCol) *Expression {
 	return e
 }
 
-// IsConst checks if expression is constant
-func (e *Expression) IsConst() bool {
-	return e.Kind == int(EXPR_Literal) || e.Kind == int(EXPR_ConstVal)
+func (e *Expression) allArgsConst(args *Expression) bool {
+	current := args
+	for current != nil {
+		if !current.IsConst() {
+			return false
+		}
+		current = current.Next
+	}
+	return true
 }
 
-// IsLvalue checks if expression is an lvalue
+func (e *Expression) isBuiltinConstant(builtin *Declaration, args *Expression) bool {
+	if builtin == nil {
+		return false
+	}
+
+	builtinID := BuiltinKind(builtin.ID)
+
+	switch builtinID {
+	case BUILTIN_LEN:
+		// LEN can be constant for arrays with compile-time known size
+		if e.countArgs(args) != 1 {
+			return true // Error case, but don't crash
+		}
+
+		if args.IsConst() {
+			return true
+		}
+
+		// Check if it's an array type with constant size
+		if args.GetType() != nil {
+			arrayType := args.GetType().Deref()
+			if arrayType.Kind == int(TYPE_Array) {
+				// If array has compile-time size, LEN is constant
+				return arrayType.Expr == nil || arrayType.Expr.IsConst()
+			}
+		}
+
+		return true
+
+	case BUILTIN_MIN, BUILTIN_MAX:
+		// MIN and MAX are constant if they have exactly 1 arg and all args are constant
+		return e.countArgs(args) == 1 && e.allArgsConst(args)
+
+	default:
+		return e.allArgsConst(args)
+	}
+}
+
+func (e *Expression) countArgs(args *Expression) int {
+	count := 0
+	current := args
+	for current != nil {
+		count++
+		current = current.Next
+	}
+	return count
+}
+
 func (e *Expression) IsLvalue() bool {
+	if e == nil {
+		return false
+	}
+
 	switch ExprKind(e.Kind) {
-	case EXPR_DeclRef, EXPR_Select, EXPR_Index, EXPR_Deref:
-		return !e.ByVal
+	case EXPR_DeclRef:
+		// Declaration references are lvalues if they're variables
+		if decl, ok := e.Val.(*Declaration); ok && decl != nil {
+			return decl.Kind == int(DECL_LocalDecl) ||
+				decl.Kind == int(DECL_VarDecl) ||
+				decl.Kind == int(DECL_ParamDecl)
+		}
+		return false
+
+	case EXPR_Select, EXPR_Index:
+		return true
+
 	default:
 		return false
+	}
+}
+
+// IsConst checks if expression is constant
+func (e *Expression) IsConst() bool {
+	if e == nil {
+		return false
+	}
+
+	switch ExprKind(e.Kind) {
+	case EXPR_DeclRef:
+		// Reference to declaration - check what kind of declaration
+		if decl, ok := e.Val.(*Declaration); ok && decl != nil {
+			// Variables, locals, and parameters are NOT constant
+			if decl.Kind == int(DECL_VarDecl) ||
+				decl.Kind == int(DECL_LocalDecl) ||
+				decl.Kind == int(DECL_ParamDecl) {
+				return false
+			}
+			// Constants, types, procedures, etc. are considered constant references
+			return true
+		}
+		return true
+
+	case EXPR_ConstVal, EXPR_Literal:
+		// Literal values and resolved constants are always constant
+		return true
+
+	case EXPR_Call:
+		// Function/procedure calls - special handling for built-ins
+		if e.Lhs == nil {
+			return true // Error case, but don't crash
+		}
+
+		// Check if it's a declaration reference (built-in or procedure)
+		if decl, ok := e.Lhs.Val.(*Declaration); ok && decl != nil {
+			if decl.Kind == int(DECL_Procedure) {
+				// User procedures are not constant
+				return e.allArgsConst(e.Rhs)
+			} else if decl.Kind == int(DECL_Builtin) {
+				// Built-in functions - some can be evaluated at compile time
+				return e.isBuiltinConstant(decl, e.Rhs)
+			}
+		}
+
+		// Other calls are not constant unless all args are constant
+		return e.allArgsConst(e.Rhs)
+
+	default:
+		// Binary and unary operations - all operands must be constant
+		if e.Lhs != nil && !e.Lhs.IsConst() {
+			return false
+		}
+		if e.Rhs != nil && !e.Rhs.IsConst() {
+			return false
+		}
+		return true
+	}
+}
+
+func appendExpr(list *Expression, elem *Expression) {
+	for list != nil && list.Next != nil {
+		list = list.Next
+	}
+	if list != nil {
+		list.Next = elem
 	}
 }
 
@@ -449,11 +575,7 @@ func (e *Expression) AppendRhs(expr *Expression) {
 	if e.Rhs == nil {
 		e.Rhs = expr
 	} else {
-		current := e.Rhs
-		for current.Next != nil {
-			current = current.Next
-		}
-		current.Next = expr
+		appendExpr(e.Rhs, expr)
 	}
 }
 
@@ -461,8 +583,8 @@ func (e *Expression) AppendRhs(expr *Expression) {
 type StatementKind int
 
 const (
-	STMT_Invalid StatementKind = iota
-	STMT_StatBlock // head of statement sequence
+	STMT_Invalid   StatementKind = iota
+	STMT_StatBlock               // head of statement sequence
 	STMT_Assig
 	STMT_Call
 	STMT_If
@@ -540,7 +662,7 @@ type ModuleData struct {
 
 // Qualident represents a qualified identifier
 type Qualident struct {
-	First []byte
+	First  []byte
 	Second []byte
 }
 
@@ -634,7 +756,7 @@ func (m *AstModel) initializeBuiltins() {
 		system := m.AddDecl("SYSTEM")
 		system.Kind = int(DECL_Module)
 		m.OpenScope(system)
-		for i := BUILTIN_SYSTEM + 1; i < BUILTIN_MAX; i++ {
+		for i := BUILTIN_SYSTEM + 1; i < MAX_BUILTIN; i++ {
 			m.addBuiltin(BuiltinNames[i], i)
 		}
 		m.addTypeAlias("PTR", m.types[TYPE_PTR])
@@ -651,7 +773,7 @@ func (m *AstModel) initializeBuiltins() {
 		m.addConst("AL", TYPE_BYTE, 0)
 		m.addConst("DH", TYPE_BYTE, 0)
 
-		m.CloseScope()
+		m.CloseScope(false)
 	} else {
 		m.OpenScope(m.globalScope)
 	}
@@ -659,7 +781,8 @@ func (m *AstModel) initializeBuiltins() {
 
 // newType creates a new type
 func (m *AstModel) newType(kind TypeKind) *Type {
-	t := NewType()
+	t := &Type{}
+	t.Meta = MetaType
 	t.Kind = int(kind)
 	t.Owned = true
 	return t
@@ -711,13 +834,14 @@ func (m *AstModel) OpenScope(scope *Declaration) {
 }
 
 // CloseScope closes current scope
-func (m *AstModel) CloseScope() []*Declaration {
-	if len(m.scopes) > 1 {
-		scope := m.scopes[len(m.scopes)-1]
-		m.scopes = m.scopes[:len(m.scopes)-1]
-		return m.toList(scope.Link)
+func (m *AstModel) CloseScope(takeMembers bool) *Declaration {
+	var res *Declaration = nil
+	if takeMembers {
+		res = m.scopes[len(m.scopes)-1].Link
+		m.scopes[len(m.scopes)-1].Link = nil
 	}
-	return nil
+	m.scopes = m.scopes[:len(m.scopes)-1]
+	return res
 }
 
 // AddDecl adds a declaration to current scope
@@ -753,8 +877,7 @@ func (m *AstModel) AddDecl(name string) *Declaration {
 // FindDecl finds a declaration by name
 func (m *AstModel) FindDecl(name string, recursive bool) *Declaration {
 	for i := len(m.scopes) - 1; i >= 0; i-- {
-		scope := m.scopes[i]
-		current := scope.Link
+		current := m.scopes[i].Link
 		for current != nil {
 			if string(current.Name) == name {
 				return current
@@ -770,10 +893,7 @@ func (m *AstModel) FindDecl(name string, recursive bool) *Declaration {
 
 // GetType returns a basic type
 func (m *AstModel) GetType(kind TypeKind) *Type {
-	if int(kind) < len(m.types) {
-		return m.types[kind]
-	}
-	return nil
+	return m.types[kind]
 }
 
 // GetTopScope returns the top-level scope (module or procedure)
@@ -803,7 +923,9 @@ func (m *AstModel) toList(d *Declaration) []*Declaration {
 	current := d
 	for current != nil {
 		result = append(result, current)
+		old := current
 		current = current.Next
+		old.Next = nil
 	}
 	return result
 }

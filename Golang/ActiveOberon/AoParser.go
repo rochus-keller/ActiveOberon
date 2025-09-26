@@ -214,7 +214,7 @@ func (p *Parser) parseModule() {
 			procDecl.Begin = true
 			p.model.OpenScope(procDecl)
 			procDecl.Body = p.parseBody()
-			p.model.CloseScope()
+			p.model.CloseScope(false)
 		}
 	}
 
@@ -222,7 +222,7 @@ func (p *Parser) parseModule() {
 	p.expect(TokIdent, "Module")
 
 	moduleData.End = p.cur.ToRowCol()
-	p.model.CloseScope()
+	p.model.CloseScope(false)
 
 	if p.la.Type != TokDot {
 		p.syntaxError("expecting a dot at the end of a module")
@@ -417,7 +417,7 @@ func (p *Parser) parseProcDecl() {
 	p.expect(TokIdent, "ProcDecl")
 	p.expect(TokSemi, "ProcDecl")
 
-	p.model.CloseScope()
+	p.model.CloseScope(false)
 }
 
 // parseFormalParams parses formal parameters
@@ -477,6 +477,12 @@ func (p *Parser) parseType() *Type {
 	}
 }
 
+func NewType() *Type {
+	t := &Type{}
+	t.Meta = MetaType
+	return t
+}
+
 // parseNamedType parses named types and qualidents
 func (p *Parser) parseNamedType() *Type {
 	t := NewType()
@@ -485,22 +491,92 @@ func (p *Parser) parseNamedType() *Type {
 	return t
 }
 
+func (p *Parser) firstConstExpr() bool {
+	return p.firstExpr()
+}
+
 // parseArrayType parses array types
 func (p *Parser) parseArrayType() *Type {
+	pos := p.la.ToRowCol()
 	p.expect(TokARRAY, "ArrayType")
 
-	t := NewType()
-	t.Kind = int(TYPE_Array)
+	// Create array type
+	arr := NewType()
+	arr.Kind = int(TYPE_Array)
+	arr.Pos = pos
 
-	// Parse array length
-	if p.la.Type != TokOF {
-		t.Expr = p.parseConstExpr()
+	// Parse optional system flags ([SAFE], [UNTRACED], etc.)
+	if p.firstSysFlag() {
+		_ = p.parseSysFlag() // Parse but ignore for now
+	}
+
+	// Parse array dimensions - can be multiple expressions separated by commas
+	var dimensions []*Expression
+
+	if p.firstConstExpr() {
+		// Parse first dimension
+		expr := p.parseConstExpr()
+		if expr == nil {
+			return nil
+		}
+		dimensions = append(dimensions, expr)
+
+		// Parse additional dimensions separated by commas
+		for p.la.Type == TokComma {
+			p.expect(TokComma, "ArrayType")
+			expr = p.parseConstExpr()
+			if expr == nil {
+				return nil
+			}
+			dimensions = append(dimensions, expr)
+		}
 	}
 
 	p.expect(TokOF, "ArrayType")
-	t.TypeRef = p.parseType()
 
-	return t
+	// Parse element type
+	elementType := p.parseType()
+	if elementType == nil {
+		return nil
+	}
+
+	if len(dimensions) == 0 {
+		// Dynamic array: ARRAY OF ElementType
+		arr.SetType(elementType)
+		arr.Expr = nil
+	} else {
+		// Start with the element type
+		currentType := elementType
+
+		// Build array types from right to left (innermost first)
+		for i := len(dimensions) - 1; i >= 0; i-- {
+			dimType := NewType()
+			dimType.Kind = int(TYPE_Array)
+			dimType.Pos = dimensions[i].Pos
+			dimType.SetType(currentType)
+			dimType.Expr = dimensions[i]
+			currentType = dimType
+		}
+
+		// The outermost array type becomes our result
+
+		arr.Expr = dimensions[0]
+		arr.Pos = dimensions[0].Pos
+
+		curDim := arr
+		// this is a multi-dim array; make sure that each dimension has an explicit Array type
+		for i := 1; i < len(dimensions); i++ {
+			nextDim := NewType()
+			nextDim.Kind = int(TYPE_Array)
+			nextDim.Pos = dimensions[i].Pos
+			nextDim.Expr = dimensions[i]
+			curDim.SetType(nextDim)
+			curDim = nextDim
+		}
+		curDim.SetType(elementType) // the highest dim gets the element type
+	}
+
+	return arr
 }
 
 // parseRecordType parses record types
@@ -524,7 +600,7 @@ func (p *Parser) parseRecordType() *Type {
 		p.parseFieldList()
 	}
 
-	fields := p.model.CloseScope()
+	fields := p.model.toList(p.model.CloseScope(false))
 	for _, field := range fields {
 		t.Subs = append(t.Subs, field)
 	}
@@ -607,12 +683,12 @@ func (p *Parser) parseObjectType() *Type {
 				procDecl.Begin = true // Mark as constructor/initializer
 				p.model.OpenScope(procDecl)
 				procDecl.Body = p.parseBody()
-				p.model.CloseScope()
+				p.model.CloseScope(false)
 			}
 		}
 
 		// Get all members that were declared in this object
-		members := p.model.CloseScope() // TODO true
+		members := p.model.toList(p.model.CloseScope(true))
 
 		// Add members to object type
 		obj.Subs = make([]*Declaration, len(members))
@@ -667,7 +743,7 @@ func (p *Parser) parseProcType() *Type {
 		t.TypeRef = p.parseType()
 	}
 
-	params := p.model.CloseScope()
+	params := p.model.toList(p.model.CloseScope(false))
 	for _, param := range params {
 		t.Subs = append(t.Subs, param)
 	}
@@ -818,13 +894,6 @@ func (p *Parser) firstRelation() bool {
 		p.la.Type == TokIN || p.la.Type == TokIS
 }
 
-// createFromTokenRelation creates expression from relational token
-func (p *Parser) createFromTokenRelation() *Expression {
-	tok := p.la
-	p.next()
-	return CreateFromToken(tok.Type, tok.ToRowCol())
-}
-
 // parseExpr parses expressions
 func (p *Parser) parseExpr() *Expression {
 	res := p.parseSimpleExpr()
@@ -833,7 +902,9 @@ func (p *Parser) parseExpr() *Expression {
 	}
 
 	if p.firstRelation() {
-		tmp := p.createFromTokenRelation()
+		tok := p.la
+		p.next()
+		tmp := CreateFromToken(tok.Type, tok.ToRowCol())
 		tmp.Lhs = res
 		tmp.SetType(p.model.GetType(TYPE_BOOLEAN))
 		res = tmp
