@@ -19,1903 +19,1601 @@
 package ActiveOberon
 
 import (
+	"bytes"
 	"fmt"
-	"strconv"
-	"strings"
+	"runtime"
 )
 
-// Parser implements the ActiveOberon parser
-type Parser struct {
-	scanner       Scanner
-	model         *AstModel
-	thisMod       *Declaration
-	cur           Token
-	la            Token // lookahead
-	errors        []ParseError
-	predefSymbols [][]byte
-	beginSymbol   []byte
-}
-
-// ParseError represents a parsing error
+// ParseError represents a parser error with message and location info.
 type ParseError struct {
 	Msg  string
 	Pos  RowCol
 	Path string
 }
 
-// NewParseError creates a new parse error
-func NewParseError(msg string, pos RowCol, path string) ParseError {
-	return ParseError{Msg: msg, Pos: pos, Path: path}
-}
+// ID models an identifier definition with visibility and attributes.
+type idVisi uint8
 
-// ID represents an identifier with visibility
+const (
+	visiNA idVisi = iota
+	visiPrivate
+	visiReadOnly
+	visiPublic
+)
+
 type ID struct {
 	Name     Token
-	Visi     Visi
+	Visi     idVisi
 	Untraced bool
 }
 
-// NewID creates a new ID
-func NewID() ID {
-	return ID{Visi: VISI_Private}
+func (id ID) IsValid() bool { return id.Name.Type == TokIdent }
+
+// Parser is the ActiveOberon recursive-descent parser.
+type Parser struct {
+	thisMod       *Declaration
+	mdl           *AstModel
+	cur           Token
+	la            Token
+	scanner       Scanner
+	errors        []ParseError
+	predefSymbols [][]byte // size MaxAttr
+	BEGIN         []byte
 }
 
-// IsValid checks if ID is valid
-func (id ID) IsValid() bool {
-	return id.Name.Type == TokIdent
-}
-
-// Attributes for declarations
-type Attrs int
+type attrKind int
 
 const (
-	ATTR_UNTRACED Attrs = iota
-	ATTR_ACTIVE
-	ATTR_DELEGATE
-	ATTR_EXCLUSIVE
-	ATTR_PRIORITY
-	ATTR_SAFE
-	ATTR_FFI
-	ATTR_MaxAttr
+	attrUNTRACED attrKind = iota
+	attrACTIVE
+	attrDELEGATE
+	attrEXCLUSIVE
+	attrPRIORITY
+	attrSAFE
+	attrFFI
+	attrMaxAttr
 )
 
-// NewParser2 creates a new parser
-func NewParser(model *AstModel, scanner Scanner) *Parser {
-	p := &Parser{
-		scanner:       scanner,
-		model:         model,
-		errors:        make([]ParseError, 0),
-		predefSymbols: make([][]byte, ATTR_MaxAttr),
+// FIRST(x) helper predicates (verbatim mapping from C++ FIRST_*)
+func firstImportList(tt TokenType) bool { return tt == TokIMPORT }
+
+func firstDeclSeq(tt TokenType) bool {
+	return tt == TokVAR || tt == TokCONST || tt == TokPROCEDURE || tt == TokTYPE
+}
+
+func firstConstDecl(tt TokenType) bool { return tt == TokIdent }
+func firstTypeDecl(tt TokenType) bool  { return tt == TokIdent }
+func firstVarDecl(tt TokenType) bool   { return tt == TokIdent }
+func firstAssembler(tt TokenType) bool { return tt == TokCODE }
+func firstProcDecl(tt TokenType) bool  { return tt == TokPROCEDURE }
+
+func firstProcHead(tt TokenType) bool {
+	return tt == TokAmp || tt == TokMinus || tt == TokStar || tt == TokLbrack || tt == TokIdent
+}
+func firstSysFlag(tt TokenType) bool    { return tt == TokLbrack }
+func firstFormalPars(tt TokenType) bool { return tt == TokLpar }
+
+func firstFPSection(tt TokenType) bool     { return tt == TokVAR || tt == TokIdent }
+func firstArrayType(tt TokenType) bool     { return tt == TokARRAY }
+func firstRecordType(tt TokenType) bool    { return tt == TokRECORD }
+func firstPointerType(tt TokenType) bool   { return tt == TokPOINTER }
+func firstObjectType(tt TokenType) bool    { return tt == TokOBJECT }
+func firstProcedureType(tt TokenType) bool { return tt == TokPROCEDURE }
+func firstAliasType(tt TokenType) bool     { return tt == TokIdent }
+
+func firstFieldList(tt TokenType) bool  { return tt == TokSemi || tt == TokIdent }
+func firstBody(tt TokenType) bool       { return tt == TokBEGIN }
+func firstAttributes(tt TokenType) bool { return tt == TokLbrace }
+func firstStatBlock(tt TokenType) bool  { return tt == TokBEGIN }
+
+func firstStatSeq(tt TokenType) bool {
+	switch tt {
+	case TokCASE, TokFOR, TokEXIT, TokIF, TokLOOP, TokREPEAT, TokWITH, TokWHILE, TokBEGIN, TokRETURN, TokIdent, TokSemi:
+		return true
+	default:
+		return false
 	}
+}
 
-	// Initialize predefined symbols
-	p.predefSymbols[ATTR_UNTRACED] = GetSymbol([]byte("UNTRACED"))
-	p.predefSymbols[ATTR_ACTIVE] = GetSymbol([]byte("ACTIVE"))
-	p.predefSymbols[ATTR_DELEGATE] = GetSymbol([]byte("DELEGATE"))
-	p.predefSymbols[ATTR_EXCLUSIVE] = GetSymbol([]byte("EXCLUSIVE"))
-	p.predefSymbols[ATTR_PRIORITY] = GetSymbol([]byte("PRIORITY"))
-	p.predefSymbols[ATTR_SAFE] = GetSymbol([]byte("SAFE"))
-	p.predefSymbols[ATTR_FFI] = GetSymbol([]byte("C"))
-	p.beginSymbol = GetSymbol([]byte("BEGIN"))
+func firstAssigOrCall(tt TokenType) bool { return tt == TokIdent }
+func firstIfStat(tt TokenType) bool      { return tt == TokIF }
+func firstCaseStat(tt TokenType) bool    { return tt == TokCASE }
+func firstWhileStat(tt TokenType) bool   { return tt == TokWHILE }
+func firstRepeatStat(tt TokenType) bool  { return tt == TokREPEAT }
+func firstForStat(tt TokenType) bool     { return tt == TokFOR }
+func firstLoopStat(tt TokenType) bool    { return tt == TokLOOP }
+func firstWithStat(tt TokenType) bool    { return tt == TokWITH }
+func firstReturnStat(tt TokenType) bool  { return tt == TokRETURN }
 
+func firstCase(tt TokenType) bool {
+	switch tt {
+	case TokNIL, TokPlus, TokTilde, TokMinus, TokString, TokLpar, TokHexchar, TokInteger, TokReal, TokLbrace, TokIdent:
+		return true
+	default:
+		return false
+	}
+}
+
+func firstCaseLabels(tt TokenType) bool {
+	return firstCase(tt)
+}
+
+func firstConstExpr(tt TokenType) bool {
+	return firstCase(tt)
+}
+
+func firstExpr(tt TokenType) bool {
+	return firstCase(tt)
+}
+
+func firstSet(tt TokenType) bool { return tt == TokLbrace }
+
+func firstElement(tt TokenType) bool {
+	return firstCase(tt)
+}
+
+func firstRelation(tt TokenType) bool {
+	switch tt {
+	case TokEq, TokLt, TokIN, TokLeq, TokIS, TokGeq, TokHash, TokGt:
+		return true
+	default:
+		return false
+	}
+}
+
+func firstMulOp(tt TokenType) bool {
+	return tt == TokDIV || tt == TokAmp || tt == TokStar || tt == TokMOD || tt == TokSlash
+}
+
+func firstAddOp(tt TokenType) bool {
+	return tt == TokPlus || tt == TokMinus || tt == TokOR
+}
+
+func firstDesignator(tt TokenType) bool { return tt == TokIdent }
+
+func firstSelector(tt TokenType) bool {
+	return tt == TokDot || tt == TokLpar || tt == TokLbrack || tt == TokHat
+}
+
+func firstExprList(tt TokenType) bool {
+	return firstCase(tt)
+}
+
+func firstIdentList(tt TokenType) bool { return tt == TokIdent }
+func firstNumber(tt TokenType) bool    { return tt == TokInteger || tt == TokReal }
+
+// NewParser constructs a new parser instance.
+func NewParser(m *AstModel, s Scanner) *Parser {
+	p := &Parser{
+		scanner: s,
+		mdl:     m,
+		thisMod: nil,
+	}
+	p.predefSymbols = make([][]byte, attrMaxAttr)
+	p.predefSymbols[attrUNTRACED] = GetSymbol([]byte("UNTRACED"))
+	p.predefSymbols[attrACTIVE] = GetSymbol([]byte("ACTIVE"))
+	p.predefSymbols[attrDELEGATE] = GetSymbol([]byte("DELEGATE"))
+	p.predefSymbols[attrEXCLUSIVE] = GetSymbol([]byte("EXCLUSIVE"))
+	p.predefSymbols[attrPRIORITY] = GetSymbol([]byte("PRIORITY"))
+	p.predefSymbols[attrSAFE] = GetSymbol([]byte("SAFE"))
+	p.predefSymbols[attrFFI] = GetSymbol([]byte("C"))
+	p.BEGIN = GetSymbol([]byte("BEGIN"))
 	return p
 }
 
-// RunParser starts the parsing process
+// RunParser runs the parser on the provided scanner.
 func (p *Parser) RunParser() {
-	p.errors = p.errors[:0]
+	p.errors = nil
 	p.next()
-	p.parseModule()
+	p.Module()
 }
 
-// TakeResult returns the parsed module and transfers ownership
+// TakeResult returns the parsed module declaration and transfers ownership.
 func (p *Parser) TakeResult() *Declaration {
-	result := p.thisMod
+	res := p.thisMod
 	p.thisMod = nil
-	return result
+	return res
 }
 
-// next advances to the next token
+func (p *Parser) error(msg string, pos RowCol, path string) {
+	p.errors = append(p.errors, ParseError{
+		Msg:  msg,
+		Pos:  pos,
+		Path: path,
+	})
+}
+
 func (p *Parser) next() {
 	p.cur = p.la
 	p.la = p.scanner.Next()
-
 	for p.la.Type == TokInvalid {
-		p.errors = append(p.errors, NewParseError(string(p.la.Val), p.la.ToRowCol(), p.la.SourcePath))
+		p.error(string(p.la.Val), p.la.ToRowCol(), p.la.SourcePath)
 		p.la = p.scanner.Next()
 	}
 }
 
-// peek returns token at offset
 func (p *Parser) peek(off int) Token {
 	if off == 1 {
 		return p.la
 	} else if off == 0 {
 		return p.cur
-	} else {
-		return p.scanner.Peek(off - 1)
 	}
+	return p.scanner.Peek(off - 1)
 }
 
-// expect checks for expected token and advances
-func (p *Parser) expect(tokenType TokenType, where string) bool {
-	if p.la.Type == tokenType {
+func (p *Parser) invalid(what string) {
+	p.error(fmt.Sprintf("invalid %s", what), p.la.ToRowCol(), p.la.SourcePath)
+}
+
+func (p *Parser) expect(tt TokenType, _ bool, where string) bool {
+	if p.la.Type == tt {
 		p.next()
 		return true
 	}
-
-	p.errors = append(p.errors, NewParseError(
-		fmt.Sprintf("'%s' expected in %s", TokenTypeString(tokenType), where),
-		p.la.ToRowCol(), p.la.SourcePath))
+	p.error(fmt.Sprintf("'%s' expected in %s", TokenTypeString(tt), where),
+		p.la.ToRowCol(), p.la.SourcePath)
 	return false
 }
 
-// error adds a parsing error
-func (p *Parser) syntaxError(msg string) {
-	p.errors = append(p.errors, NewParseError(msg, p.la.ToRowCol(), p.la.SourcePath))
-}
-
-// semanticError adds a semantic error at specific position
-func (p *Parser) semanticError(msg string, pos RowCol) {
-	p.errors = append(p.errors, NewParseError(msg, pos, p.la.SourcePath))
-}
-
-// addDecl adds a declaration to the current scope
-func (p *Parser) addDecl(token Token, visi Visi, kind DeclKind) *Declaration {
-	name := string(token.Val)
-	decl := p.model.AddDecl(name)
-	if decl == nil {
-		p.semanticError(fmt.Sprintf("duplicate declaration: %s", name), token.ToRowCol())
-		return nil
-	}
-
-	decl.Kind = int(kind)
-	decl.Visi = visi
-	decl.Pos = token.ToRowCol()
-	return decl
-}
-
-// parseModule parses a module
-func (p *Parser) parseModule() {
+// Module -> parses a MODULE
+func (p *Parser) Module() {
 	if p.la.Type != TokMODULE {
-		p.syntaxError("not an ActiveOberon module")
+		p.la.SourcePath = p.scanner.Source()
+		p.la.LineNr = 1
+		p.errorTok(p.la, "not an Oberon module")
 		return
 	}
 
 	m := NewDeclaration()
 	m.Kind = int(DECL_Module)
+	if p.thisMod != nil {
+		// GC in Go; in C++ code would free tree here
+	}
 	p.thisMod = m
-	p.model.OpenScope(m)
 
-	p.expect(TokMODULE, "Module")
-	p.expect(TokIdent, "Module")
+	p.mdl.OpenScope(m)
 
+	p.expect(TokMODULE, false, "Module")
+	p.expect(TokIdent, false, "Module")
 	m.Name = p.cur.Val
 	m.Pos = p.cur.ToRowCol()
 
-	moduleData := &ModuleData{
-		SourcePath: p.scanner.Source(),
-		FullName:   p.cur.Val,
+	md := ModuleData{}
+	md.SourcePath = p.scanner.Source()
+	md.FullName = p.cur.Val
+
+	p.expect(TokSemi, false, "Module")
+
+	if firstImportList(p.la.Type) {
+		p.ImportList()
 	}
-	m.Data = moduleData
+	p.DeclSeq(false)
 
-	p.expect(TokSemi, "Module")
-
-	if p.firstImportList() {
-		p.parseImportList()
-	}
-
-	p.parseDeclSeq(false)
-
-	if p.firstBody() {
-		p.la.Val = p.beginSymbol
-		procDecl := p.addDecl(p.la, VISI_Private, DECL_Procedure)
-		if procDecl != nil {
-			procDecl.Begin = true
-			p.model.OpenScope(procDecl)
-			procDecl.Body = p.parseBody()
-			p.model.CloseScope(false)
+	if firstBody(p.la.Type) {
+		// BEGIN ... turned into an injected procedure
+		p.la.Val = p.BEGIN
+		procDecl := p.addDecl(p.la, uint8(DECL_Private()), int(DECL_Procedure)) // visi value mapped later
+		if procDecl == nil {
+			return
 		}
+		procDecl.Begin = true
+		p.mdl.OpenScope(procDecl)
+		procDecl.Body = p.Body()
+		p.mdl.CloseScope(false)
 	}
 
-	p.expect(TokEND, "Module")
-	p.expect(TokIdent, "Module")
+	p.expect(TokEND, false, "Module")
+	p.expect(TokIdent, false, "Module")
+	md.End = p.cur.ToRowCol()
+	m.Data = md
 
-	moduleData.End = p.cur.ToRowCol()
-	p.model.CloseScope(false)
+	p.mdl.CloseScope(false)
 
 	if p.la.Type != TokDot {
-		p.syntaxError("expecting a dot at the end of a module")
+		// do not call next()
+		p.error("expecting a dot at the end of a module", p.la.ToRowCol(), p.la.SourcePath)
 	}
 }
 
-// parseImportList parses import declarations
-func (p *Parser) parseImportList() {
-	p.expect(TokIMPORT, "ImportList")
-	p.parseImportDecl()
-
-	for p.la.Type == TokComma {
-		p.expect(TokComma, "ImportList")
-		p.parseImportDecl()
-	}
-
-	p.expect(TokSemi, "ImportList")
-}
-
-// parseImportDecl parses a single import declaration
-func (p *Parser) parseImportDecl() {
+func (p *Parser) ImportDecl() {
 	var localName Token
-
 	if p.peek(1).Type == TokIdent && p.peek(2).Type == TokColonEq {
-		p.expect(TokIdent, "ImportDecl")
+		p.expect(TokIdent, false, "ImportDecl")
 		localName = p.cur
-		p.expect(TokColonEq, "ImportDecl")
+		p.expect(TokColonEq, false, "ImportDecl")
 	}
-
-	p.expect(TokIdent, "ImportDecl")
+	p.expect(TokIdent, false, "ImportDecl")
 	module := p.cur
-
-	if localName.Type == 0 {
+	if localName.Type == TokInvalid {
 		localName = module
 	}
+	importDecl := p.addDecl(localName, 0, int(DECL_Import))
+	if importDecl == nil {
+		return
+	}
+	imp := &Import{
+		ModuleName: module.Val,
+		ImportedAt: module.ToRowCol(),
+		Importer:   p.thisMod,
+	}
+	importDecl.Data = imp
+}
 
-	importDecl := p.addDecl(localName, VISI_NA, DECL_Import)
-	if importDecl != nil {
-		importData := &Import{
-			ModuleName: module.Val,
-			ImportedAt: module.ToRowCol(),
-			Importer:   p.thisMod,
+func (p *Parser) ImportList() {
+	p.expect(TokIMPORT, false, "ImportList")
+	p.ImportDecl()
+	for p.la.Type == TokComma {
+		p.expect(TokComma, false, "ImportList")
+		p.ImportDecl()
+	}
+	p.expect(TokSemi, false, "ImportList")
+}
+
+// DeclSeq handles CONST, TYPE, VAR, and PROCEDURE sequences
+func (p *Parser) DeclSeq(inObjectType bool) {
+	for p.la.Type == TokCONST || p.la.Type == TokTYPE || p.la.Type == TokVAR || firstProcDecl(p.la.Type) {
+		if !inObjectType && p.la.Type == TokCONST {
+			p.expect(TokCONST, false, "DeclSeq")
+			for firstConstDecl(p.la.Type) {
+				p.ConstDecl()
+				p.expect(TokSemi, false, "DeclSeq")
+			}
+		} else if !inObjectType && p.la.Type == TokTYPE {
+			p.expect(TokTYPE, false, "DeclSeq")
+			for firstTypeDecl(p.la.Type) {
+				p.TypeDecl()
+				p.expect(TokSemi, false, "DeclSeq")
+			}
+		} else if p.la.Type == TokVAR {
+			p.expect(TokVAR, false, "DeclSeq")
+			for firstVarDecl(p.la.Type) {
+				p.VarDecl(inObjectType)
+				p.expect(TokSemi, false, "DeclSeq")
+			}
+		} else if firstProcDecl(p.la.Type) ||
+			p.la.Type == TokEND || p.la.Type == TokCONST || p.la.Type == TokVAR || p.la.Type == TokTYPE ||
+			p.la.Type == TokCODE || p.la.Type == TokBEGIN || p.la.Type == TokPROCEDURE {
+			for firstProcDecl(p.la.Type) {
+				p.ProcDecl()
+				p.expect(TokSemi, false, "DeclSeq")
+			}
+		} else {
+			p.invalid("DeclSeq")
+			p.next()
 		}
-		importDecl.Data = importData
 	}
 }
 
-// parseDeclSeq parses declaration sequence
-func (p *Parser) parseDeclSeq(inObjectType bool) {
-	for p.firstDeclSeq() {
-		switch p.la.Type {
-		case TokCONST:
-			p.parseConstDecl()
-		case TokTYPE:
-			p.parseTypeDecl()
-		case TokVAR:
-			p.parseVarDecl(inObjectType)
-		case TokPROCEDURE:
-			p.parseProcDecl()
-		}
+func (p *Parser) ConstDecl() {
+	id := p.IdentDef()
+	p.expect(TokEq, false, "ConstDecl")
+	d := p.addDecl(id.Name, uint8(id.Visi), int(DECL_ConstDecl))
+	if d == nil {
+		return
+	}
+	d.Expr = p.ConstExpr()
+}
+
+func (p *Parser) TypeDecl() {
+	id := p.IdentDef()
+	p.expect(TokEq, false, "TypeDecl")
+	d := p.addDecl(id.Name, uint8(id.Visi), int(DECL_TypeDecl))
+	if d == nil {
+		return
+	}
+	d.SetType(p.Type_())
+	if d.GetType() != nil && d.GetType().Decl == nil {
+		d.GetType().Decl = d
 	}
 }
 
-// parseConstDecl parses constant declarations
-func (p *Parser) parseConstDecl() {
-	p.expect(TokCONST, "ConstDecl")
-
-	for p.firstConstDecl() {
-		id := p.parseIdentDef()
-		if !id.IsValid() {
-			break
+func (p *Parser) VarDecl(inObjectType bool) {
+	ids := p.IdentList()
+	p.expect(TokColon, false, "VarDecl")
+	t := p.Type_()
+	if t == nil {
+		return
+	}
+	outer := p.mdl.GetTopScope()
+	for i := range ids {
+		id := ids[i]
+		kind := int(DECL_VarDecl)
+		if outer.Kind != int(DECL_Module) {
+			kind = int(DECL_LocalDecl)
 		}
-
-		decl := p.addDecl(id.Name, id.Visi, DECL_ConstDecl)
-		if decl == nil {
-			break
+		d := p.addDecl(id.Name, uint8(id.Visi), kind)
+		if d == nil {
+			continue
 		}
-
-		p.expect(TokEq, "ConstDecl")
-		decl.Expr = p.parseConstExpr()
-		p.expect(TokSemi, "ConstDecl")
+		if inObjectType {
+			d.Kind = int(DECL_Field)
+		} else {
+			d.Outer = outer
+		}
+		d.SetType(t)
 	}
 }
 
-// parseTypeDecl parses type declarations
-func (p *Parser) parseTypeDecl() {
-	p.expect(TokTYPE, "TypeDecl")
-
-	for p.firstTypeDecl() {
-		id := p.parseIdentDef()
-		if !id.IsValid() {
-			break
-		}
-
-		decl := p.addDecl(id.Name, id.Visi, DECL_TypeDecl)
-		if decl == nil {
-			break
-		}
-
-		p.expect(TokEq, "TypeDecl")
-		decl.SetType(p.parseType())
-		p.expect(TokSemi, "TypeDecl")
-	}
+func (p *Parser) Assembler() []byte {
+	p.expect(TokCODE, false, "Assembler")
+	return p.cur.Val
 }
 
-// parseVarDecl parses variable declarations
-func (p *Parser) parseVarDecl(inObjectType bool) {
-	p.expect(TokVAR, "VarDecl")
-
-	for p.firstVarDecl() {
-		identList := p.parseIdentList()
-		p.expect(TokColon, "VarDecl")
-		varType := p.parseType()
-
-		for _, id := range identList {
-			var kind DeclKind
-			if inObjectType {
-				kind = DECL_Field
+func (p *Parser) ProcDecl() {
+	p.expect(TokPROCEDURE, false, "ProcDecl")
+	if firstProcHead(p.la.Type) {
+		procDecl := p.ProcHead(false)
+		p.expect(TokSemi, false, "ProcDecl")
+		p.mdl.OpenScope(procDecl)
+		p.DeclSeq(false)
+		if firstBody(p.la.Type) || firstAssembler(p.la.Type) {
+			if firstBody(p.la.Type) {
+				procDecl.Body = p.Body()
+			} else if firstAssembler(p.la.Type) {
+				procDecl.Data = p.Assembler()
+				procDecl.Body = NewStatement(STMT_Assembler, p.cur.ToRowCol())
 			} else {
-				kind = DECL_VarDecl
-			}
-
-			decl := p.addDecl(id.Name, id.Visi, kind)
-			if decl != nil {
-				decl.SetType(varType)
+				p.invalid("ProcDecl")
 			}
 		}
-
-		p.expect(TokSemi, "VarDecl")
-	}
-}
-
-// parseProcDecl parses procedure declarations
-func (p *Parser) parseProcDecl() {
-	p.expect(TokPROCEDURE, "ProcDecl")
-
-	// Check for procedure heading modifiers
-	var attrs map[Attrs]bool
-	if p.la.Type == TokLbrace {
-		attrs = p.parseAttributes()
-	}
-
-	id := p.parseIdentDef()
-	if !id.IsValid() {
-		return
-	}
-
-	procDecl := p.addDecl(id.Name, id.Visi, DECL_Procedure)
-	if procDecl == nil {
-		return
-	}
-
-	// Apply attributes
-	if attrs != nil {
-		if attrs[ATTR_ACTIVE] {
-			procDecl.Active = true
-		}
-		if attrs[ATTR_EXCLUSIVE] {
-			procDecl.Exclusive = true
-		}
-		// Apply other attributes as needed
-	}
-
-	p.model.OpenScope(procDecl)
-
-	// Parse formal parameters
-	if p.la.Type == TokLpar {
-		p.parseFormalParams()
-	}
-
-	// Parse return type
-	if p.la.Type == TokColon {
-		p.expect(TokColon, "ProcDecl")
-		returnType := p.parseType()
-		procDecl.SetType(returnType)
+		p.expect(TokEND, false, "ProcDecl")
+		p.expect(TokIdent, false, "ProcDecl")
+		p.mdl.CloseScope(false)
+	} else if p.la.Type == TokHat {
+		p.expect(TokHat, false, "ProcDecl")
+		p.ProcHead(true)
 	} else {
-		procDecl.SetType(p.model.GetType(TYPE_NoType))
+		p.invalid("ProcDecl")
 	}
-
-	p.expect(TokSemi, "ProcDecl")
-
-	// Parse procedure body
-	if p.firstDeclSeq() {
-		p.parseDeclSeq(false)
-	}
-
-	if p.firstBody() {
-		procDecl.Body = p.parseBody()
-	}
-
-	p.expect(TokEND, "ProcDecl")
-	p.expect(TokIdent, "ProcDecl")
-	p.expect(TokSemi, "ProcDecl")
-
-	p.model.CloseScope(false)
 }
 
-// parseFormalParams parses formal parameters
-func (p *Parser) parseFormalParams() {
-	p.expect(TokLpar, "FormalParams")
-
-	if p.firstFormalParam() {
-		p.parseFormalParam()
-		for p.la.Type == TokSemi {
-			p.expect(TokSemi, "FormalParams")
-			p.parseFormalParam()
+func (p *Parser) ProcHead(forwardDecl bool) *Declaration {
+	if firstSysFlag(p.la.Type) {
+		p.SysFlag() // ignore
+	}
+	isConstr := false
+	if p.la.Type == TokStar || p.la.Type == TokAmp || p.la.Type == TokMinus {
+		if p.la.Type == TokStar {
+			p.expect(TokStar, false, "ProcHead")
+		} else if p.la.Type == TokAmp {
+			p.expect(TokAmp, false, "ProcHead")
+			isConstr = true
+		} else if p.la.Type == TokMinus {
+			p.expect(TokMinus, false, "ProcHead")
+		} else {
+			p.invalid("ProcHead")
 		}
 	}
-
-	p.expect(TokRpar, "FormalParams")
-}
-
-// parseFormalParam parses a formal parameter
-func (p *Parser) parseFormalParam() {
-	var varParam bool
-	if p.la.Type == TokVAR {
-		p.expect(TokVAR, "FormalParam")
-		varParam = true
-	}
-
-	identList := p.parseIdentList()
-	p.expect(TokColon, "FormalParam")
-	paramType := p.parseType()
-
-	for _, id := range identList {
-		paramDecl := p.addDecl(id.Name, id.Visi, DECL_ParamDecl)
-		if paramDecl != nil {
-			paramDecl.SetType(paramType)
-			paramDecl.VarParam = varParam
+	id := p.IdentDef()
+	if forwardDecl {
+		if firstFormalPars(p.la.Type) {
+			p.mdl.OpenScope(nil)
+			ret := p.FormalPars()
+			// discard parsing-only type
+			_ = ret
+			d := p.mdl.CloseScope(true)
+			// GC will reclaim
+			_ = d
 		}
-	}
-}
-
-// parseType parses type expressions
-func (p *Parser) parseType() *Type {
-	switch p.la.Type {
-	case TokIdent:
-		return p.parseNamedType()
-	case TokARRAY:
-		return p.parseArrayType()
-	case TokRECORD:
-		return p.parseRecordType()
-	case TokOBJECT:
-		return p.parseObjectType()
-	case TokPOINTER:
-		return p.parsePointerType()
-	case TokPROCEDURE:
-		return p.parseProcType()
-	default:
-		p.syntaxError("type expected")
-		return p.model.GetType(TYPE_Undefined)
-	}
-}
-
-func NewType() *Type {
-	t := &Type{}
-	t.Meta = MetaType
-	return t
-}
-
-// parseNamedType parses named types and qualidents
-func (p *Parser) parseNamedType() *Type {
-	t := NewType()
-	t.Kind = int(TYPE_NameRef)
-	t.Quali = p.parseQualident()
-	return t
-}
-
-func (p *Parser) firstConstExpr() bool {
-	return p.firstExpr()
-}
-
-// parseArrayType parses array types
-func (p *Parser) parseArrayType() *Type {
-	pos := p.la.ToRowCol()
-	p.expect(TokARRAY, "ArrayType")
-
-	// Create array type
-	arr := NewType()
-	arr.Kind = int(TYPE_Array)
-	arr.Pos = pos
-
-	// Parse optional system flags ([SAFE], [UNTRACED], etc.)
-	if p.firstSysFlag() {
-		_ = p.parseSysFlag() // Parse but ignore for now
-	}
-
-	// Parse array dimensions - can be multiple expressions separated by commas
-	var dimensions []*Expression
-
-	if p.firstConstExpr() {
-		// Parse first dimension
-		expr := p.parseConstExpr()
-		if expr == nil {
-			return nil
-		}
-		dimensions = append(dimensions, expr)
-
-		// Parse additional dimensions separated by commas
-		for p.la.Type == TokComma {
-			p.expect(TokComma, "ArrayType")
-			expr = p.parseConstExpr()
-			if expr == nil {
-				return nil
-			}
-			dimensions = append(dimensions, expr)
-		}
-	}
-
-	p.expect(TokOF, "ArrayType")
-
-	// Parse element type
-	elementType := p.parseType()
-	if elementType == nil {
 		return nil
 	}
+	procDecl := p.addDecl(id.Name, uint8(id.Visi), int(DECL_Procedure))
+	if procDecl == nil {
+		return nil
+	}
+	procDecl.Constructor = isConstr
 
-	if len(dimensions) == 0 {
-		// Dynamic array: ARRAY OF ElementType
-		arr.SetType(elementType)
-		arr.Expr = nil
-	} else {
-		// Start with the element type
-		currentType := elementType
+	procDecl.Outer = p.mdl.GetTopScope()
+	p.mdl.OpenScope(procDecl)
+	if firstFormalPars(p.la.Type) {
+		procDecl.SetType(p.FormalPars())
+	}
+	p.mdl.CloseScope(false)
+	return procDecl
+}
 
-		// Build array types from right to left (innermost first)
-		for i := len(dimensions) - 1; i >= 0; i-- {
-			dimType := NewType()
-			dimType.Kind = int(TYPE_Array)
-			dimType.Pos = dimensions[i].Pos
-			dimType.SetType(currentType)
-			dimType.Expr = dimensions[i]
-			currentType = dimType
+func (p *Parser) SysFlag() bool {
+	p.expect(TokLbrack, false, "SysFlag")
+	p.expect(TokIdent, false, "SysFlag")
+	res := bytes.Equal(p.cur.Val, p.predefSymbols[attrUNTRACED]) ||
+		bytes.Equal(p.cur.Val, p.predefSymbols[attrFFI])
+	if !res {
+		p.errorTok(p.cur, fmt.Sprintf("unknown system flag '%s'", string(p.cur.Val)))
+	}
+	p.expect(TokRbrack, false, "SysFlag")
+	return res
+}
+
+func (p *Parser) FormalPars() *Type {
+	p.expect(TokLpar, false, "FormalPars")
+	if firstFPSection(p.la.Type) {
+		p.FPSection()
+		for p.la.Type == TokSemi {
+			p.expect(TokSemi, false, "FormalPars")
+			p.FPSection()
 		}
+	}
+	p.expect(TokRpar, false, "FormalPars")
+	var res *Type = nil
+	if p.la.Type == TokColon {
+		p.expect(TokColon, false, "FormalPars")
+		res = p.NamedType()
+	}
+	if res == nil {
+		res = p.mdl.GetType(TYPE_NoType)
+	}
+	return res
+}
 
-		// The outermost array type becomes our result
+func (p *Parser) FPSection() {
+	varParam := false
+	if p.la.Type == TokVAR {
+		p.expect(TokVAR, false, "FPSection")
+		varParam = true
+	}
+	p.expect(TokIdent, false, "FPSection")
+	var l TokenList
+	l = append(l, p.cur)
+	for p.la.Type == TokComma {
+		p.expect(TokComma, false, "FPSection")
+		p.expect(TokIdent, false, "FPSection")
+		l = append(l, p.cur)
+	}
+	p.expect(TokColon, false, "FPSection")
+	t := p.Type_()
+	for i := range l {
+		d := p.addDecl(l[i], 0, int(DECL_ParamDecl))
+		if d == nil {
+			continue
+		}
+		d.VarParam = varParam
+		d.SetType(t)
+	}
+}
 
-		arr.Expr = dimensions[0]
-		arr.Pos = dimensions[0].Pos
-
+func (p *Parser) ArrayType() *Type {
+	var lens []*Expression
+	p.expect(TokARRAY, false, "ArrayType")
+	tok := p.cur
+	if firstSysFlag(p.la.Type) {
+		p.SysFlag() // ignore
+	}
+	if firstConstExpr(p.la.Type) {
+		e := p.ConstExpr()
+		if e == nil {
+			return nil
+		}
+		lens = append(lens, e)
+		for p.la.Type == TokComma {
+			p.expect(TokComma, false, "ArrayType")
+			e = p.ConstExpr()
+			if e == nil {
+				return nil
+			}
+			lens = append(lens, e)
+		}
+	}
+	p.expect(TokOF, false, "ArrayType")
+	et := p.Type_()
+	arr := &Type{}
+	arr.Kind = int(TYPE_Array)
+	arr.Pos = tok.ToRowCol()
+	if len(lens) != 0 {
+		arr.Expr = lens[0]
+		arr.Pos = lens[0].Pos
 		curDim := arr
-		// this is a multi-dim array; make sure that each dimension has an explicit Array type
-		for i := 1; i < len(dimensions); i++ {
-			nextDim := NewType()
+		// multi-dim: chain Type::Array nodes
+		for i := 1; i < len(lens); i++ {
+			nextDim := &Type{}
 			nextDim.Kind = int(TYPE_Array)
-			nextDim.Pos = dimensions[i].Pos
-			nextDim.Expr = dimensions[i]
+			nextDim.Pos = lens[i].Pos
+			nextDim.Expr = lens[i]
 			curDim.SetType(nextDim)
 			curDim = nextDim
 		}
-		curDim.SetType(elementType) // the highest dim gets the element type
+		curDim.SetType(et)
+	} else {
+		arr.SetType(et)
 	}
-
 	return arr
 }
 
-// parseRecordType parses record types
-func (p *Parser) parseRecordType() *Type {
-	p.expect(TokRECORD, "RecordType")
-
-	t := NewType()
-	t.Kind = int(TYPE_Record)
-
-	// Parse base type
+func (p *Parser) RecordType() *Type {
+	p.expect(TokRECORD, false, "RecordType")
+	rec := &Type{}
+	rec.Pos = p.cur.ToRowCol()
+	rec.Kind = int(TYPE_Record)
+	p.mdl.OpenScope(nil)
+	if firstSysFlag(p.la.Type) {
+		p.SysFlag() // ignored
+	}
 	if p.la.Type == TokLpar {
-		p.expect(TokLpar, "RecordType")
-		t.TypeRef = p.parseType()
-		p.expect(TokRpar, "RecordType")
+		p.expect(TokLpar, false, "RecordType")
+		rec.SetType(p.NamedType())
+		p.expect(TokRpar, false, "RecordType")
 	}
-
-	p.model.OpenScope(NewDeclaration())
-
-	// Parse field list
-	if p.firstFieldList() {
-		p.parseFieldList()
+	if firstFieldList(p.la.Type) {
+		p.FieldList()
 	}
-
-	fields := p.model.toList(p.model.CloseScope(false))
-	for _, field := range fields {
-		t.Subs = append(t.Subs, field)
+	rec.Subs = p.mdl.toList(p.mdl.CloseScope(true))
+	outer := p.mdl.GetTopScope()
+	for i := range rec.Subs {
+		rec.Subs[i].Outer = outer
 	}
-
-	p.expect(TokEND, "RecordType")
-
-	return t
+	p.expect(TokEND, false, "RecordType")
+	return rec
 }
 
-func (p *Parser) firstSysFlag() bool {
-	return p.la.Type == TokLbrack
+func (p *Parser) PointerType() *Type {
+	p.expect(TokPOINTER, false, "PointerType")
+	tok := p.cur
+	if firstSysFlag(p.la.Type) {
+		p.SysFlag() // ignore
+	}
+	ptr := &Type{}
+	ptr.Kind = int(TYPE_Pointer)
+	ptr.Pos = tok.ToRowCol()
+	p.expect(TokTO, false, "PointerType")
+	ptr.SetType(p.Type_())
+	return ptr
 }
 
-func (p *Parser) parseSysFlag() bool {
-	p.expect(TokLbrack, "SysFlag")
-	p.expect(TokIdent, "SysFlag")
-
-	// Check if this is a known system flag
-	flagName := string(p.cur.Val)
-	isKnown := false
-
-	for _, symbol := range p.predefSymbols {
-		if symbol != nil && string(symbol) == flagName {
-			isKnown = true
-			break
-		}
-	}
-
-	if !isKnown {
-		switch flagName {
-		case "UNTRACED", "SAFE", "C":
-			isKnown = true
-		}
-	}
-
-	if !isKnown {
-		p.syntaxError("unknown system flag: " + flagName)
-	}
-
-	p.expect(TokRbrack, "SysFlag")
-	return isKnown
-}
-
-func (p *Parser) parseObjectType() *Type {
-	pos := p.la.ToRowCol()
-	p.expect(TokOBJECT, "ObjectType")
-
-	// Create new object type
-	obj := NewType()
+func (p *Parser) ObjectType() *Type {
+	p.expect(TokOBJECT, false, "ObjectType")
+	obj := &Type{}
+	obj.Pos = p.cur.ToRowCol()
 	obj.Kind = int(TYPE_Object)
-	obj.Pos = pos
-
-	if p.firstSysFlag() || p.la.Type == TokLpar || p.firstDeclSeq() || p.firstBody() || p.la.Type == TokEND {
-		// Check for system flags (like {SAFE}, {UNTRACED}, etc.)
-		if p.firstSysFlag() {
-			_ = p.parseSysFlag() // Parse but ignore for now
+	if firstSysFlag(p.la.Type) || p.la.Type == TokLpar || firstDeclSeq(p.la.Type) || firstBody(p.la.Type) || p.la.Type == TokEND {
+		if firstSysFlag(p.la.Type) {
+			p.SysFlag()
 		}
-
-		// Open new scope for object members
-		p.model.OpenScope(nil)
-
-		// Parse optional base class in parentheses: OBJECT (BaseClass)
+		p.mdl.OpenScope(nil)
 		if p.la.Type == TokLpar {
-			p.expect(TokLpar, "ObjectType")
-			obj.TypeRef = p.parseNamedType()
-			p.expect(TokRpar, "ObjectType")
+			p.expect(TokLpar, false, "ObjectType")
+			obj.SetType(p.NamedType())
+			p.expect(TokRpar, false, "ObjectType")
 		}
-
-		// Parse object member declarations (fields, methods, etc.)
-		p.parseDeclSeq(true) // true = inObjectType
-
-		// Parse optional object body (constructor/initializer)
-		if p.firstBody() {
-			// Create implicit constructor procedure
-			beginToken := p.la
-			beginToken.Val = p.beginSymbol
-
-			procDecl := p.addDecl(beginToken, VISI_Private, DECL_Procedure)
-			if procDecl != nil {
-				procDecl.Begin = true // Mark as constructor/initializer
-				p.model.OpenScope(procDecl)
-				procDecl.Body = p.parseBody()
-				p.model.CloseScope(false)
+		p.DeclSeq(true)
+		if firstBody(p.la.Type) {
+			p.la.Val = p.BEGIN
+			procDecl := p.addDecl(p.la, uint8(DECL_Private()), int(DECL_Procedure))
+			if procDecl == nil {
+				// defensive
+			} else {
+				procDecl.Begin = true
+				p.mdl.OpenScope(procDecl)
+				procDecl.Body = p.Body()
+				p.mdl.CloseScope(false)
 			}
 		}
-
-		// Get all members that were declared in this object
-		members := p.model.toList(p.model.CloseScope(true))
-
-		// Add members to object type
-		obj.Subs = make([]*Declaration, len(members))
-		for i, member := range members {
-			obj.Subs[i] = member
-			// Set proper outer scope for members
-			if obj.Decl != nil {
-				member.Outer = obj.Decl
-			}
-		}
-
-		p.expect(TokEND, "ObjectType")
-
-		// Optional object type identifier after END
+		obj.Subs = p.mdl.toList(p.mdl.CloseScope(true))
+		p.expect(TokEND, false, "ObjectType")
 		if p.la.Type == TokIdent {
-			p.expect(TokIdent, "ObjectType")
+			p.expect(TokIdent, false, "ObjectType")
 		}
 	}
-
 	return obj
 }
 
-// parsePointerType parses pointer types
-func (p *Parser) parsePointerType() *Type {
-	p.expect(TokPOINTER, "PointerType")
-	p.expect(TokTO, "PointerType")
-
-	t := NewType()
-	t.Kind = int(TYPE_Pointer)
-	t.TypeRef = p.parseType()
-
-	return t
-}
-
-// parseProcType parses procedure types
-func (p *Parser) parseProcType() *Type {
-	p.expect(TokPROCEDURE, "ProcType")
-
-	t := NewType()
+func (p *Parser) ProcedureType() *Type {
+	p.expect(TokPROCEDURE, false, "ProcedureType")
+	p.mdl.OpenScope(nil)
+	t := &Type{}
 	t.Kind = int(TYPE_Procedure)
-
-	p.model.OpenScope(NewDeclaration())
-
-	// Parse formal parameters
-	if p.la.Type == TokLpar {
-		p.parseFormalParams()
+	t.Pos = p.cur.ToRowCol()
+	if firstSysFlag(p.la.Type) {
+		p.SysFlag()
 	}
-
-	// Parse return type
-	if p.la.Type == TokColon {
-		p.expect(TokColon, "ProcType")
-		t.TypeRef = p.parseType()
+	if firstAttributes(p.la.Type) {
+		a := p.Attributes()
+		if a[attrDELEGATE] {
+			t.Delegate = true
+		}
 	}
-
-	params := p.model.toList(p.model.CloseScope(false))
-	for _, param := range params {
-		t.Subs = append(t.Subs, param)
+	ret := p.mdl.GetType(TYPE_NoType)
+	if firstFormalPars(p.la.Type) {
+		ret = p.FormalPars()
 	}
-
+	t.Subs = p.mdl.toList(p.mdl.CloseScope(true))
+	t.SetType(ret)
 	return t
 }
 
-// parseFieldList parses record field lists
-func (p *Parser) parseFieldList() {
-	p.parseFieldDecl()
-	for p.la.Type == TokSemi {
-		p.expect(TokSemi, "FieldList")
-		if p.firstFieldDecl() {
-			p.parseFieldDecl()
-		}
-	}
+func (p *Parser) AliasType() *Type {
+	return p.NamedType()
 }
 
-// parseFieldDecl parses field declarations
-func (p *Parser) parseFieldDecl() {
-	identList := p.parseIdentList()
-	p.expect(TokColon, "FieldDecl")
-	fieldType := p.parseType()
-
-	for _, id := range identList {
-		fieldDecl := p.addDecl(id.Name, id.Visi, DECL_Field)
-		if fieldDecl != nil {
-			fieldDecl.SetType(fieldType)
-		}
-	}
-}
-
-// parseQualident parses qualified identifiers
-func (p *Parser) parseQualident() *Qualident {
-	p.expect(TokIdent, "Qualident")
-	first := p.cur.Val
-
-	if p.la.Type == TokDot {
-		p.expect(TokDot, "Qualident")
-		p.expect(TokIdent, "Qualident")
-		second := p.cur.Val
-		return NewQualident(first, second)
-	}
-
-	return NewQualident(first, nil)
-}
-
-// parseIdentDef parses identifier definitions with visibility
-func (p *Parser) parseIdentDef() ID {
-	id := NewID()
-
-	if p.la.Type == TokIdent {
-		p.expect(TokIdent, "IdentDef")
-		id.Name = p.cur
-
-		// Check for visibility marker
-		if p.la.Type == TokStar {
-			p.expect(TokStar, "IdentDef")
-			id.Visi = VISI_ReadOnly
-		} else if p.la.Type == TokMinus {
-			p.expect(TokMinus, "IdentDef")
-			id.Visi = VISI_ReadWrite
-		}
-	}
-
-	return id
-}
-
-// parseIdentList parses identifier lists
-func (p *Parser) parseIdentList() []ID {
-	var identList []ID
-
-	id := p.parseIdentDef()
-	if id.IsValid() {
-		identList = append(identList, id)
-
-		for p.la.Type == TokComma {
-			p.expect(TokComma, "IdentList")
-			id = p.parseIdentDef()
-			if id.IsValid() {
-				identList = append(identList, id)
-			}
-		}
-	}
-
-	return identList
-}
-
-// parseAttributes parses procedure attributes
-func (p *Parser) parseAttributes() map[Attrs]bool {
-	attrs := make(map[Attrs]bool)
-
-	p.expect(TokLbrace, "Attributes")
-
-	if p.la.Type == TokIdent {
-		attr := p.parseAttribute()
-		if attr != ATTR_MaxAttr {
-			attrs[attr] = true
-		}
-
-		for p.la.Type == TokComma {
-			p.expect(TokComma, "Attributes")
-			attr = p.parseAttribute()
-			if attr != ATTR_MaxAttr {
-				attrs[attr] = true
-			}
-		}
-	}
-
-	p.expect(TokRbrace, "Attributes")
-
-	return attrs
-}
-
-// parseAttribute parses a single attribute
-func (p *Parser) parseAttribute() Attrs {
-	if p.la.Type == TokIdent {
-		p.expect(TokIdent, "Attribute")
-		attrName := string(p.cur.Val)
-
-		switch strings.ToUpper(attrName) {
-		case "UNTRACED":
-			return ATTR_UNTRACED
-		case "ACTIVE":
-			return ATTR_ACTIVE
-		case "DELEGATE":
-			return ATTR_DELEGATE
-		case "EXCLUSIVE":
-			return ATTR_EXCLUSIVE
-		case "PRIORITY":
-			return ATTR_PRIORITY
-		case "SAFE":
-			return ATTR_SAFE
-		case "C":
-			return ATTR_FFI
-		default:
-			p.syntaxError("unknown attribute: " + attrName)
-		}
-	}
-	return ATTR_MaxAttr
-}
-
-// Expression parsing methods
-
-func (p *Parser) firstRelation() bool {
-	return p.la.Type == TokEq || p.la.Type == TokHash || p.la.Type == TokLt ||
-		p.la.Type == TokLeq || p.la.Type == TokGt || p.la.Type == TokGeq ||
-		p.la.Type == TokIN || p.la.Type == TokIS
-}
-
-// parseExpr parses expressions
-func (p *Parser) parseExpr() *Expression {
-	res := p.parseSimpleExpr()
-	if res == nil {
-		return nil
-	}
-
-	if p.firstRelation() {
-		tok := p.la
-		p.next()
-		tmp := CreateFromToken(tok.Type, tok.ToRowCol())
-		tmp.Lhs = res
-		tmp.SetType(p.model.GetType(TYPE_BOOLEAN))
-		res = tmp
-		res.Rhs = p.parseSimpleExpr()
-		if res.Rhs == nil {
-			return nil
-		}
+func (p *Parser) Type_() *Type {
+	var res *Type
+	switch {
+	case firstAliasType(p.la.Type):
+		res = p.AliasType()
+	case firstArrayType(p.la.Type):
+		res = p.ArrayType()
+	case firstRecordType(p.la.Type):
+		res = p.RecordType()
+	case firstPointerType(p.la.Type):
+		res = p.PointerType()
+	case firstObjectType(p.la.Type):
+		res = p.ObjectType()
+	case firstProcedureType(p.la.Type):
+		res = p.ProcedureType()
+	default:
+		p.invalid("Type")
 	}
 	return res
 }
 
-func (p *Parser) parseSimpleExpr() *Expression {
-	var op TokenType = TokInvalid
-	var tok Token = p.la
-
-	// Handle unary operators (+ or -)
-	if p.la.Type == TokPlus || p.la.Type == TokMinus {
-		if p.la.Type == TokPlus {
-			p.expect(TokPlus, "SimpleExpr")
-			op = TokPlus
-		} else if p.la.Type == TokMinus {
-			p.expect(TokMinus, "SimpleExpr")
-			op = TokMinus
+func (p *Parser) FieldDecl() {
+	if firstIdentList(p.la.Type) {
+		ids := p.IdentList()
+		p.expect(TokColon, false, "FieldDecl")
+		t := p.Type_()
+		for i := range ids {
+			d := p.addDecl(ids[i].Name, uint8(ids[i].Visi), int(DECL_Field))
+			if d == nil {
+				continue
+			}
+			d.SetType(t)
 		}
-		tok = p.cur
 	}
+}
 
-	res := p.parseTerm()
-	if res == nil {
-		return nil
+func (p *Parser) FieldList() {
+	p.FieldDecl()
+	for p.la.Type == TokSemi {
+		p.expect(TokSemi, false, "FieldList")
+		p.FieldDecl()
 	}
+}
 
-	if op != TokInvalid {
-		var kind ExprKind
-		if op == TokPlus {
-			kind = EXPR_Plus
-		} else {
-			kind = EXPR_Minus
+func (p *Parser) Body() *Statement {
+	return p.StatBlock()
+}
+
+func (p *Parser) Attributes() [attrMaxAttr]bool {
+	var res [attrMaxAttr]bool
+	p.expect(TokLbrace, false, "Attributes")
+	if p.la.Type == TokIdent {
+		a := p.Attribute()
+		if a >= 0 {
+			res[attrKind(a)] = true
 		}
-
-		tmp := NewExpression(kind, tok.ToRowCol())
-		tmp.Lhs = res
-		tmp.SetType(res.GetType()) // Unary operators preserve type
-		res = tmp
+		for p.la.Type == TokComma {
+			p.expect(TokComma, false, "Attributes")
+			a = p.Attribute()
+			if a >= 0 {
+				res[attrKind(a)] = true
+			}
+		}
 	}
+	p.expect(TokRbrace, false, "Attributes")
+	return res
+}
 
-	for p.firstAddOp() {
-		tok := p.la
-		addOpType := p.parseAddOp()
-		if addOpType == TokInvalid {
+func (p *Parser) Attribute() int {
+	p.expect(TokIdent, false, "Attribute")
+	res := -1
+	for i := 1; i < int(attrMaxAttr); i++ {
+		if bytes.Equal(p.predefSymbols[i], p.cur.Val) {
+			res = i
 			break
 		}
-
-		tmp := CreateFromToken(addOpType, tok.ToRowCol())
-		tmp.Lhs = res
-		res = tmp
-
-		res.Rhs = p.parseTerm()
-		if res.Rhs == nil {
-			return nil
-		}
 	}
-
+	if p.la.Type == TokLpar {
+		p.expect(TokLpar, false, "Attribute")
+		p.ConstExpr() // ignore value
+		p.expect(TokRpar, false, "Attribute")
+	}
 	return res
 }
 
-func (p *Parser) firstAddOp() bool {
-	return p.la.Type == TokPlus || p.la.Type == TokMinus || p.la.Type == TokOR
-}
-
-func (p *Parser) parseAddOp() TokenType {
-	if p.la.Type == TokPlus {
-		p.expect(TokPlus, "AddOp")
-		return TokPlus
-	} else if p.la.Type == TokMinus {
-		p.expect(TokMinus, "AddOp")
-		return TokMinus
-	} else if p.la.Type == TokOR {
-		p.expect(TokOR, "AddOp")
-		return TokOR
+func (p *Parser) StatBlock() *Statement {
+	p.expect(TokBEGIN, false, "StatBlock")
+	s := NewStatement(STMT_StatBlock, p.cur.ToRowCol())
+	if firstAttributes(p.la.Type) {
+		a := p.Attributes()
+		s.Active = a[attrACTIVE]
+		s.Exclusive = a[attrEXCLUSIVE]
 	}
-	return TokInvalid
-}
-
-func (p *Parser) firstMulOp() bool {
-	return p.la.Type == TokStar || p.la.Type == TokDIV || p.la.Type == TokMOD ||
-		p.la.Type == TokSlash || p.la.Type == TokAmp
-}
-
-func (p *Parser) parseMulOp() TokenType {
-	if p.la.Type == TokStar {
-		p.expect(TokStar, "MulOp")
-		return TokStar
-	} else if p.la.Type == TokDIV {
-		p.expect(TokDIV, "MulOp")
-		return TokDIV
-	} else if p.la.Type == TokMOD {
-		p.expect(TokMOD, "MulOp")
-		return TokMOD
-	} else if p.la.Type == TokSlash {
-		p.expect(TokSlash, "MulOp")
-		return TokSlash
-	} else if p.la.Type == TokAmp {
-		p.expect(TokAmp, "MulOp")
-		return TokAmp
+	if firstStatSeq(p.la.Type) {
+		s.Body = p.StatSeq()
 	}
-	return TokInvalid
+	return s
 }
 
-func (p *Parser) parseTerm() *Expression {
-	res := p.parseFactor()
-	if res == nil {
+func (p *Parser) StatSeq() *Statement {
+	res := p.Statement_()
+	for p.la.Type == TokSemi {
+		p.expect(TokSemi, false, "StatSeq")
+		s := p.Statement_()
+		if s == nil {
+			continue
+		}
+		if res != nil {
+			res.Append(s)
+		} else {
+			res = s
+		}
+	}
+	if res != nil && p.la.Type == TokEND {
+		end := NewStatement(STMT_End, p.la.ToRowCol())
+		res.Append(end)
+	}
+	return res
+}
+
+func (p *Parser) AssigOrCall() *Statement {
+	t := p.la
+	lhs := p.Designator(true)
+	if lhs == nil {
 		return nil
 	}
-
-	for p.firstMulOp() {
-		tok := p.la
-		mulOpType := p.parseMulOp()
-		if mulOpType == TokInvalid {
-			return nil
-		}
-
-		tmp := CreateFromToken(mulOpType, tok.ToRowCol())
-		tmp.Lhs = res
-		res = tmp
-
-		// Parse right-hand side factor
-		res.Rhs = p.parseFactor() // rhs is never lvalue
-		if res.Rhs == nil {
-			return nil
-		}
-	}
-
-	return res
-}
-
-func (p *Parser) firstDesignator() bool {
-	return p.la.Type == TokIdent
-}
-
-func (p *Parser) firstNumber() bool {
-	return p.la.Type == TokInteger || p.la.Type == TokReal
-}
-
-func (p *Parser) smallestIntType(i uint64) *Type {
-	if i <= 127 { // max value for SHORTINT
-		return p.model.GetType(TYPE_SHORTINT)
-	} else if i <= 32767 { // max value for INTEGER
-		return p.model.GetType(TYPE_INTEGER)
-	} else if i <= 2147483647 { // max value for LONGINT
-		return p.model.GetType(TYPE_LONGINT)
-	} else {
-		return p.model.GetType(TYPE_HUGEINT)
-	}
-}
-
-func (p *Parser) guessRealType(val string) *Type {
-	// Find the decimal point
-	dotPos := strings.Index(val, ".")
-	if dotPos == -1 {
-		if len(val) > 5 {
-			return p.model.GetType(TYPE_LONGREAL)
-		} else {
-			return p.model.GetType(TYPE_REAL)
-		}
-	}
-
-	// Count digits after decimal point
-	fractionalPart := val[dotPos+1:]
-
-	// Remove any exponent part (e/E and following)
-	if ePos := strings.IndexAny(fractionalPart, "eE"); ePos != -1 {
-		fractionalPart = fractionalPart[:ePos]
-	}
-
-	// Count significant decimal digits
-	digitCount := 0
-	for _, ch := range fractionalPart {
-		if ch >= '0' && ch <= '9' {
-			digitCount++
-		} else {
-			break // Stop at first non-digit
-		}
-	}
-
-	// Type inference based on precision (matches C++ logic):
-	// More than 5 decimal digits -> LONGREAL (double precision)
-	// 5 or fewer digits -> REAL (single precision)
-	if digitCount > 5 {
-		return p.model.GetType(TYPE_LONGREAL)
-	} else {
-		return p.model.GetType(TYPE_REAL)
-	}
-}
-
-func (p *Parser) parseNumber() *Expression {
-	res := CreateFromToken(p.la.Type, p.la.ToRowCol())
-
-	if p.la.Type == TokInteger {
-		p.expect(TokInteger, "Number")
-		val := string(p.cur.Val)
-
-		var i uint64
-		if strings.HasSuffix(val, "H") || strings.HasSuffix(val, "h") {
-			// Hexadecimal integer: remove H suffix and parse as hex
-			hexVal := val[:len(val)-1]
-			if parsed, err := strconv.ParseUint(hexVal, 16, 64); err == nil {
-				i = parsed
-			} else {
-				p.syntaxError("invalid hexadecimal number")
-			}
-		} else {
-			// Decimal integer
-			if parsed, err := strconv.ParseUint(val, 10, 64); err == nil {
-				i = parsed
-			} else {
-				p.syntaxError("invalid decimal number")
-			}
-		}
-
-		// Determine smallest suitable integer type
-		res.SetType(p.smallestIntType(i))
-		res.Val = i
-
-	} else if p.la.Type == TokReal {
-		p.expect(TokReal, "Number")
-		val := string(p.cur.Val)
-		originalVal := val
-
-		// Handle suffix-based type determination
-		var explicitType *Type
-
-		if strings.Contains(val, "d") || strings.Contains(val, "D") {
-			// Double precision (LONGREAL) - remove D suffix
-			val = strings.ReplaceAll(val, "d", "e")
-			val = strings.ReplaceAll(val, "D", "e")
-			explicitType = p.model.GetType(TYPE_LONGREAL)
-		} else if strings.Contains(val, "s") || strings.Contains(val, "S") {
-			// Single precision (REAL) - remove S suffix
-			val = strings.ReplaceAll(val, "s", "e")
-			val = strings.ReplaceAll(val, "D", "e")
-			explicitType = p.model.GetType(TYPE_REAL)
-		}
-
-		// Parse the numeric value
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
-			res.Val = parsed
-
-			if explicitType != nil {
-				// Explicit type from suffix
-				res.SetType(explicitType)
-			} else {
-				// NO SUFFIX - GUESS TYPE BASED ON PRECISION (like C++ version)
-				// This is the key missing functionality!
-				guessedType := p.guessRealType(originalVal)
-				res.SetType(guessedType)
-			}
-		} else {
-			p.syntaxError("invalid real number")
-		}
-	} else {
-		p.syntaxError("number expected")
-	}
-
-	return res
-}
-
-func (p *Parser) firstSet() bool {
-	return p.la.Type == TokLbrace
-}
-
-// firstSelector checks if current token is a selector
-func (p *Parser) firstSelector() bool {
-	return p.la.Type == TokDot || p.la.Type == TokLbrack ||
-		p.la.Type == TokHat || p.la.Type == TokLpar
-}
-
-func (p *Parser) dequote(val []byte) []byte {
-	str := string(val)
-	if (strings.HasPrefix(str, "\"") && strings.HasSuffix(str, "\"")) ||
-		(strings.HasPrefix(str, "'") && strings.HasSuffix(str, "'")) {
-		return []byte(str[1 : len(str)-1])
-	}
-	return val
-}
-
-func (p *Parser) firstElement() bool {
-	return p.firstExpr()
-}
-
-func (p *Parser) parseElement() *Expression {
-	res := p.parseExpr()
-	if res == nil {
-		return nil
-	}
-
-	if p.la.Type == Tok2Dot {
-		// Range element: start..end
-		tok := p.la
-		p.expect(Tok2Dot, "Element")
-
-		rhs := p.parseExpr()
+	if p.la.Type == TokColonEq {
+		p.expect(TokColonEq, false, "AssigOrCall")
+		t = p.cur
+		rhs := p.Expr(false)
 		if rhs == nil {
 			return nil
 		}
-
-		rangeExpr := NewExpression(EXPR_Range, tok.ToRowCol())
-		rangeExpr.Lhs = res
-		rangeExpr.Rhs = rhs
-		res = rangeExpr
+		stat := NewStatement(STMT_Assig, t.ToRowCol())
+		stat.Lhs = lhs
+		stat.Rhs = rhs
+		return stat
 	}
-
-	return res
+	stat := NewStatement(STMT_Call, t.ToRowCol())
+	stat.Lhs = lhs
+	return stat
 }
 
-func (p *Parser) parseSet() *Expression {
-	res := NewExpression(EXPR_Constructor, p.la.ToRowCol())
-	p.expect(TokLbrace, "Set")
-
-	if p.firstElement() {
-		first := p.parseElement()
-		if first == nil {
+func breakIf(cond bool) {
+	if cond {
+		runtime.Breakpoint()
+	}
+}
+func (p *Parser) IfStat() *Statement {
+	p.expect(TokIF, false, "IfStat")
+	first := NewStatement(STMT_If, p.cur.ToRowCol())
+	first.Rhs = p.Expr(false)
+	if first.Rhs == nil {
+		return nil
+	}
+	p.expect(TokTHEN, false, "IfStat")
+	first.Body = p.StatSeq()
+	last := first
+	for p.la.Type == TokELSIF {
+		p.expect(TokELSIF, false, "IfStat")
+		stat := NewStatement(STMT_Elsif, p.cur.ToRowCol())
+		stat.Rhs = p.Expr(false)
+		if stat.Rhs == nil {
 			return nil
 		}
-		res.Rhs = first
+		p.expect(TokTHEN, false, "IfStat")
+		stat.Body = p.StatSeq()
+		last.Append(stat)
+		last = stat
+	}
+	if p.la.Type == TokELSE {
+		p.expect(TokELSE, false, "IfStat")
+		stat := p.StatSeq()
+		if stat != nil {
+			last.Append(stat)
+		}
+	}
+	p.expect(TokEND, false, "IfStat")
+	return first
+}
 
-		current := first
-		for p.la.Type == TokComma {
-			p.expect(TokComma, "Set")
-			element := p.parseElement()
-			if element == nil {
+func (p *Parser) CaseStat() *Statement {
+	p.expect(TokCASE, false, "CaseStat")
+	first := NewStatement(STMT_Case, p.cur.ToRowCol())
+	first.Rhs = p.Expr(false)
+	if first.Rhs == nil {
+		return nil
+	}
+	if p.la.Type == TokDO {
+		p.expect(TokDO, false, "CaseStat")
+	} else if p.la.Type == TokOF {
+		p.expect(TokOF, false, "CaseStat")
+	} else {
+		p.invalid("CaseStat")
+	}
+	last := first
+	if firstCaseLabels(p.la.Type) {
+		stat := p.Case()
+		if stat == nil {
+			return nil
+		}
+		last.Append(stat)
+		last = stat
+	}
+	for p.la.Type == TokBar {
+		p.expect(TokBar, false, "CaseStat")
+		if firstCaseLabels(p.la.Type) {
+			stat := p.Case()
+			if stat == nil {
 				return nil
 			}
-			current.Next = element
-			current = element
+			last.Append(stat)
+			last = stat
 		}
 	}
+	if p.la.Type == TokELSE {
+		p.expect(TokELSE, false, "CaseStat")
+		stat := NewStatement(STMT_Else, p.cur.ToRowCol())
+		last.Append(stat)
+		last = stat
+		stat.Body = p.StatSeq()
+	}
+	p.expect(TokEND, false, "CaseStat")
+	return first
+}
 
-	p.expect(TokRbrace, "Set")
+func (p *Parser) WhileStat() *Statement {
+	p.expect(TokWHILE, false, "WhileStat")
+	res := NewStatement(STMT_While, p.cur.ToRowCol())
+	res.Rhs = p.Expr(false)
+	if res.Rhs == nil {
+		return nil
+	}
+	p.expect(TokDO, false, "WhileStat")
+	res.Body = p.StatSeq()
+	p.expect(TokEND, false, "WhileStat")
 	return res
 }
 
-func (p *Parser) parseFactor() *Expression {
-	var res *Expression
+func (p *Parser) RepeatStat() *Statement {
+	p.expect(TokREPEAT, false, "RepeatStat")
+	res := NewStatement(STMT_Repeat, p.cur.ToRowCol())
+	res.Body = p.StatSeq()
+	p.expect(TokUNTIL, false, "RepeatStat")
+	res.Rhs = p.Expr(false)
+	if res.Rhs == nil {
+		return nil
+	}
+	return res
+}
 
-	if p.firstDesignator() {
-		// Parse designator (variable reference, field access, array access, etc.)
-		res = p.parseDesignator(false)
-	} else if p.firstNumber() {
-		// Parse numeric literal
-		res = p.parseNumber()
-	} else if p.la.Type == TokHexchar {
-		// Parse hexadecimal character literal
-		p.expect(TokHexchar, "Factor")
-		res = NewExpression(EXPR_Literal, p.cur.ToRowCol())
-		res.SetType(p.model.GetType(TYPE_CHAR))
+func (p *Parser) ForStat() *Statement {
+	p.expect(TokFOR, false, "ForStat")
+	res := NewStatement(STMT_ForAssig, p.cur.ToRowCol())
+	p.expect(TokIdent, false, "ForStat")
+	res.Lhs = NewExpression(EXPR_NameRef, p.cur.ToRowCol())
+	res.Lhs.Val = NewQualident(nil, p.cur.Val)
+	p.expect(TokColonEq, false, "ForStat")
+	res.Rhs = p.Expr(false)
+	if res.Rhs == nil {
+		return nil
+	}
+	p.expect(TokTO, false, "ForStat")
+	forby := NewStatement(STMT_ForToBy, p.cur.ToRowCol())
+	res.Append(forby)
+	forby.Lhs = p.Expr(false) // to
+	if forby.Lhs == nil {
+		return nil
+	}
+	if p.la.Type == TokBY {
+		p.expect(TokBY, false, "ForStat")
+		forby.Rhs = p.ConstExpr()
+	}
+	p.expect(TokDO, false, "ForStat")
+	res.Body = p.StatSeq()
+	p.expect(TokEND, false, "ForStat")
+	return res
+}
 
-		// Remove 'X' suffix and convert from hex
-		tmp := string(p.cur.Val)
-		if len(tmp) > 0 && (tmp[len(tmp)-1] == 'X' || tmp[len(tmp)-1] == 'x') {
-			tmp = tmp[:len(tmp)-1]
+func (p *Parser) LoopStat() *Statement {
+	p.expect(TokLOOP, false, "LoopStat")
+	res := NewStatement(STMT_Loop, p.cur.ToRowCol())
+	res.Body = p.StatSeq()
+	p.expect(TokEND, false, "LoopStat")
+	return res
+}
+
+func (p *Parser) WithStat() *Statement {
+	p.expect(TokWITH, false, "WithStat")
+	res := NewStatement(STMT_With, p.cur.ToRowCol())
+	t := p.la
+	q := p.Qualident_()
+	res.Lhs = NewExpression(EXPR_NameRef, t.ToRowCol())
+	res.Lhs.Val = q
+	p.expect(TokColon, false, "WithStat")
+	res.Rhs = &Expression{} // dummy to hold type
+	res.Rhs.Kind = int(EXPR_Literal)
+	res.Rhs.SetType(p.NamedType())
+	p.expect(TokDO, false, "WithStat")
+	res.Body = p.StatSeq()
+	p.expect(TokEND, false, "WithStat")
+	return res
+}
+
+func (p *Parser) ReturnStat() *Statement {
+	p.expect(TokRETURN, false, "ReturnStat")
+	res := NewStatement(STMT_Return, p.cur.ToRowCol())
+	if firstExpr(p.la.Type) {
+		res.Rhs = p.Expr(false)
+	}
+	return res
+}
+
+func (p *Parser) Statement_() *Statement {
+	var s *Statement
+	if firstAssigOrCall(p.la.Type) || firstIfStat(p.la.Type) || firstCaseStat(p.la.Type) ||
+		firstWhileStat(p.la.Type) || firstRepeatStat(p.la.Type) || firstForStat(p.la.Type) ||
+		firstLoopStat(p.la.Type) || firstWithStat(p.la.Type) || p.la.Type == TokEXIT ||
+		firstReturnStat(p.la.Type) || firstStatBlock(p.la.Type) {
+		switch {
+		case firstAssigOrCall(p.la.Type):
+			s = p.AssigOrCall()
+		case firstIfStat(p.la.Type):
+			s = p.IfStat()
+		case firstCaseStat(p.la.Type):
+			s = p.CaseStat()
+		case firstWhileStat(p.la.Type):
+			s = p.WhileStat()
+		case firstRepeatStat(p.la.Type):
+			s = p.RepeatStat()
+		case firstForStat(p.la.Type):
+			s = p.ForStat()
+		case firstLoopStat(p.la.Type):
+			s = p.LoopStat()
+		case firstWithStat(p.la.Type):
+			s = p.WithStat()
+		case p.la.Type == TokEXIT:
+			p.expect(TokEXIT, false, "Statement")
+			s = NewStatement(STMT_Exit, p.cur.ToRowCol())
+		case firstReturnStat(p.la.Type):
+			s = p.ReturnStat()
+		case firstStatBlock(p.la.Type):
+			s = p.StatBlock()
+			p.expect(TokEND, false, "Statement")
+		default:
+			p.invalid("Statement")
+			p.next()
 		}
-		if val, err := strconv.ParseUint(tmp, 16, 8); err == nil {
-			res.Val = val
-		}
-	} else if p.la.Type == TokString {
-		// Parse string literal
-		p.expect(TokString, "Factor")
-		res = NewExpression(EXPR_Literal, p.cur.ToRowCol())
-		res.SetType(p.model.GetType(TYPE_StrLit))
-		res.Val = p.dequote(p.cur.Val)
-	} else if p.la.Type == TokNIL {
-		// Parse NIL literal
-		p.expect(TokNIL, "Factor")
-		res = NewExpression(EXPR_Literal, p.cur.ToRowCol())
-		res.SetType(p.model.GetType(TYPE_NIL))
-		res.Val = nil
-	} else if p.firstSet() {
-		// Parse set constructor
-		res = p.parseSet()
-	} else if p.la.Type == TokLpar {
-		// Parse parenthesized expression
-		p.expect(TokLpar, "Factor")
-		res = p.parseExpr()
-		p.expect(TokRpar, "Factor")
-	} else if p.la.Type == TokTilde {
-		// Parse NOT operator
-		tok := p.la.ToRowCol()
-		p.expect(TokTilde, "Factor")
+	}
+	return s
+}
 
-		tmp := p.parseFactor()
-		if tmp == nil {
+func (p *Parser) Case() *Statement {
+	res := NewStatement(STMT_CaseLabel, p.la.ToRowCol())
+	res.Rhs = p.CaseLabels()
+	if res.Rhs == nil {
+		return nil
+	}
+	for p.la.Type == TokComma {
+		p.expect(TokComma, false, "Case")
+		e := p.CaseLabels()
+		if e == nil {
 			return nil
 		}
-
-		res = NewExpression(EXPR_Not, tok)
-		res.Lhs = tmp
-		// res.SetType(p.model.GetType(TYPE_BOOLEAN))
-	} else {
-		p.syntaxError("factor expected")
-		return NewExpression(EXPR_Invalid, p.la.ToRowCol())
+		appendExpr(res.Rhs, e)
 	}
-
+	p.expect(TokColon, false, "Case")
+	res.Body = p.StatSeq()
 	return res
 }
 
-// parseLiteral parses literal expressions
-func (p *Parser) parseLiteral() *Expression {
-	pos := p.la.ToRowCol()
-	tokenType := p.la.Type
-
-	p.next()
-
-	expr := NewExpression(EXPR_Literal, pos)
-	expr.Val = p.cur.Val
-
-	// Set appropriate type based on literal
-	switch tokenType {
-	case TokInteger:
-		expr.SetType(p.model.GetType(TYPE_INTEGER))
-	case TokReal:
-		expr.SetType(p.model.GetType(TYPE_REAL))
-	case TokString:
-		expr.SetType(p.model.GetType(TYPE_StrLit))
-	case TokNIL:
-		expr.SetType(p.model.GetType(TYPE_NIL))
-	}
-
-	return expr
-}
-
-func (p *Parser) parseMaybeQualident() *Expression {
-	p.expect(TokIdent, "Designator")
-	tok := p.cur
-
-	// Check if this is a qualified identifier (module.identifier)
-	decl := p.model.FindDecl(string(tok.Val), false)
-	if decl != nil && decl.Kind == int(DECL_Import) {
-		// This is an import, expect dot and second identifier
-		p.expect(TokDot, "Qualident")
-		p.expect(TokIdent, "Qualident")
-
-		quali := NewQualident(tok.Val, p.cur.Val)
-		res := NewExpression(EXPR_NameRef, tok.ToRowCol())
-		res.Val = quali
-		return res
-	} else {
-		// Simple identifier or save dot for later
-		quali := NewQualident(nil, tok.Val)
-		res := NewExpression(EXPR_NameRef, tok.ToRowCol())
-		res.Val = quali
-		return res
-	}
-}
-
-// parseDesignator parses designators (variable references)
-func (p *Parser) parseDesignator(needsLvalue bool) *Expression {
-	// Parse the base identifier (possibly qualified)
-	res := p.parseMaybeQualident()
+func (p *Parser) CaseLabels() *Expression {
+	res := p.ConstExpr()
 	if res == nil {
 		return nil
 	}
+	if p.la.Type == Tok2Dot {
+		p.expect(Tok2Dot, false, "CaseLabels")
+		t := p.cur
+		rhs := p.ConstExpr()
+		if rhs == nil {
+			return nil
+		}
+		rangeE := NewExpression(EXPR_Range, t.ToRowCol())
+		rangeE.Lhs = res
+		rangeE.Rhs = rhs
+		res = rangeE
+	}
+	return res
+}
 
-	// Parse selectors (field access, array indexing, dereferencing, calls)
-	for p.firstSelector() {
+func (p *Parser) ConstExpr() *Expression {
+	return p.Expr(false)
+}
+
+func (p *Parser) Expr(lvalue bool) *Expression {
+	res := p.SimpleExpr(lvalue)
+	if res == nil {
+		return nil
+	}
+	if firstRelation(p.la.Type) {
+		tok := p.la
+		tmp := CreateFromToken(p.Relation(), tok.ToRowCol())
+		tmp.Lhs = res
+		tmp.SetType(p.mdl.GetType(TYPE_BOOLEAN))
+		res = tmp
+		res.Rhs = p.SimpleExpr(false)
+		if res.Rhs == nil {
+			return nil
+		}
+	}
+	return res
+}
+
+func (p *Parser) SimpleExpr(lvalue bool) *Expression {
+	var op TokenType
+	tok := p.la
+	if p.la.Type == TokPlus || p.la.Type == TokMinus {
+		if p.la.Type == TokPlus {
+			p.expect(TokPlus, false, "Term")
+			op = TokPlus
+		} else if p.la.Type == TokMinus {
+			p.expect(TokMinus, false, "Term")
+			op = TokMinus
+		} else {
+			p.invalid("Term")
+		}
+	}
+	res := p.Term(lvalue)
+	if res == nil {
+		return nil
+	}
+	if op != 0 {
+		tmp := NewExpression(
+			map[TokenType]ExprKind{TokPlus: EXPR_Plus, TokMinus: EXPR_Minus}[op],
+			tok.ToRowCol(),
+		)
+		tmp.Lhs = res
+		tmp.SetType(res.GetType())
+		res = tmp
+	}
+	for firstAddOp(p.la.Type) {
+		tok := p.la
+		tmp := CreateFromToken(p.AddOp(), tok.ToRowCol())
+		tmp.Lhs = res
+		res = tmp
+		res.Rhs = p.Term(false)
+		if res.Rhs == nil {
+			return nil
+		}
+	}
+	return res
+}
+
+func (p *Parser) Term(lvalue bool) *Expression {
+	res := p.Factor(lvalue)
+	if res == nil {
+		return nil
+	}
+	for firstMulOp(p.la.Type) {
+		tok := p.la
+		tmp := CreateFromToken(p.MulOp(), tok.ToRowCol())
+		tmp.Lhs = res
+		res = tmp
+		res.Rhs = p.Factor(false)
+		if res.Rhs == nil {
+			return nil
+		}
+	}
+	return res
+}
+
+func dequote(str []byte) []byte {
+	if (len(str) >= 2 && str[0] == '\'' && str[len(str)-1] == '\'') ||
+		(len(str) >= 2 && str[0] == '"' && str[len(str)-1] == '"') {
+		return append([]byte{}, str[1:len(str)-1]...)
+	}
+	return append([]byte{}, str...)
+}
+
+func (p *Parser) Factor(lvalue bool) *Expression {
+	var res *Expression
+	switch {
+	case firstDesignator(p.la.Type):
+		res = p.Designator(lvalue)
+	case firstNumber(p.la.Type):
+		res = p.number()
+	case p.la.Type == TokHexchar:
+		p.expect(TokHexchar, false, "Factor")
+		res = NewExpression(EXPR_Literal, p.cur.ToRowCol())
+		res.SetType(p.mdl.GetType(TYPE_CHAR))
+		tmp := make([]byte, len(p.cur.Val))
+		copy(tmp, p.cur.Val)
+		if len(tmp) > 0 {
+			tmp = tmp[:len(tmp)-1] // remove X postfix
+		}
+		// interpret as hex
+		var v uint64
+		fmt.Sscanf(string(tmp), "%x", &v)
+		res.Val = v
+	case p.la.Type == TokString:
+		p.expect(TokString, false, "Factor")
+		res = NewExpression(EXPR_Literal, p.cur.ToRowCol())
+		res.SetType(p.mdl.GetType(TYPE_StrLit))
+		res.Val = dequote(p.cur.Val)
+	case p.la.Type == TokNIL:
+		p.expect(TokNIL, false, "Factor")
+		res = NewExpression(EXPR_Literal, p.cur.ToRowCol())
+		res.SetType(p.mdl.GetType(TYPE_NIL))
+		res.Val = nil
+	case firstSet(p.la.Type):
+		res = p.Set()
+	case p.la.Type == TokLpar:
+		p.expect(TokLpar, false, "Factor")
+		res = p.Expr(false)
+		p.expect(TokRpar, false, "Factor")
+	case p.la.Type == TokTilde:
+		p.expect(TokTilde, false, "Factor")
+		tmp := p.Factor(false)
+		if tmp == nil {
+			return nil
+		}
+		res = NewExpression(EXPR_Not, p.cur.ToRowCol())
+		res.Lhs = tmp
+	default:
+		p.invalid("Factor")
+	}
+	return res
+}
+
+func (p *Parser) Set() *Expression {
+	res := NewExpression(EXPR_Constructor, p.la.ToRowCol())
+	p.expect(TokLbrace, false, "Set")
+	if firstElement(p.la.Type) {
+		e := p.Element()
+		if e == nil {
+			return nil
+		}
+		res.AppendRhs(e)
+		for p.la.Type == TokComma {
+			p.expect(TokComma, false, "Set")
+			e = p.Element()
+			if e == nil {
+				return nil
+			}
+			res.AppendRhs(e)
+		}
+	}
+	p.expect(TokRbrace, false, "Set")
+	return res
+}
+
+func (p *Parser) Element() *Expression {
+	res := p.Expr(false)
+	if res == nil {
+		return nil
+	}
+	if p.la.Type == Tok2Dot {
+		p.expect(Tok2Dot, false, "Element")
+		t := p.cur
+		rhs := p.Expr(false)
+		if rhs == nil {
+			return nil
+		}
+		rangeE := NewExpression(EXPR_Range, t.ToRowCol())
+		rangeE.Lhs = res
+		rangeE.Rhs = rhs
+		res = rangeE
+	}
+	return res
+}
+
+func (p *Parser) Relation() TokenType {
+	switch {
+	case p.la.Type == TokEq:
+		p.expect(TokEq, false, "Relation")
+	case p.la.Type == TokHash:
+		p.expect(TokHash, false, "Relation")
+	case p.la.Type == TokLt:
+		p.expect(TokLt, false, "Relation")
+	case p.la.Type == TokLeq:
+		p.expect(TokLeq, false, "Relation")
+	case p.la.Type == TokGt:
+		p.expect(TokGt, false, "Relation")
+	case p.la.Type == TokGeq:
+		p.expect(TokGeq, false, "Relation")
+	case p.la.Type == TokIN:
+		p.expect(TokIN, false, "Relation")
+	case p.la.Type == TokIS:
+		p.expect(TokIS, false, "Relation")
+	default:
+		p.invalid("Relation")
+	}
+	return p.cur.Type
+}
+
+func (p *Parser) MulOp() TokenType {
+	switch {
+	case p.la.Type == TokStar:
+		p.expect(TokStar, false, "MulOp")
+	case p.la.Type == TokDIV:
+		p.expect(TokDIV, false, "MulOp")
+	case p.la.Type == TokMOD:
+		p.expect(TokMOD, false, "MulOp")
+	case p.la.Type == TokSlash:
+		p.expect(TokSlash, false, "MulOp")
+	case p.la.Type == TokAmp:
+		p.expect(TokAmp, false, "MulOp")
+	default:
+		p.invalid("MulOp")
+	}
+	return p.cur.Type
+}
+
+func (p *Parser) AddOp() TokenType {
+	switch {
+	case p.la.Type == TokPlus:
+		p.expect(TokPlus, false, "AddOp")
+	case p.la.Type == TokMinus:
+		p.expect(TokMinus, false, "AddOp")
+	case p.la.Type == TokOR:
+		p.expect(TokOR, false, "AddOp")
+	default:
+		p.invalid("AddOp")
+	}
+	return p.cur.Type
+}
+
+// maybeQualident parses a name or qualified name and returns NameRef expression
+func (p *Parser) maybeQualident() *Expression {
+	p.expect(TokIdent, false, "designator")
+	tok := p.cur
+	d := p.mdl.FindDecl(string(p.cur.Val), false)
+	if d != nil && d.Kind == int(DECL_Import) {
+		// full qualident; require dot
+		p.expect(TokDot, false, "selector")
+		p.expect(TokIdent, false, "selector")
+		q := NewQualident(tok.Val, p.cur.Val)
+		res := NewExpression(EXPR_NameRef, tok.ToRowCol())
+		res.Val = q
+		return res
+	}
+	// Qualident without module ref; keep dot for downstream
+	res := NewExpression(EXPR_NameRef, tok.ToRowCol())
+	q := NewQualident(nil, tok.Val)
+	res.Val = q
+	return res
+}
+
+// Designator results in an lvalue if possible, unless needsLvalue is false
+func (p *Parser) Designator(needsLvalue bool) *Expression {
+	res := p.maybeQualident()
+	if res == nil {
+		return nil
+	}
+	for firstSelector(p.la.Type) {
 		if p.peek(1).Type == TokDot && p.peek(2).Type == TokIdent {
-			// Field selection: obj.field
-			p.expect(TokDot, "Selector")
-			p.expect(TokIdent, "Selector")
-
+			p.expect(TokDot, false, "Selector")
+			p.expect(TokIdent, false, "Selector")
 			tmp := NewExpression(EXPR_Select, p.cur.ToRowCol())
 			tmp.Val = p.cur.Val
 			tmp.Lhs = res
 			res = tmp
 		} else if p.la.Type == TokLbrack {
-			// Array indexing: arr[index1, index2, ...]
-			p.expect(TokLbrack, "Selector")
-
-			indices := p.parseExprList()
-			if len(indices) == 0 {
+			p.expect(TokLbrack, false, "Selector")
+			l := p.ExprList()
+			if len(l) == 0 {
 				return nil
 			}
-
-			// Chain multiple indices for multi-dimensional arrays
-			for _, index := range indices {
+			for i := 0; i < len(l); i++ {
 				tmp := NewExpression(EXPR_Index, p.cur.ToRowCol())
 				tmp.Lhs = res
-				tmp.Rhs = index
 				res = tmp
+				res.Rhs = l[i]
 			}
-
-			p.expect(TokRbrack, "Selector")
+			p.expect(TokRbrack, false, "Selector")
 		} else if p.la.Type == TokHat {
-			// Pointer dereferencing: ptr^
-			p.expect(TokHat, "Selector")
-
+			p.expect(TokHat, false, "Selector")
 			tmp := NewExpression(EXPR_Deref, p.cur.ToRowCol())
 			tmp.Lhs = res
 			res = tmp
 		} else if p.la.Type == TokLpar {
-			// Procedure call: proc(args) or type cast: TYPE(expr)
-			p.expect(TokLpar, "Selector")
-			lpar := p.cur.ToRowCol()
-
+			p.expect(TokLpar, false, "Selector")
+			lpar := p.cur
 			var args *Expression
-			if p.firstExpr() {
-				argList := p.parseExprList()
-				if len(argList) > 0 {
-					args = argList[0]
-					// Chain arguments
-					current := args
-					for i := 1; i < len(argList); i++ {
-						current.Next = argList[i]
-						current = argList[i]
-					}
+			if firstExprList(p.la.Type) {
+				lst := p.ExprList()
+				if len(lst) == 0 {
+					return nil
 				}
+				for i := 1; i < len(lst); i++ {
+					appendExpr(lst[0], lst[i])
+				}
+				args = lst[0]
 			}
-
-			p.expect(TokRpar, "Selector")
-
-			tmp := NewExpression(EXPR_Call, lpar)
-			tmp.Lhs = res  // procedure
-			tmp.Rhs = args // arguments
+			p.expect(TokRpar, false, "Selector")
+			tmp := NewExpression(EXPR_Call, lpar.ToRowCol()) // could be call or typecast
+			tmp.Lhs = res
+			tmp.Rhs = args
 			res = tmp
 		} else {
-			p.errors = append(p.errors, NewParseError("Invalid selector", p.la.ToRowCol(), p.la.SourcePath))
+			p.invalid("Selector")
+			p.next()
 		}
 	}
-
-	// Set lvalue flag if requested
 	res.NeedsLval = needsLvalue
 	return res
 }
 
-// parseConstExpr parses constant expressions
-func (p *Parser) parseConstExpr() *Expression {
-	return p.parseExpr() // For now, same as regular expression
-}
-
-// Statement parsing methods
-
-func (p *Parser) parseBody() *Statement {
-	return p.parseBlock()
-}
-
-// parseBody parses procedure/module bodies
-func (p *Parser) parseBlock() *Statement {
-	p.expect(TokBEGIN, "Body")
-	stmt := p.parseStatSeq()
-	p.expect(TokEND, "Body")
-	return stmt
-}
-
-// parseStatSeq parses statement sequences
-func (p *Parser) parseStatSeq() *Statement {
-	stmt := p.parseStatement()
-
-	for p.la.Type == TokSemi {
-		p.expect(TokSemi, "StatSeq")
-		if p.firstStatement() {
-			nextStmt := p.parseStatement()
-			stmt.Append(nextStmt)
-		}
-	}
-
-	return stmt
-}
-
-// parseStatement parses individual statements
-func (p *Parser) parseStatement() *Statement {
-	switch p.la.Type {
-	case TokIdent:
-		return p.parseAssignOrCall()
-	case TokIF:
-		return p.parseIfStatement()
-	case TokCASE:
-		return p.parseCaseStatement()
-	case TokWHILE:
-		return p.parseWhileStatement()
-	case TokREPEAT:
-		return p.parseRepeatStatement()
-	case TokFOR:
-		return p.parseForStatement()
-	case TokLOOP:
-		return p.parseLoopStatement()
-	case TokWITH:
-		return p.parseWithStatement()
-	case TokEXIT:
-		return p.parseExitStatement()
-	case TokRETURN:
-		return p.parseReturnStatement()
-	default:
-		// Empty statement
-		return NewStatement(STMT_StatBlock, p.la.ToRowCol())
-	}
-}
-
-// parseAssignOrCall parses assignment or procedure call
-func (p *Parser) parseAssignOrCall() *Statement {
-	designator := p.parseDesignator(true) // TODO check
-
-	if p.la.Type == TokColonEq {
-		// Assignment
-		p.expect(TokColonEq, "Assignment")
-		expr := p.parseExpr()
-
-		stmt := NewStatement(STMT_Assig, designator.Pos)
-		stmt.Lhs = designator
-		stmt.Rhs = expr
-		return stmt
-	} else {
-		// Procedure call
-		if p.la.Type == TokLpar {
-			p.expect(TokLpar, "ProcCall")
-			if p.firstExpr() {
-				var args *Expression
-				argList := p.parseExprList()
-				if len(argList) > 0 {
-					args = argList[0]
-					// Chain arguments
-					current := args
-					for i := 1; i < len(argList); i++ {
-						current.Next = argList[i]
-						current = argList[i]
-					}
-				}
-				designator.Rhs = args
-			}
-			p.expect(TokRpar, "ProcCall")
-		}
-
-		stmt := NewStatement(STMT_Call, designator.Pos)
-		stmt.Lhs = designator
-		return stmt
-	}
-}
-
-// parseIfStatement parses IF statements
-func (p *Parser) parseIfStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokIF, "IfStatement")
-
-	condition := p.parseExpr()
-	p.expect(TokTHEN, "IfStatement")
-	thenBody := p.parseStatSeq()
-
-	stmt := NewStatement(STMT_If, pos)
-	stmt.Rhs = condition
-	stmt.Body = thenBody
-
-	// Parse ELSIF clauses
-	current := stmt
-	for p.la.Type == TokELSIF {
-		p.expect(TokELSIF, "IfStatement")
-		elsifCondition := p.parseExpr()
-		p.expect(TokTHEN, "IfStatement")
-		elsifBody := p.parseStatSeq()
-
-		elsifStmt := NewStatement(STMT_Elsif, p.la.ToRowCol())
-		elsifStmt.Rhs = elsifCondition
-		elsifStmt.Body = elsifBody
-
-		current.Next = elsifStmt
-		current = elsifStmt
-	}
-
-	// Parse ELSE clause
-	if p.la.Type == TokELSE {
-		p.expect(TokELSE, "IfStatement")
-		elseBody := p.parseStatSeq()
-
-		elseStmt := NewStatement(STMT_Else, p.la.ToRowCol())
-		elseStmt.Body = elseBody
-
-		current.Next = elseStmt
-	}
-
-	p.expect(TokEND, "IfStatement")
-
-	return stmt
-}
-
-// parseCaseStatement parses CASE statements
-func (p *Parser) parseCaseStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokCASE, "CaseStatement")
-
-	caseExpr := p.parseExpr()
-	p.expect(TokOF, "CaseStatement")
-
-	stmt := NewStatement(STMT_Case, pos)
-	stmt.Rhs = caseExpr
-
-	// Parse case labels and statements
-	if p.firstCaseLabel() {
-		caseBody := p.parseCaseBody()
-		stmt.Body = caseBody
-	}
-
-	// Parse ELSE clause
-	if p.la.Type == TokELSE {
-		p.expect(TokELSE, "CaseStatement")
-		elseBody := p.parseStatSeq()
-
-		elseStmt := NewStatement(STMT_Else, p.la.ToRowCol())
-		elseStmt.Body = elseBody
-		stmt.Next = elseStmt
-	}
-
-	p.expect(TokEND, "CaseStatement")
-
-	return stmt
-}
-
-// parseCaseBody parses case body with labels
-func (p *Parser) parseCaseBody() *Statement {
-	labelStmt := p.parseCaseLabels()
-	p.expect(TokColon, "CaseBody")
-	body := p.parseStatSeq()
-	labelStmt.Body = body
-
-	current := labelStmt
-	for p.la.Type == TokBar {
-		p.expect(TokBar, "CaseBody")
-		if p.firstCaseLabel() {
-			nextLabel := p.parseCaseLabels()
-			p.expect(TokColon, "CaseBody")
-			nextBody := p.parseStatSeq()
-			nextLabel.Body = nextBody
-
-			current.Next = nextLabel
-			current = nextLabel
-		}
-	}
-
-	return labelStmt
-}
-
-// parseCaseLabels parses case labels
-func (p *Parser) parseCaseLabels() *Statement {
-	pos := p.la.ToRowCol()
-	label := p.parseConstExpr()
-
-	// Handle ranges
-	if p.la.Type == Tok2Dot {
-		p.expect(Tok2Dot, "CaseLabels")
-		endLabel := p.parseConstExpr()
-
-		rangeExpr := NewExpression(EXPR_Range, pos)
-		rangeExpr.Lhs = label
-		rangeExpr.Rhs = endLabel
-		label = rangeExpr
-	}
-
-	stmt := NewStatement(STMT_CaseLabel, pos)
-	stmt.Rhs = label
-
-	// Parse additional labels
-	for p.la.Type == TokComma {
-		p.expect(TokComma, "CaseLabels")
-		nextLabel := p.parseConstExpr()
-
-		if p.la.Type == Tok2Dot {
-			p.expect(Tok2Dot, "CaseLabels")
-			endLabel := p.parseConstExpr()
-
-			rangeExpr := NewExpression(EXPR_Range, nextLabel.Pos)
-			rangeExpr.Lhs = nextLabel
-			rangeExpr.Rhs = endLabel
-			nextLabel = rangeExpr
-		}
-
-		nextLabel.Next = stmt.Rhs
-		stmt.Rhs = nextLabel
-	}
-
-	return stmt
-}
-
-// parseWhileStatement parses WHILE statements
-func (p *Parser) parseWhileStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokWHILE, "WhileStatement")
-
-	condition := p.parseExpr()
-	p.expect(TokDO, "WhileStatement")
-	body := p.parseStatSeq()
-	p.expect(TokEND, "WhileStatement")
-
-	stmt := NewStatement(STMT_While, pos)
-	stmt.Rhs = condition
-	stmt.Body = body
-
-	return stmt
-}
-
-// parseRepeatStatement parses REPEAT statements
-func (p *Parser) parseRepeatStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokREPEAT, "RepeatStatement")
-
-	body := p.parseStatSeq()
-	p.expect(TokUNTIL, "RepeatStatement")
-	condition := p.parseExpr()
-
-	stmt := NewStatement(STMT_Repeat, pos)
-	stmt.Rhs = condition
-	stmt.Body = body
-
-	return stmt
-}
-
-// parseForStatement parses FOR statements
-func (p *Parser) parseForStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokFOR, "ForStatement")
-
-	// Parse control variable assignment
-	p.expect(TokIdent, "ForStatement")
-	controlVar := p.cur
-	p.expect(TokColonEq, "ForStatement")
-	startExpr := p.parseExpr()
-
-	// Create assignment statement
-	assignStmt := NewStatement(STMT_ForAssig, pos)
-	controlVarExpr := NewExpression(EXPR_NameRef, controlVar.ToRowCol())
-	controlVarExpr.Val = NewQualident(controlVar.Val, nil)
-	assignStmt.Lhs = controlVarExpr
-	assignStmt.Rhs = startExpr
-
-	p.expect(TokTO, "ForStatement")
-	endExpr := p.parseExpr()
-
-	// Parse optional BY clause
-	var byExpr *Expression
-	if p.la.Type == TokBY {
-		p.expect(TokBY, "ForStatement")
-		byExpr = p.parseConstExpr()
-	}
-
-	p.expect(TokDO, "ForStatement")
-	body := p.parseStatSeq()
-	p.expect(TokEND, "ForStatement")
-
-	// Create FOR statement
-	stmt := NewStatement(STMT_ForToBy, pos)
-	stmt.Lhs = controlVarExpr
-	stmt.Rhs = endExpr
-	if byExpr != nil {
-		stmt.Rhs.Next = byExpr
-	}
-	stmt.Body = body
-	stmt.Next = assignStmt
-
-	return stmt
-}
-
-// parseLoopStatement parses LOOP statements
-func (p *Parser) parseLoopStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokLOOP, "LoopStatement")
-
-	body := p.parseStatSeq()
-	p.expect(TokEND, "LoopStatement")
-
-	stmt := NewStatement(STMT_Loop, pos)
-	stmt.Body = body
-
-	return stmt
-}
-
-// parseWithStatement parses WITH statements
-func (p *Parser) parseWithStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokWITH, "WithStatement")
-
-	// Parse guard
-	guard := p.parseDesignator(false)
-	p.expect(TokColon, "WithStatement")
-	guardType := p.parseType()
-	p.expect(TokDO, "WithStatement")
-
-	body := p.parseStatSeq()
-
-	// Parse ELSE clause
-	var elseBody *Statement
-	if p.la.Type == TokELSE {
-		p.expect(TokELSE, "WithStatement")
-		elseBody = p.parseStatSeq()
-	}
-
-	p.expect(TokEND, "WithStatement")
-
-	stmt := NewStatement(STMT_With, pos)
-	stmt.Lhs = guard
-
-	// Create type guard expression
-	typeGuard := NewExpression(EXPR_Is, guard.Pos)
-	typeGuard.Lhs = guard
-	typeGuard.SetType(guardType)
-	stmt.Rhs = typeGuard
-
-	stmt.Body = body
-	if elseBody != nil {
-		elseStmt := NewStatement(STMT_Else, pos)
-		elseStmt.Body = elseBody
-		stmt.Next = elseStmt
-	}
-
-	return stmt
-}
-
-// parseExitStatement parses EXIT statements
-func (p *Parser) parseExitStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokEXIT, "ExitStatement")
-
-	return NewStatement(STMT_Exit, pos)
-}
-
-// parseReturnStatement parses RETURN statements
-func (p *Parser) parseReturnStatement() *Statement {
-	pos := p.la.ToRowCol()
-	p.expect(TokRETURN, "ReturnStatement")
-
-	stmt := NewStatement(STMT_Return, pos)
-
-	if p.firstExpr() {
-		stmt.Rhs = p.parseExpr()
-	}
-
-	return stmt
-}
-
-func (p *Parser) parseExprList() []*Expression {
-	var result []*Expression
-
-	expr := p.parseExpr()
-	if expr == nil {
+func (p *Parser) ExprList() []*Expression {
+	e := p.Expr(false)
+	if e == nil {
 		return nil
 	}
-
-	result = append(result, expr)
-
+	var res []*Expression
+	res = append(res, e)
 	for p.la.Type == TokComma {
-		p.expect(TokComma, "ExprList")
-		expr = p.parseExpr()
-		if expr == nil {
+		p.expect(TokComma, false, "ExprList")
+		e := p.Expr(false)
+		if e == nil {
 			return nil
 		}
-		result = append(result, expr)
+		res = append(res, e)
 	}
-
-	return result
+	return res
 }
 
-// First set checking functions
-
-func (p *Parser) firstImportList() bool {
-	return p.la.Type == TokIMPORT
+func (p *Parser) IdentList() []ID {
+	var res []ID
+	res = append(res, p.IdentDef())
+	for p.la.Type == TokComma {
+		p.expect(TokComma, false, "IdentList")
+		res = append(res, p.IdentDef())
+	}
+	return res
 }
 
-func (p *Parser) firstDeclSeq() bool {
-	return p.la.Type == TokVAR || p.la.Type == TokCONST ||
-		p.la.Type == TokPROCEDURE || p.la.Type == TokTYPE
+func (p *Parser) Qualident_() *Qualident {
+	var q Qualident
+	if p.peek(1).Type == TokIdent && p.peek(2).Type == TokDot {
+		p.expect(TokIdent, false, "Qualident")
+		q.First = p.cur.Val
+		p.expect(TokDot, false, "Qualident")
+		p.expect(TokIdent, false, "Qualident")
+		q.Second = p.cur.Val
+	} else if p.la.Type == TokIdent {
+		p.expect(TokIdent, false, "Qualident")
+		q.Second = p.cur.Val
+	} else {
+		p.invalid("Qualident")
+	}
+	return &q
 }
 
-func (p *Parser) firstConstDecl() bool {
-	return p.la.Type == TokIdent
+func (p *Parser) NamedType() *Type {
+	t := p.la
+	q := p.Qualident_()
+	res := &Type{}
+	res.Kind = int(TYPE_NameRef)
+	res.Quali = q
+	res.Pos = t.ToRowCol()
+	return res
 }
 
-func (p *Parser) firstTypeDecl() bool {
-	return p.la.Type == TokIdent
+func (p *Parser) IdentDef() ID {
+	p.expect(TokIdent, false, "IdentDef")
+	var res ID
+	res.Name = p.cur
+	res.Visi = visiPrivate
+	if p.la.Type == TokStar || p.la.Type == TokMinus {
+		if p.la.Type == TokStar {
+			p.expect(TokStar, false, "IdentDef")
+			res.Visi = visiPublic
+		} else if p.la.Type == TokMinus {
+			p.expect(TokMinus, false, "IdentDef")
+			res.Visi = visiReadOnly
+		} else {
+			p.invalid("IdentDef")
+		}
+	}
+	if firstSysFlag(p.la.Type) {
+		res.Untraced = p.SysFlag()
+	}
+	return res
 }
 
-func (p *Parser) firstVarDecl() bool {
-	return p.la.Type == TokIdent
+func (p *Parser) smallestIntType(i uint64) *Type {
+	// Note: use platform-independent limits mirroring C++
+	if i <= 127 {
+		return p.mdl.GetType(TYPE_SHORTINT)
+	} else if i <= 32767 {
+		return p.mdl.GetType(TYPE_INTEGER)
+	} else if i <= 2147483647 {
+		return p.mdl.GetType(TYPE_LONGINT)
+	}
+	return p.mdl.GetType(TYPE_HUGEINT)
 }
 
-func (p *Parser) firstBody() bool {
-	return p.la.Type == TokBEGIN
+func (p *Parser) number() *Expression {
+	res := CreateFromToken(p.la.Type, p.la.ToRowCol())
+	if p.la.Type == TokInteger {
+		p.expect(TokInteger, false, "number")
+		var i uint64 = 0
+		v := p.cur.Val
+		l := len(v)
+		if l >= 1 && (v[l-1] == 'h' || v[l-1] == 'H') {
+			fmt.Sscanf(string(v[:l-1]), "%x", &i)
+		} else {
+			fmt.Sscanf(string(v), "%d", &i)
+		}
+		res.SetType(p.smallestIntType(i))
+		res.Val = i
+	} else if p.la.Type == TokReal {
+		p.expect(TokReal, false, "number")
+		// Double/Single inference based on suffix / precision
+		text := append([]byte{}, p.cur.Val...)
+		isDouble := false
+		for i := range text {
+			if text[i] == 'd' || text[i] == 'D' {
+				text[i] = 'e'
+				isDouble = true
+			} else if text[i] == 's' || text[i] == 'S' {
+				text[i] = 'e'
+			}
+		}
+		if isDouble {
+			res.SetType(p.mdl.GetType(TYPE_LONGREAL))
+		}
+		var d float64
+		fmt.Sscanf(string(text), "%g", &d)
+		if res.GetType() == nil {
+			// guess by fraction length
+			dot := -1
+			for i := range text {
+				if text[i] == '.' {
+					dot = i
+					break
+				}
+			}
+			fracLen := 0
+			if dot != -1 {
+				for j := dot + 1; j < len(text) && text[j] >= '0' && text[j] <= '9'; j++ {
+					fracLen++
+				}
+			}
+			if fracLen > 5 {
+				res.SetType(p.mdl.GetType(TYPE_LONGREAL))
+			} else {
+				res.SetType(p.mdl.GetType(TYPE_REAL))
+			}
+		}
+		res.Val = d
+	} else {
+		p.invalid("number")
+	}
+	return res
 }
 
-func (p *Parser) firstFormalParam() bool {
-	return p.la.Type == TokVAR || p.la.Type == TokIdent
+func (p *Parser) addDecl(id Token, visi uint8, mode int) *Declaration {
+	// NOTE: uniqueness is checked here (same as C++ model)
+	d := p.mdl.AddDecl(string(id.Val))
+	if d == nil {
+		p.errorTok(id, "a declaration with this name already exists")
+		return nil
+	}
+	d.Kind = mode
+	// map Parser visibility to AST visibility
+	switch idVisi(visi) {
+	case visiPrivate:
+		d.Visi = VISI_Private
+	case visiReadOnly:
+		d.Visi = VISI_ReadOnly
+	case visiPublic:
+		d.Visi = VISI_ReadWrite
+	default:
+		d.Visi = VISI_Private
+	}
+	rc := NewRowCol(id.LineNr, id.ColNr)
+	d.Pos = rc
+	return d
 }
 
-func (p *Parser) firstFieldList() bool {
-	return p.la.Type == TokIdent
+func (p *Parser) errorTok(t Token, msg string) {
+	if msg == "" {
+		msg = "error"
+	}
+	p.error(msg, NewRowCol(t.LineNr, t.ColNr), t.SourcePath)
 }
 
-func (p *Parser) firstFieldDecl() bool {
-	return p.la.Type == TokIdent
-}
-
-func (p *Parser) firstExpr() bool {
-	return p.la.Type == TokIdent || p.la.Type == TokInteger ||
-		p.la.Type == TokReal || p.la.Type == TokString ||
-		p.la.Type == TokNIL || p.la.Type == TokLpar || p.la.Type == TokTilde
-}
-
-func (p *Parser) firstStatement() bool {
-	return p.la.Type == TokIdent || p.la.Type == TokIF || p.la.Type == TokCASE ||
-		p.la.Type == TokWHILE || p.la.Type == TokREPEAT || p.la.Type == TokFOR ||
-		p.la.Type == TokLOOP || p.la.Type == TokWITH || p.la.Type == TokEXIT ||
-		p.la.Type == TokRETURN
-}
-
-func (p *Parser) firstCaseLabel() bool {
-	return p.firstExpr()
-}
+// DECL_Private helper for injected BEGIN-proc visibility mapping
+func DECL_Private() Visi { return VISI_Private }
 
 func (p *Parser) Errors() []ParseError {
 	return p.errors

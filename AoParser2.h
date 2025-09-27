@@ -132,7 +132,7 @@ namespace Ao {
 		Scanner2* scanner;
 		void next();
 		Token peek(int off);
-		void invalid(const char* what);
+        void invalid(const char* what, bool eat = false);
 		bool expect(int tt, bool pkw, const char* where);
         QVector<QByteArray> predefSymbols; // MaxAttrs
         QByteArray BEGIN;

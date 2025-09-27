@@ -1,4 +1,4 @@
-This is an attempt to migrate the C++ version of the ActiveOberon parser to Go. The idea is to translate the Oberon AST to the Go AST and then use the regular Go optimizer and code generator infrastructure to implement a full ActiveOberon compiler.
+This is the C++ version of the ActiveOberon parser migrated to Go. The idea is to translate the Oberon AST to the Go AST and then use the regular Go optimizer and code generator infrastructure to implement a full ActiveOberon compiler.
 
 Go seems particularly suited because it has an integrated GC and everything required to implement the active objects and monitors including signal/await. It would also be suited to implement Oberon+ including the envisioned concurrency concept. 
 

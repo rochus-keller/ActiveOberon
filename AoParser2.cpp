@@ -460,8 +460,10 @@ Token Parser2::peek(int off) {
 		return scanner->peek(off-1);
 }
 
-void Parser2::invalid(const char* what) {
+void Parser2::invalid(const char* what, bool eat) {
     errors << Error(QString("invalid %1").arg(what),la.toRowCol(), la.d_sourcePath);
+    if( eat )
+        next();
 }
 
 bool Parser2::expect(int tt, bool pkw, const char* where) {
@@ -484,7 +486,7 @@ void Parser2::Module() {
     {
         la.d_sourcePath = scanner->source();
         la.d_lineNr = 1;
-        error(la,"not a Luon module");
+        error(la,"not an Oberon module");
         return;
     }
     Declaration* m = new Declaration();
@@ -586,7 +588,7 @@ void Parser2::DeclSeq(bool inObjectType) {
 				expect(Tok_Semi, false, "DeclSeq");
 			}
 		} else
-			invalid("DeclSeq");
+            invalid("DeclSeq", true);
 	}
     // done
 }
@@ -1249,7 +1251,10 @@ Statement* Parser2::ReturnStat() {
 
 Statement* Parser2::Statement_() {
     Statement* s = 0;
-	if( FIRST_AssigOrCall(la.d_type) || FIRST_IfStat(la.d_type) || FIRST_CaseStat(la.d_type) || FIRST_WhileStat(la.d_type) || FIRST_RepeatStat(la.d_type) || FIRST_ForStat(la.d_type) || FIRST_LoopStat(la.d_type) || FIRST_WithStat(la.d_type) || la.d_type == Tok_EXIT || FIRST_ReturnStat(la.d_type) || FIRST_StatBlock(la.d_type) ) {
+    if( FIRST_AssigOrCall(la.d_type) || FIRST_IfStat(la.d_type) || FIRST_CaseStat(la.d_type) ||
+            FIRST_WhileStat(la.d_type) || FIRST_RepeatStat(la.d_type) || FIRST_ForStat(la.d_type) ||
+            FIRST_LoopStat(la.d_type) || FIRST_WithStat(la.d_type) || la.d_type == Tok_EXIT ||
+            FIRST_ReturnStat(la.d_type) || FIRST_StatBlock(la.d_type) ) {
 		if( FIRST_AssigOrCall(la.d_type) ) {
             s = AssigOrCall();
 		} else if( FIRST_IfStat(la.d_type) ) {
@@ -1275,7 +1280,7 @@ Statement* Parser2::Statement_() {
             s = StatBlock();
 			expect(Tok_END, false, "Statement");
 		} else
-			invalid("Statement");
+            invalid("Statement", true);
 	}
     return s;
 }
@@ -1639,7 +1644,7 @@ Expression* Parser2::Designator(bool needsLvalue) {
             tmp->rhs = args;
             res = tmp;
         } else
-            invalid("Selector");
+            invalid("Selector", true);
 	}
     res->needsLval = needsLvalue;
     return res;

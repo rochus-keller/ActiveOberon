@@ -12,14 +12,13 @@
 ** following information to ensure the GNU Lesser General Public License
 ** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
 ** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
-*/
+ */
 
 // Translated from C++ Qt5 implementation
 
 package ActiveOberon
 
 import (
-	"strings"
 	"fmt"
 )
 
@@ -439,9 +438,9 @@ type RowCol struct {
 
 // Constants for RowCol bit manipulation
 const (
-	ROWBitLen = 19
-	COLBitLen = 32 - ROWBitLen - 1
-	MSB  uint32     = 0x80000000
+	ROWBitLen        = 19
+	COLBitLen        = 32 - ROWBitLen - 1
+	MSB       uint32 = 0x80000000
 )
 
 // NewRowCol creates a new RowCol
@@ -450,7 +449,7 @@ func NewRowCol(row, col uint32) RowCol {
 }
 
 func (rc RowCol) String() string {
-    return fmt.Sprintf("%d:%d", rc.Row, rc.Col)
+	return fmt.Sprintf("%d:%d", rc.Row, rc.Col)
 }
 
 // IsValid checks if position is valid
@@ -460,7 +459,7 @@ func (rc RowCol) IsValid() bool {
 
 // Packed returns packed representation
 func (rc RowCol) Packed() uint32 {
-	return (rc.Row<<COLBitLen)|rc.Col|MSB
+	return (rc.Row << COLBitLen) | rc.Col | MSB
 }
 
 // IsPacked checks if value is packed
@@ -491,7 +490,7 @@ func NewLoc(row, col uint32, file string) Loc {
 
 // Range represents a range of positions
 type Range struct {
-	Start, End RowCol
+	pos, End RowCol
 }
 
 // FilePos represents a position in a file
@@ -571,154 +570,324 @@ func GetSymbol(data []byte) []byte {
 	return canonical
 }
 
-// TokenTypeFromString parses token type from string
-func TokenTypeFromString(str []byte) (TokenType, int) {
-	if len(str) == 0 {
-		return TokInvalid, 0
+// It reads posing at 'pos' and returns token and new pos.
+func TokenTypeFromString(str []byte, pos *int) TokenType {
+	at := func(i int) byte {
+		if i < len(str) {
+			return str[i]
+		}
+		return 0
 	}
+	var i int = 0
+	if pos != nil {
+		i = *pos
+	}
+	var res TokenType = TokInvalid
 
-	i := 0
-	switch str[0] {
+	switch at(i) {
 	case '#':
-		return TokHash, 1
+		res = TokHash
+		i += 1
 	case '&':
-		return TokAmp, 1
+		res = TokAmp
+		i += 1
 	case '(':
-		if i+1 < len(str) && str[1] == '*' {
-			return TokLatt, 2
+		if at(i+1) == '*' {
+			res = TokLatt
+			i += 2
+		} else {
+			res = TokLpar
+			i += 1
 		}
-		return TokLpar, 1
 	case ')':
-		return TokRpar, 1
+		res = TokRpar
+		i += 1
 	case '*':
-		if i+1 < len(str) && str[1] == ')' {
-			return TokRatt, 2
+		if at(i+1) == ')' {
+			res = TokRatt
+			i += 2
+		} else {
+			res = TokStar
+			i += 1
 		}
-		return TokStar, 1
 	case '+':
-		return TokPlus, 1
+		res = TokPlus
+		i += 1
 	case ',':
-		return TokComma, 1
+		res = TokComma
+		i += 1
 	case '-':
-		return TokMinus, 1
+		res = TokMinus
+		i += 1
 	case '.':
-		if i+1 < len(str) && str[1] == '.' {
-			return Tok2Dot, 2
+		if at(i+1) == '.' {
+			res = Tok2Dot
+			i += 2
+		} else {
+			res = TokDot
+			i += 1
 		}
-		return TokDot, 1
 	case '/':
-		return TokSlash, 1
+		res = TokSlash
+		i += 1
 	case ':':
-		if i+1 < len(str) && str[1] == '=' {
-			return TokColonEq, 2
+		if at(i+1) == '=' {
+			res = TokColonEq
+			i += 2
+		} else {
+			res = TokColon
+			i += 1
 		}
-		return TokColon, 1
 	case ';':
-		return TokSemi, 1
+		res = TokSemi
+		i += 1
 	case '<':
-		if i+1 < len(str) && str[1] == '=' {
-			return TokLeq, 2
+		if at(i+1) == '=' {
+			res = TokLeq
+			i += 2
+		} else {
+			res = TokLt
+			i += 1
 		}
-		return TokLt, 1
 	case '=':
-		return TokEq, 1
+		res = TokEq
+		i += 1
 	case '>':
-		if i+1 < len(str) && str[1] == '=' {
-			return TokGeq, 2
+		if at(i+1) == '=' {
+			res = TokGeq
+			i += 2
+		} else {
+			res = TokGt
+			i += 1
 		}
-		return TokGt, 1
+	case 'A':
+		if at(i+1) == 'R' && at(i+2) == 'R' && at(i+3) == 'A' && at(i+4) == 'Y' {
+			res = TokARRAY
+			i += 5
+		}
+	case 'B':
+		switch at(i + 1) {
+		case 'E':
+			if at(i+2) == 'G' && at(i+3) == 'I' && at(i+4) == 'N' {
+				res = TokBEGIN
+				i += 5
+			}
+		case 'Y':
+			res = TokBY
+			i += 2
+		}
+	case 'C':
+		switch at(i + 1) {
+		case 'A':
+			if at(i+2) == 'S' && at(i+3) == 'E' {
+				res = TokCASE
+				i += 4
+			}
+		case 'O':
+			switch at(i + 2) {
+			case 'D':
+				if at(i+3) == 'E' {
+					res = TokCODE
+					i += 4
+				}
+			case 'N':
+				if at(i+3) == 'S' && at(i+4) == 'T' {
+					res = TokCONST
+					i += 5
+				}
+			}
+		}
+	case 'D':
+		switch at(i + 1) {
+		case 'I':
+			if at(i+2) == 'V' {
+				res = TokDIV
+				i += 3
+			}
+		case 'O':
+			res = TokDO
+			i += 2
+		}
+	case 'E':
+		switch at(i + 1) {
+		case 'L':
+			if at(i+2) == 'S' {
+				switch at(i + 3) {
+				case 'E':
+					res = TokELSE
+					i += 4
+				case 'I':
+					if at(i+4) == 'F' {
+						res = TokELSIF
+						i += 5
+					}
+				}
+			}
+		case 'N':
+			if at(i+2) == 'D' {
+				res = TokEND
+				i += 3
+			}
+		case 'X':
+			if at(i+2) == 'I' && at(i+3) == 'T' {
+				res = TokEXIT
+				i += 4
+			}
+		}
+	case 'F':
+		if at(i+1) == 'O' && at(i+2) == 'R' {
+			res = TokFOR
+			i += 3
+		}
+	case 'I':
+		switch at(i + 1) {
+		case 'F':
+			res = TokIF
+			i += 2
+		case 'M':
+			if at(i+2) == 'P' && at(i+3) == 'O' && at(i+4) == 'R' && at(i+5) == 'T' {
+				res = TokIMPORT
+				i += 6
+			}
+		case 'N':
+			res = TokIN
+			i += 2
+		case 'S':
+			res = TokIS
+			i += 2
+		}
+	case 'L':
+		if at(i+1) == 'O' && at(i+2) == 'O' && at(i+3) == 'P' {
+			res = TokLOOP
+			i += 4
+		}
+	case 'M':
+		if at(i+1) == 'O' && at(i+2) == 'D' {
+			if at(i+3) == 'U' && at(i+4) == 'L' && at(i+5) == 'E' {
+				res = TokMODULE
+				i += 6
+			} else {
+				res = TokMOD
+				i += 3
+			}
+		}
+	case 'N':
+		if at(i+1) == 'I' && at(i+2) == 'L' {
+			res = TokNIL
+			i += 3
+		}
+	case 'O':
+		switch at(i + 1) {
+		case 'B':
+			if at(i+2) == 'J' && at(i+3) == 'E' && at(i+4) == 'C' && at(i+5) == 'T' {
+				res = TokOBJECT
+				i += 6
+			}
+		case 'F':
+			res = TokOF
+			i += 2
+		case 'R':
+			res = TokOR
+			i += 2
+		}
+	case 'P':
+		switch at(i + 1) {
+		case 'O':
+			if at(i+2) == 'I' && at(i+3) == 'N' && at(i+4) == 'T' && at(i+5) == 'E' && at(i+6) == 'R' {
+				res = TokPOINTER
+				i += 7
+			}
+		case 'R':
+			if at(i+2) == 'O' && at(i+3) == 'C' && at(i+4) == 'E' && at(i+5) == 'D' && at(i+6) == 'U' && at(i+7) == 'R' && at(i+8) == 'E' {
+				res = TokPROCEDURE
+				i += 9
+			}
+		}
+	case 'R':
+		if at(i+1) == 'E' {
+			switch at(i + 2) {
+			case 'C':
+				if at(i+3) == 'O' && at(i+4) == 'R' && at(i+5) == 'D' {
+					res = TokRECORD
+					i += 6
+				}
+			case 'P':
+				if at(i+3) == 'E' && at(i+4) == 'A' && at(i+5) == 'T' {
+					res = TokREPEAT
+					i += 6
+				}
+			case 'T':
+				if at(i+3) == 'U' && at(i+4) == 'R' && at(i+5) == 'N' {
+					res = TokRETURN
+					i += 6
+				}
+			}
+		}
+	case 'T':
+		switch at(i + 1) {
+		case 'H':
+			if at(i+2) == 'E' && at(i+3) == 'N' {
+				res = TokTHEN
+				i += 4
+			}
+		case 'O':
+			res = TokTO
+			i += 2
+		case 'Y':
+			if at(i+2) == 'P' && at(i+3) == 'E' {
+				res = TokTYPE
+				i += 4
+			}
+		}
+	case 'U':
+		if at(i+1) == 'N' && at(i+2) == 'T' && at(i+3) == 'I' && at(i+4) == 'L' {
+			res = TokUNTIL
+			i += 5
+		}
+	case 'V':
+		if at(i+1) == 'A' && at(i+2) == 'R' {
+			res = TokVAR
+			i += 3
+		}
+	case 'W':
+		switch at(i + 1) {
+		case 'H':
+			if at(i+2) == 'I' && at(i+3) == 'L' && at(i+4) == 'E' {
+				res = TokWHILE
+				i += 5
+			}
+		case 'I':
+			if at(i+2) == 'T' && at(i+3) == 'H' {
+				res = TokWITH
+				i += 4
+			}
+		}
 	case '[':
-		return TokLbrack, 1
+		res = TokLbrack
+		i += 1
 	case ']':
-		return TokRbrack, 1
+		res = TokRbrack
+		i += 1
 	case '^':
-		return TokHat, 1
+		res = TokHat
+		i += 1
 	case '{':
-		return TokLbrace, 1
+		res = TokLbrace
+		i += 1
 	case '|':
-		return TokBar, 1
+		res = TokBar
+		i += 1
 	case '}':
-		return TokRbrace, 1
+		res = TokRbrace
+		i += 1
 	case '~':
-		return TokTilde, 1
+		res = TokTilde
+		i += 1
 	}
 
-	// Check for keywords
-	strUpper := strings.ToUpper(string(str))
-	switch strUpper {
-	case "ARRAY":
-		return TokARRAY, len(str)
-	case "BEGIN":
-		return TokBEGIN, len(str)
-	case "BY":
-		return TokBY, len(str)
-	case "CASE":
-		return TokCASE, len(str)
-	case "CODE":
-		return TokCODE, len(str)
-	case "CONST":
-		return TokCONST, len(str)
-	case "DIV":
-		return TokDIV, len(str)
-	case "DO":
-		return TokDO, len(str)
-	case "ELSE":
-		return TokELSE, len(str)
-	case "ELSIF":
-		return TokELSIF, len(str)
-	case "END":
-		return TokEND, len(str)
-	case "EXIT":
-		return TokEXIT, len(str)
-	case "FOR":
-		return TokFOR, len(str)
-	case "IF":
-		return TokIF, len(str)
-	case "IMPORT":
-		return TokIMPORT, len(str)
-	case "IN":
-		return TokIN, len(str)
-	case "IS":
-		return TokIS, len(str)
-	case "LOOP":
-		return TokLOOP, len(str)
-	case "MOD":
-		return TokMOD, len(str)
-	case "MODULE":
-		return TokMODULE, len(str)
-	case "NIL":
-		return TokNIL, len(str)
-	case "OBJECT":
-		return TokOBJECT, len(str)
-	case "OF":
-		return TokOF, len(str)
-	case "OR":
-		return TokOR, len(str)
-	case "POINTER":
-		return TokPOINTER, len(str)
-	case "PROCEDURE":
-		return TokPROCEDURE, len(str)
-	case "RECORD":
-		return TokRECORD, len(str)
-	case "REPEAT":
-		return TokREPEAT, len(str)
-	case "RETURN":
-		return TokRETURN, len(str)
-	case "THEN":
-		return TokTHEN, len(str)
-	case "TO":
-		return TokTO, len(str)
-	case "TYPE":
-		return TokTYPE, len(str)
-	case "UNTIL":
-		return TokUNTIL, len(str)
-	case "VAR":
-		return TokVAR, len(str)
-	case "WHILE":
-		return TokWHILE, len(str)
-	case "WITH":
-		return TokWITH, len(str)
+	if res == TokInvalid {
+		return TokInvalid
 	}
-
-	return TokInvalid, 0
+	*pos = i
+	return res
 }
