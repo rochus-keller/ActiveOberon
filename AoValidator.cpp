@@ -719,11 +719,13 @@ void Validator::resolveDesig(Expression* nameRef)
     if( r.second->kind == Declaration::LocalDecl || r.second->kind == Declaration::ParamDecl )
     {
         if( r.second->outer != scopeStack.back() )
+        {
             nameRef->nonlocal = true;
 #if 0
-            qWarning() << "accessing parameter or local variable of outer procedures in"
+            qWarning() //<< "accessing parameter or local variable of outer procedures in"
                        << module->name << nameRef->pos.d_row;
 #endif
+        }
     }
 }
 

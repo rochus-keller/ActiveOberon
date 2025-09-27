@@ -143,6 +143,12 @@ func (n *Node) SetType(t *Type) {
 	n.TypeRef = t
 }
 
+func (n *Node) OverrideType(t *Type) *Type {
+	old := n.TypeRef
+	n.TypeRef = t
+	return old
+}
+
 // TypeKind represents different type kinds
 type TypeKind int
 
@@ -907,16 +913,6 @@ func (m *AstModel) GetTopScope() *Declaration {
 	return nil
 }
 
-// GetTopModule returns the top-level module
-func (m *AstModel) GetTopModule() *Declaration {
-	for _, scope := range m.scopes {
-		if scope.Kind == int(DECL_Module) {
-			return scope
-		}
-	}
-	return nil
-}
-
 // toList converts linked list to slice
 func (m *AstModel) toList(d *Declaration) []*Declaration {
 	var result []*Declaration
@@ -928,6 +924,17 @@ func (m *AstModel) toList(d *Declaration) []*Declaration {
 		old.Next = nil
 	}
 	return result
+}
+
+func (m *AstModel) FindDeclInImport(import_ *Declaration, name string) *Declaration {
+	if import_ == nil {
+		return m.FindDecl(name, false)
+	}
+	obj := import_.Link
+	for obj != nil && name == string(obj.Name) {
+		obj = obj.Next
+	}
+	return obj
 }
 
 // CreateFromToken creates expression from token
