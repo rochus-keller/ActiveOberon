@@ -32,18 +32,9 @@ type ParseError struct {
 }
 
 // ID models an identifier definition with visibility and attributes.
-type idVisi uint8
-
-const (
-	visiNA idVisi = iota
-	visiPrivate
-	visiReadOnly
-	visiPublic
-)
-
 type ID struct {
 	Name     Token
-	Visi     idVisi
+	Visi     Visi
 	Untraced bool
 }
 
@@ -292,7 +283,7 @@ func (p *Parser) Module() {
 	if firstBody(p.la.Type) {
 		// BEGIN ... turned into an injected procedure
 		p.la.Val = p.BEGIN
-		procDecl := p.addDecl(p.la, uint8(DECL_Private()), int(DECL_Procedure)) // visi value mapped later
+		procDecl := p.addDecl(p.la, uint8(VISI_Private), int(DECL_Procedure)) // visi value mapped later
 		if procDecl == nil {
 			return
 		}
@@ -676,7 +667,7 @@ func (p *Parser) ObjectType() *Type {
 		p.DeclSeq(true)
 		if firstBody(p.la.Type) {
 			p.la.Val = p.BEGIN
-			procDecl := p.addDecl(p.la, uint8(DECL_Private()), int(DECL_Procedure))
+			procDecl := p.addDecl(p.la, uint8(VISI_Private), int(DECL_Procedure))
 			if procDecl == nil {
 				// defensive
 			} else {
@@ -1491,14 +1482,14 @@ func (p *Parser) IdentDef() ID {
 	p.expect(TokIdent, false, "IdentDef")
 	var res ID
 	res.Name = p.cur
-	res.Visi = visiPrivate
+	res.Visi = VISI_Private
 	if p.la.Type == TokStar || p.la.Type == TokMinus {
 		if p.la.Type == TokStar {
 			p.expect(TokStar, false, "IdentDef")
-			res.Visi = visiPublic
+			res.Visi = VISI_ReadWrite
 		} else if p.la.Type == TokMinus {
 			p.expect(TokMinus, false, "IdentDef")
-			res.Visi = visiReadOnly
+			res.Visi = VISI_ReadOnly
 		} else {
 			p.invalid("IdentDef")
 		}
@@ -1589,17 +1580,7 @@ func (p *Parser) addDecl(id Token, visi uint8, mode int) *Declaration {
 		return nil
 	}
 	d.Kind = mode
-	// map Parser visibility to AST visibility
-	switch idVisi(visi) {
-	case visiPrivate:
-		d.Visi = VISI_Private
-	case visiReadOnly:
-		d.Visi = VISI_ReadOnly
-	case visiPublic:
-		d.Visi = VISI_ReadWrite
-	default:
-		d.Visi = VISI_Private
-	}
+	d.Visi = Visi(visi)
 	rc := NewRowCol(id.LineNr, id.ColNr)
 	d.Pos = rc
 	return d
@@ -1611,9 +1592,6 @@ func (p *Parser) errorTok(t Token, msg string) {
 	}
 	p.error(msg, NewRowCol(t.LineNr, t.ColNr), t.SourcePath)
 }
-
-// DECL_Private helper for injected BEGIN-proc visibility mapping
-func DECL_Private() Visi { return VISI_Private }
 
 func (p *Parser) Errors() []ParseError {
 	return p.errors

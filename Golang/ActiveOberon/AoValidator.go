@@ -293,9 +293,9 @@ func (v *Validator) visitImport(importDecl *Declaration) {
 		v.error(importDecl.Pos, "imports are only supported on module level")
 	}
 	var mod *Declaration
-	impData, _ := importDecl.Data.(Import)
+	impData, _ := importDecl.Data.(*Import)
 	if v.imp != nil {
-		mod = v.imp.LoadModule(&impData)
+		mod = v.imp.LoadModule(impData)
 	}
 	if mod != nil {
 		// use members of resolved module
@@ -717,8 +717,8 @@ func (v *Validator) resolveDesig(nameRef *Expression) {
 	if nameRef == nil || ExprKind(nameRef.Kind) != EXPR_NameRef || len(v.scopeStack) == 0 {
 		return
 	}
-	q, _ := nameRef.Val.(Qualident)
-	rFirst, rSecond := v.find(q, nameRef.Pos)
+	q, _ := nameRef.Val.(*Qualident)
+	rFirst, rSecond := v.find(*q, nameRef.Pos)
 	pos := nameRef.Pos
 	if rSecond == nil {
 		// unresolved: still mark what we can

@@ -274,7 +274,7 @@ const (
 )
 
 // Visi represents visibility levels
-type Visi int
+type Visi uint8
 
 const (
 	VISI_NA Visi = iota
@@ -708,6 +708,7 @@ type Xref struct {
 type AstModel struct {
 	scopes      []*Declaration
 	globalScope *Declaration
+	SYSTEM      *Declaration
 	types       []*Type // basic types
 }
 
@@ -780,6 +781,8 @@ func (m *AstModel) initializeBuiltins() {
 		m.addConst("DH", TYPE_BYTE, 0)
 
 		m.CloseScope(false)
+
+		m.SYSTEM = system
 	} else {
 		m.OpenScope(m.globalScope)
 	}

@@ -43,6 +43,65 @@ func listModInDir(dir string) ([]string, error) {
 	return out, nil
 }
 
+type ModuleBase struct {
+	modules []*ao.Declaration
+	model   *ao.AstModel
+}
+
+func (self *ModuleBase) GetModules() []*ao.Declaration {
+	return self.modules
+}
+
+func (self *ModuleBase) AddModule(m *ao.Declaration) {
+	self.modules = append(self.modules, m)
+}
+
+func (self *ModuleBase) LoadModule(imp *ao.Import) *ao.Declaration {
+
+	modName := string(imp.ModuleName)
+	if modName == "SYSTEM" {
+		return self.model.SYSTEM
+	}
+
+	for _, mod := range self.modules {
+		if string(mod.Name) == modName {
+			return mod
+		}
+	}
+	return nil
+}
+
+func (self *ModuleBase) Validate(module *ao.Declaration) bool {
+	if module.Validated {
+		return true
+	}
+	v := ao.NewValidator(self.GetModel(), self, false)
+	v.Validate(module, nil)
+	module.Validated = true
+	if len(v.Errors) != 0 {
+		fmt.Printf("validation of module '%s' had FAILED with %d error(s):\n", string(module.Name), len(v.Errors))
+		for i, e := range v.Errors {
+			pos := e.Pos.String()
+			if e.Path != "" {
+				pos = fmt.Sprintf("%s:%s", strings.TrimSuffix(filepath.Base(e.Path), ".Mod"), pos)
+			}
+			fmt.Printf("    %2d) %s at %s\n", i+1, e.Msg, pos)
+			if i == 9 {
+				break
+			}
+		}
+		return false
+	}
+	return true
+}
+
+func (self *ModuleBase) GetModel() *ao.AstModel {
+	if self.model == nil {
+		self.model = ao.NewAstModel()
+	}
+	return self.model
+}
+
 func main() {
 	flag.Parse()
 
@@ -65,8 +124,7 @@ func main() {
 	success := 0
 	failed := 0
 
-	model := ao.NewAstModel()
-	var modules []*ao.Declaration
+	var modules ModuleBase
 
 	for _, f := range files {
 		// Validate extension
@@ -88,7 +146,7 @@ func main() {
 			continue
 		}
 
-		parser := ao.NewParser(model, lexer)
+		parser := ao.NewParser(modules.GetModel(), lexer)
 		parser.RunParser()
 
 		// Collect errors (Go 1.21 compatible)
@@ -99,8 +157,7 @@ func main() {
 		} else {
 			// Success summary: show module name if available
 			mod := parser.TakeResult()
-			// TODO v := ao.NewValidator(model, nil, false)
-			modules = append(modules, mod)
+			modules.AddModule(mod)
 			success++
 		}
 	}
@@ -111,15 +168,21 @@ func main() {
 
 	fmt.Println("=== Closure Conversion Analysis ===")
 
-	for _, mod := range modules {
-		analyzer := ao.NewClosureAnalyzerForModule(mod)
-		results := analyzer.Analyze()
-		fmt.Printf("module %s ", string(mod.Name))
-		analyzer.PrintResults()
+	for _, mod := range modules.GetModules() {
+		if modules.Validate(mod) {
+			/*
+				analyzer := ao.NewClosureAnalyzerForModule(mod)
+				results := analyzer.Analyze()
+				fmt.Printf("module %s ", string(mod.Name))
+				analyzer.PrintResults()
 
-		for _, info := range results {
-			// Process each nested procedure's closure requirements
-			_ = info
+				for _, info := range results {
+					// Process each nested procedure's closure requirements
+					_ = info
+				}
+			*/
+		} else {
+			failed++
 		}
 	}
 
