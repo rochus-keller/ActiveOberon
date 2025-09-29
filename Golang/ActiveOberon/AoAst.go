@@ -934,7 +934,7 @@ func (m *AstModel) FindDeclInImport(import_ *Declaration, name string) *Declarat
 		return m.FindDecl(name, false)
 	}
 	obj := import_.Link
-	for obj != nil && name == string(obj.Name) {
+	for obj != nil && name != string(obj.Name) {
 		obj = obj.Next
 	}
 	return obj

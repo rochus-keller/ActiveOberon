@@ -22,6 +22,7 @@
 #include "AoProject.h"
 #include "AoParser2.h"
 #include "AoLexer.h"
+#include "ClosureLifter.h"
 #include <QBuffer>
 #include <QDir>
 #include <QtDebug>
@@ -567,6 +568,14 @@ Declaration* Project::loadModule(const Import& imp)
             foreach( const Validator::Error& e, v.errors )
                 errors << Error(e.msg, e.pos, e.path);
             module->hasErrors = true;
+        }else
+        {
+#if 0
+            ClosureLifter ca;
+            QTextStream out(stdout);
+            if( ca.analyze(module) )
+                ca.printPlans(out);
+#endif
         }
         file->d_mod = module;
         ms->xref = v.takeXref();

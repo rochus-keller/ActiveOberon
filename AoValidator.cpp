@@ -718,12 +718,14 @@ void Validator::resolveDesig(Expression* nameRef)
 
     if( r.second->kind == Declaration::LocalDecl || r.second->kind == Declaration::ParamDecl )
     {
-        if( r.second->outer != scopeStack.back() )
+        if( r.second->outer && r.second->outer != scopeStack.back() )
         {
             nameRef->nonlocal = true;
+            Q_ASSERT(r.second->outer->kind == Declaration::Procedure);
+            r.second->outer->nonlocal = true;
 #if 0
             qWarning() //<< "accessing parameter or local variable of outer procedures in"
-                       << module->name << nameRef->pos.d_row;
+                       << module->name << scopeStack.back()->name << r.second->name << nameRef->pos.d_row;
 #endif
         }
     }
@@ -855,6 +857,7 @@ void Validator::visitType(Type* type)
                 self->pos = curObjectTypeDecl->pos;
                 self->receiver = true;
                 self->next = d->link;
+                self->outer = d;
                 d->link = self;
             }
             visitDecl(d);

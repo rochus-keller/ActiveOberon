@@ -695,6 +695,7 @@ func (v *Validator) resolveIfNamedType(nameRef *Type) {
 	q := *nameRef.Quali
 	rFirst, rSecond := v.find(q, nameRef.Pos)
 	if rSecond == nil {
+		rFirst, rSecond = v.find(q, nameRef.Pos) // TEST
 		return
 	}
 	pos := nameRef.Pos
@@ -756,8 +757,10 @@ func (v *Validator) find(q Qualident, pos RowCol) (*Declaration, *Declaration) {
 		return nil, nil
 	}
 	// qualified: module import
+	var res1 *Declaration = nil
+	var res2 *Declaration = nil
 	if len(q.First) > 0 {
-		importDecl := v.scopeStack[len(v.scopeStack)-1].Find(string(q.First), false)
+		importDecl := v.scopeStack[len(v.scopeStack)-1].Find(string(q.First), true)
 		if importDecl == nil || DeclKind(importDecl.Kind) != DECL_Import {
 			v.error(pos, "identifier doesn't refer to an imported module")
 			v.markUnref(len(q.First), pos)
@@ -766,45 +769,47 @@ func (v *Validator) find(q Qualident, pos RowCol) (*Declaration, *Declaration) {
 		if !importDecl.Validated {
 			v.visitImport(importDecl)
 		}
+		res1 = importDecl
 		// lookup member in imported module
 		member := v.mdl.FindDeclInImport(importDecl, string(q.Second))
 		pos.Col += uint32(len(q.First)) + 1
 		if member == nil {
 			v.error(pos, fmt.Sprintf("declaration '%s' not found in imported module '%s'", string(q.Second), string(q.First)))
 			v.markUnref(len(q.Second), pos)
-			return nil, nil
+		} else {
+			if member.Visi == VISI_Private {
+				v.error(pos, fmt.Sprintf("cannot access private declaration '%s' from module '%s'", string(q.Second), string(q.First)))
+			}
+			res2 = member
 		}
-		if member.Visi == VISI_Private {
-			v.error(pos, fmt.Sprintf("cannot access private declaration '%s' from module '%s'", string(q.Second), string(q.First)))
-		}
-		return importDecl, member
-	}
+	} else {
 
-	// unqualified: search current + outers up to module
-	var d *Declaration
-	nested := v.scopeStack[len(v.scopeStack)-1]
-	for d == nil && nested != nil && DeclKind(nested.Kind) != DECL_Module {
-		d = nested.Find(string(q.Second), false) // local vars first
-		nested = nested.Outer
+		// unqualified: search current + outers up to module
+		var d *Declaration
+		nested := v.scopeStack[len(v.scopeStack)-1]
+		for d == nil && nested != nil && DeclKind(nested.Kind) != DECL_Module {
+			d = nested.Find(string(q.Second), false) // local vars first
+			nested = nested.Outer
+		}
+		// within object type scope (type-bound procs), also search fields
+		if d == nil && v.curObjectTypeDecl != nil {
+			d = v.findInType(v.deref(v.curObjectTypeDecl.GetType()), string(q.Second))
+		}
+		// module-level
+		if d == nil {
+			d = v.module.Find(string(q.Second), false)
+		}
+		// built-ins
+		if d == nil {
+			d = v.mdl.FindDecl(string(q.Second), false)
+		}
+		if d == nil {
+			v.error(pos, fmt.Sprintf("declaration '%s' not found", string(q.Second)))
+			v.markUnref(len(q.Second), pos)
+		}
+		res2 = d
 	}
-	// within object type scope (type-bound procs), also search fields
-	if d == nil && v.curObjectTypeDecl != nil && v.curObjectTypeDecl.GetType() != nil {
-		d = v.findInType(v.deref(v.curObjectTypeDecl.GetType()), string(q.Second))
-	}
-	// module-level
-	if d == nil {
-		d = v.module.Find(string(q.Second), false)
-	}
-	// built-ins
-	if d == nil {
-		d = v.mdl.FindDecl(string(q.Second), false)
-	}
-	if d == nil {
-		v.error(pos, fmt.Sprintf("declaration '%s' not found", string(q.Second)))
-		v.markUnref(len(q.Second), pos)
-		return nil, nil
-	}
-	return nil, d
+	return res1, res2
 }
 
 func (v *Validator) findInType(t *Type, field string) *Declaration {

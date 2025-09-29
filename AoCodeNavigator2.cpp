@@ -791,7 +791,10 @@ static void fillDir(const FileSystem::Dir& dir, T* parent)
     for( i = sortDir.begin(); i != sortDir.end(); ++i )
     {
         QTreeWidgetItem* item = new QTreeWidgetItem(parent,1);
-        item->setText(0, i.key());
+        QString name = i.key();
+        if( name.isEmpty() )
+            name = "<root>";
+        item->setText(0, name);
         item->setToolTip( 0, item->text(0) );
         item->setIcon(0, QPixmap(":/images/folder.png") );
         fillDir(*i.value(), item);
@@ -1311,7 +1314,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.5.3");
+    a.setApplicationVersion("0.5.4");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX

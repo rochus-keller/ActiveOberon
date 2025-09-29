@@ -54,7 +54,7 @@ namespace Ao
         Ast::Type* deref(Ast::Type* t);
         void resolveIfNamedType(Ast::Type* nameRef);
         void resolveDesig(Ast::Expression* nameRef);
-        typedef QPair<Ast::Declaration*,Ast::Declaration*> ResolvedQ;
+        typedef QPair<Ast::Declaration*,Ast::Declaration*> ResolvedQ; // [module .] member
         ResolvedQ find(const Ast::Qualident& q, RowCol pos);
         Ast::Declaration* findInType(Ast::Type*, const QByteArray& field);
         bool checkBuiltinArgs(quint8 builtin, const Ast::ExpList& args, Ast::Type** ret, const RowCol& pos);
