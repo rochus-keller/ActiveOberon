@@ -65,6 +65,7 @@ func (self *ModuleBase) LoadModule(imp *ao.Import) *ao.Declaration {
 
 	for _, mod := range self.modules {
 		if string(mod.Name) == modName {
+			self.Validate(mod)
 			return mod
 		}
 	}
@@ -170,17 +171,16 @@ func main() {
 
 	for _, mod := range modules.GetModules() {
 		if modules.Validate(mod) {
-			/*
-				analyzer := ao.NewClosureAnalyzerForModule(mod)
-				results := analyzer.Analyze()
-				fmt.Printf("module %s ", string(mod.Name))
-				analyzer.PrintResults()
+			//*
+			analyzer := ao.NewClosureAnalyzerForModule(mod)
+			results := analyzer.Analyze()
+			analyzer.PrintResults()
 
-				for _, info := range results {
-					// Process each nested procedure's closure requirements
-					_ = info
-				}
-			*/
+			for _, info := range results {
+				// Process each nested procedure's closure requirements
+				_ = info
+			}
+			//*/
 		} else {
 			failed++
 		}

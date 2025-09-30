@@ -80,14 +80,14 @@ private:
     // Step 1: index a procedure and recurse into nested ones.
     void indexProcedure(Declaration* proc);
 
-    // Scan body for direct free variables (outer locals/params) used by proc.
+    // Scan body for outer locals/params used by proc (i.e. "free variables").
     QSet<Declaration*> findDirectFree(Declaration* proc) const;
 
     void scanStmt(Statement* s, Declaration* currentProc, QSet<Declaration*>& acc) const;
     void scanExpr(Expression* e, Declaration* currentProc, QSet<Declaration*>& acc) const;
 
-    // A declaration use in currentProc is a free variable if it is a var/local/param
-    // whose owner is an ancestor procedure of currentProc (and not currentProc itself).
+    // A declaration use in currentProc is a free variable if it is a local var/param
+    // whose owner is an outer (i.e. "ancestor") procedure of currentProc (and not currentProc itself).
     bool isFreeVarUse(Declaration* d, Declaration* currentProc) const;
 
     // Find owner procedure that declares d.
@@ -115,7 +115,6 @@ private:
     struct DeclLess;
     int depthOfOwner(Declaration* d) const;
 private:
-    // State
     QVector<ProcPlan>                plans_;
     QHash<Declaration*, ProcState>   procIndex_;
     QList<Declaration*>              procList_;

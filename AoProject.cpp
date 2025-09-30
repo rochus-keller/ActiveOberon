@@ -22,7 +22,7 @@
 #include "AoProject.h"
 #include "AoParser2.h"
 #include "AoLexer.h"
-#include "ClosureLifter.h"
+#include "AoClosureLifter.h"
 #include <QBuffer>
 #include <QDir>
 #include <QtDebug>

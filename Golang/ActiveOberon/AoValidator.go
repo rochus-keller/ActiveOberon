@@ -75,7 +75,11 @@ func (v *Validator) Validate(module *Declaration, importInfo *Import) bool {
 	if module == nil || DeclKind(module.Kind) != DECL_Module {
 		return false
 	}
+	if module.Validated {
+		return true
+	}
 	v.module = module
+	// fmt.Printf("validating module %s\n", string(module.Name))
 
 	// xref module header
 	if v.haveXref {
@@ -103,6 +107,8 @@ func (v *Validator) Validate(module *Declaration, importInfo *Import) bool {
 		v.lastSym.Next = v.firstSym
 	}
 
+	module.Validated = true
+	module.HasErrors = len(v.Errors) != 0
 	return len(v.Errors) == 0
 }
 

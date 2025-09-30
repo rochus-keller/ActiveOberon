@@ -42,19 +42,21 @@ type NestedProcInfo struct {
 
 // ClosureAnalyzer performs closure analysis on a single module.
 type ClosureAnalyzer struct {
-	module    *Declaration
-	results   []NestedProcInfo
-	procStack []*Declaration
-	pathStack []string
+	module     *Declaration
+	results    []NestedProcInfo
+	procStack  []*Declaration
+	pathStack  []string
+	moduleName string
 }
 
 // NewClosureAnalyzerForModule constructs an analyzer for a single module.
 func NewClosureAnalyzerForModule(module *Declaration) *ClosureAnalyzer {
 	return &ClosureAnalyzer{
-		module:    module,
-		results:   make([]NestedProcInfo, 0),
-		procStack: make([]*Declaration, 0),
-		pathStack: make([]string, 0),
+		module:     module,
+		results:    make([]NestedProcInfo, 0),
+		procStack:  make([]*Declaration, 0),
+		pathStack:  make([]string, 0),
+		moduleName: string(module.Name),
 	}
 }
 
@@ -281,10 +283,10 @@ func (ca *ClosureAnalyzer) createClosureParam(accessedVar *Declaration, existing
 // PrintResults prints a human-readable summary.
 func (ca *ClosureAnalyzer) PrintResults() {
 	if len(ca.results) == 0 {
-		fmt.Println("No nested procedures requiring closure parameters found.")
+		// fmt.Println("No nested procedures requiring closure parameters found.")
 		return
 	}
-	fmt.Printf("Found %d nested procedures requiring closure parameters:\n\n", len(ca.results))
+	fmt.Printf("Module %s found %d nested procedures requiring closure parameters:\n\n", ca.moduleName, len(ca.results))
 	for i, info := range ca.results {
 		fmt.Printf("%d. Proc: %s\n", i+1, string(info.Proc.Name))
 		fmt.Printf("   Path: %s\n", strings.Join(info.Path, "."))

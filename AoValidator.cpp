@@ -49,6 +49,8 @@ Validator::~Validator()
 bool Validator::validate(Declaration* module, const Import& import)
 {
     Q_ASSERT(module);
+    if( module->validated )
+        return true;
     this->module = module;
     if( first )
     {
@@ -76,6 +78,8 @@ bool Validator::validate(Declaration* module, const Import& import)
     if( first )
         last->next = first; // close the circle
 
+    module->validated = true;
+    module->hasErrors = !errors.isEmpty();
     return errors.isEmpty();
 }
 

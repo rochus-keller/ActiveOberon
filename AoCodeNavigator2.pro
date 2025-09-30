@@ -25,7 +25,7 @@ SOURCES += \
     AoProject.cpp \
     AoCodeNavigator2.cpp \
     AoHighlighter2.cpp \
-    ClosureLifter.cpp
+    AoClosureLifter.cpp
 
 HEADERS += \
     AoRowCol.h \
@@ -39,7 +39,7 @@ HEADERS += \
     AoProject.h \
     AoCodeNavigator2.h \
     AoHighlighter2.h \
-    ClosureLifter.h
+    AoClosureLifter.h
 
 
 

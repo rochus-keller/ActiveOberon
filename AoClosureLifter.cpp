@@ -17,7 +17,7 @@
 * http://www.gnu.org/copyleft/gpl.html.
 */
 
-#include "ClosureLifter.h".h"
+#include "AoClosureLifter.h".h"
 #include <QtAlgorithms>
 using namespace Ao;
 using namespace Ast;
@@ -42,7 +42,7 @@ bool ClosureLifter::analyze(Declaration* module)
     procIndex_.clear();
     procList_.clear();
     pathStack_.clear();
-    if (!module || module->kind != Declaration::Module)
+    if (!module || module->kind != Declaration::Module || !module->validated)
         return false;
 
     moduleName = module->name;
@@ -52,10 +52,11 @@ bool ClosureLifter::analyze(Declaration* module)
 
     // 1) Index all procedures and gather per-proc basics.
     for (Declaration* d = module->link; d; d = d->next) {
-        if (d->kind == Declaration::Procedure) indexProcedure(d);
+        if (d->kind == Declaration::Procedure)
+            indexProcedure(d);
     }
 
-    // 2) Compute direct free-variable captures per proc.
+    // 2) Compute direct free-variable captures (i.e. non-local accesses) per proc.
     for (int i = 0; i < procList_.size(); ++i) {
         Declaration* p = procList_[i];
         ProcState& st = procIndex_[p];
@@ -182,7 +183,6 @@ void ClosureLifter::printPlans(QTextStream& out) const
     }
 }
 
-// Step 1: index a procedure and recurse into nested ones.
 void ClosureLifter::indexProcedure(Declaration* proc)
 {
     if (!proc || proc->kind != Declaration::Procedure) return;
@@ -202,7 +202,8 @@ void ClosureLifter::indexProcedure(Declaration* proc)
 
     // Recurse into nested procedures declared within this procedure.
     for (Declaration* d = proc->link; d; d = d->next) {
-        if (d->kind == Declaration::Procedure) indexProcedure(d);
+        if (d->kind == Declaration::Procedure)
+            indexProcedure(d);
     }
 
     // Leave stack.
@@ -210,11 +211,11 @@ void ClosureLifter::indexProcedure(Declaration* proc)
     procStack_.removeLast();
 }
 
-// Scan body for direct free variables (outer locals/params) used by proc.
 QSet<Declaration*> ClosureLifter::findDirectFree(Declaration* proc) const
 {
     QSet<Declaration*> acc;
-    if (!proc || !proc->body) return acc;
+    if (!proc || !proc->body)
+        return acc;
     scanStmt(proc->body, proc, acc);
     return acc;
 }
@@ -246,8 +247,6 @@ void ClosureLifter::scanExpr(Expression* e, Declaration* currentProc, QSet<Decla
     if (e->next) scanExpr(e->next, currentProc, acc);
 }
 
-// A declaration use in currentProc is a free variable if it is a var/local/param
-// whose owner is an ancestor procedure of currentProc (and not currentProc itself).
 bool ClosureLifter::isFreeVarUse(Declaration* d, Declaration* currentProc) const
 {
     if (!d || !currentProc) return false;
@@ -261,7 +260,6 @@ bool ClosureLifter::isFreeVarUse(Declaration* d, Declaration* currentProc) const
     return isAncestor(owner, currentProc);
 }
 
-// Find owner procedure that declares d.
 Declaration* ClosureLifter::ownerProc(Declaration* d) const
 {
     for (Declaration* o = d ? d->outer : 0; o; o = o->outer) {
@@ -278,7 +276,6 @@ bool ClosureLifter::isAncestor(Declaration* anc, Declaration* desc) const
     return false;
 }
 
-// Build list of direct nested-proc callees by scanning calls whose lhs resolves to a proc decl.
 QList<Declaration*> ClosureLifter::findDirectCallees(Declaration* proc) const
 {
     QList<Declaration*> out;
@@ -322,7 +319,6 @@ void ClosureLifter::collectCalleesExpr(Expression* e, QList<Declaration*>& out, 
     if (e->next) collectCalleesExpr(e->next, out, seen);
 }
 
-// Remove declarations owned by p (p provides actuals, no param needed for own locals/params).
 void ClosureLifter::stripOwned(Declaration* p, QSet<Declaration*>& s) const
 {
     QSet<Declaration*> toRemove;
