@@ -48,6 +48,7 @@ namespace Ast
             SYSTEM_GET8, SYSTEM_GET16, SYSTEM_GET32, SYSTEM_GET64,
             SYSTEM_PUT8, SYSTEM_PUT16, SYSTEM_PUT32, SYSTEM_PUT64,
             SYSTEM_GETREG, SYSTEM_PUTREG,
+            SYSTEM_ENABLEINTERRUPTS, SYSTEM_DISABLEINTERRUPTS, SYSTEM_RESTOREINTERRUPTS, // wegen Shark Oberon
             Max
         };
         static const char* name[];

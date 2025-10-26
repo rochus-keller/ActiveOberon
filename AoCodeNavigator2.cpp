@@ -183,7 +183,7 @@ public:
             QTextCursor cur = cursorForPosition(e->pos());
             Symbol* e = that()->d_pro->findSymbolBySourcePos(
                         d_path,cur.blockNumber() + 1,cur.positionInBlock() + 1);
-            if( e )
+            if( e && e->decl )
             {
                 Declaration* decl = e->decl;
                 if( decl->kind == Declaration::Import && e->pos == decl->pos )
@@ -1314,7 +1314,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.5.4");
+    a.setApplicationVersion("0.5.5");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX

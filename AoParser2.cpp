@@ -641,6 +641,7 @@ void Parser2::VarDecl(bool inObjectType) {
 
 QByteArray Parser2::Assembler() {
 	expect(Tok_CODE, false, "Assembler");
+    // qDebug() << "Assembler in" << scanner->source();
     return cur.d_val;
 }
 

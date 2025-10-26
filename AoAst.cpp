@@ -57,7 +57,8 @@ const char* Builtin::name[] = {
     "CLI", "STI",
     "GET8", "GET16", "GET32", "GET64",
     "PUT8", "PUT16", "PUT32", "PUT64",
-    "GETREG", "PUTREG"
+    "GETREG", "PUTREG",
+    "ENABLEINTERRUPTS", "DISABLEINTERRUPTS", "RESTOREINTERRUPTS"
 };
 
 AstModel::AstModel()

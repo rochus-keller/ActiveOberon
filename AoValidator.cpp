@@ -1104,6 +1104,9 @@ bool Validator::checkBuiltinArgs(quint8 builtin, const ExpList& args, Type** ret
     case Builtin::SYSTEM_PUT64:
     case Builtin::SYSTEM_GETREG:
     case Builtin::SYSTEM_PUTREG:
+    case Builtin::SYSTEM_ENABLEINTERRUPTS:
+    case Builtin::SYSTEM_DISABLEINTERRUPTS:
+    case Builtin::SYSTEM_RESTOREINTERRUPTS:
         break;
     default:
         Q_ASSERT(false);
