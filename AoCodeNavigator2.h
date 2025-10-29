@@ -31,6 +31,7 @@ class QPlainTextEdit;
 class QTreeWidgetItem;
 class QTreeWidget;
 class QModelIndex;
+class QLineEdit;
 
 namespace Ao
 {
@@ -93,6 +94,8 @@ protected slots:
     void onIncreaseSize();
     void onDecreaseSize();
     void onHierDblClicked(QTreeWidgetItem*,int);
+    void onSymFocus();
+    void onSymSearch();
 
 private:
     class Viewer;
@@ -110,6 +113,7 @@ private:
     QTreeWidget* d_usedBy;
     QString d_dir;
     QHash<Ast::Declaration*,QTreeWidgetItem*> d_modIdx;
+    QLineEdit* d_searchFor;
 
     QList<Place> d_backHisto; // d_backHisto.last() is current place
     QList<Place> d_forwardHisto;

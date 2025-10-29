@@ -577,6 +577,11 @@ Declaration* Project::loadModule(const Import& imp)
                 ca.printPlans(out);
 #endif
         }
+#if 0
+        QHash<int,QList<Ast::Expression*> >::const_iterator j;
+        for( j = v.uses.begin(); j != v.uses.end(); ++j )
+            uses[j.key()] += j.value().size();
+#endif
         file->d_mod = module;
         ms->xref = v.takeXref();
         QHash<Declaration*,DeclList>::const_iterator i;
@@ -661,6 +666,7 @@ bool Project::parse()
 
     int all = 0, ok = 0;
 
+    uses.clear();
     FileHash::const_iterator j;
     for( j = d_files.begin(); j != d_files.end(); ++j )
     {
@@ -671,6 +677,12 @@ bool Project::parse()
         if( module && !module->hasErrors )
             ok++;
     }
+
+#if 0
+    QHash<int,int>::const_iterator i;
+    for( i = uses.begin(); i != uses.end(); ++i )
+        qDebug() << Ast::Builtin::name[i.key()] << i.value();
+#endif
 
     emit sigReparsed();
     return all == ok;

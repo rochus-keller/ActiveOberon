@@ -28,6 +28,7 @@ using namespace Ast;
 // it mostly checks name resolution, not type compatibility
 
 #define _ALLOW_POINTER_BASE_TYPE
+#define _ALLOW_RETURN_STRUCTURED_TYPES
 
 static QByteArray SELF;
 
@@ -51,6 +52,7 @@ bool Validator::validate(Declaration* module, const Import& import)
     Q_ASSERT(module);
     if( module->validated )
         return true;
+    uses.clear();
     this->module = module;
     if( first )
     {
@@ -80,6 +82,16 @@ bool Validator::validate(Declaration* module, const Import& import)
 
     module->validated = true;
     module->hasErrors = !errors.isEmpty();
+#if 0
+    if( !uses.isEmpty() )
+    {
+        QByteArray what;
+        QHash<int,QList<Ast::Expression*> >::const_iterator i;
+        for( i = uses.begin(); i != uses.end(); ++i )
+            what += QString("%1(%2) ").arg(Ast::Builtin::name[i.key()]).arg(i.value().size()).toUtf8();
+        qDebug() << "#" << module->name << uses.size() << what.constData();
+    }
+#endif
     return errors.isEmpty();
 }
 
@@ -245,8 +257,10 @@ void Validator::visitDecl(Declaration* d)
         // only header is evaluated here
         visitType(d->type());
         Type* ret = deref(d->type());
+#ifndef _ALLOW_RETURN_STRUCTURED_TYPES
         if( ret && ret->isStructured() )
             error(d->pos, "return type cannot be structured");
+#endif
         const QList<Declaration*> params = d->getParams(true);
         for( int i = 0; i < params.size(); i++ )
             visitDecl(params[i]);
@@ -607,6 +621,10 @@ void Validator::callOp(Expression* e)
             if( checkBuiltinArgs(proc->id, actuals, &ret, e->pos) )
             {
                 // NOTE: no eval done here
+#if 0
+                if( proc->id > Builtin::SYSTEM && proc->id < Builtin::Max )
+                    uses[proc->id].append(e);
+#endif
             }
         }else
         {
@@ -892,8 +910,10 @@ void Validator::visitType(Type* type)
         if( type->kind == Type::Procedure )
         {
             Type* ret = deref(type->type());
+#ifndef _ALLOW_RETURN_STRUCTURED_TYPES
             if( ret && ret->isStructured() )
                 error(type->pos, "return type cannot be structured");
+#endif
         }
         break;
     case Type::Array:

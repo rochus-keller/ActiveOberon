@@ -46,6 +46,7 @@ namespace Ao
             Error( const QString& m, const RowCol& pos, const QString& p):msg(m),pos(pos),path(p){}
         };
         mutable QList<Error> errors;
+        QHash<int,QList<Ast::Expression*> > uses;
     protected:
         void error( const RowCol&, const QString& msg ) const;
         void markDecl(Ast::Declaration* d);

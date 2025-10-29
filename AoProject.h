@@ -155,6 +155,7 @@ namespace Ao
         QString d_workingDir, d_buildDir;
         ModProc d_main;
         quint32 d_sloc;
+        QHash<int,int> uses;
         bool d_dirty;
         bool d_useBuiltInOakwood;
     };

@@ -435,6 +435,7 @@ CodeNavigator::CodeNavigator(QWidget *parent) : QMainWindow(parent),d_pushBackLo
     new QShortcut(tr("CTRL+O"),this,SLOT(onOpen()) );
     new QShortcut(Qt::CTRL + Qt::Key_Plus,this,SLOT(onIncreaseSize()) );
     new QShortcut(Qt::CTRL + Qt::Key_Minus,this,SLOT(onDecreaseSize()) );
+    new QShortcut(tr("CTRL+SHIFT+F"), this, SLOT(onSymFocus()));
 
     s_this = this;
     s_oldHandler = qInstallMessageHandler(messageHander);
@@ -449,6 +450,7 @@ CodeNavigator::CodeNavigator(QWidget *parent) : QMainWindow(parent),d_pushBackLo
     logMessage(tr("CTRL-click or F2 on the idents in the source to navigate to declarations") );
     logMessage(tr("CTRL+L to go to a specific line in the source code file") );
     logMessage(tr("CTRL+F to find a string in the current file") );
+    logMessage(tr("CTRL+SHIFT+F to find a symbol") );
     logMessage(tr("CTRL+G or F3 to find another match in the current file") );
     logMessage(tr("ALT+LEFT to move backwards in the navigation history") );
     logMessage(tr("ALT+RIGHT to move forward in the navigation history") );
@@ -539,6 +541,8 @@ void CodeNavigator::createUsedBy()
     QVBoxLayout* vbox = new QVBoxLayout(pane);
     vbox->setMargin(0);
     vbox->setSpacing(0);
+    d_searchFor = new QLineEdit(pane);
+    vbox->addWidget(d_searchFor, 0);
     d_usedByTitle = new QLabel(pane);
     d_usedByTitle->setWordWrap(true);
     d_usedByTitle->setMargin(2);
@@ -553,6 +557,7 @@ void CodeNavigator::createUsedBy()
     dock->setWidget(pane);
     addDockWidget( Qt::RightDockWidgetArea, dock );
     connect(d_usedBy, SIGNAL(itemDoubleClicked(QTreeWidgetItem*,int)), this, SLOT(onUsedByDblClicked()) );
+    connect(d_searchFor, SIGNAL(editingFinished()), this, SLOT(onSymSearch()) );
 }
 
 void CodeNavigator::createLog()
@@ -866,6 +871,7 @@ void CodeNavigator::onCursorPositionChanged()
     {
         Declaration* module = d_pro->findModuleByPath(d_view->d_path);
         fillUsedBy( id, module );
+        d_searchFor->clear();
         syncEditorMarks(id->decl, module);
         syncDetailView( id->decl );
         fillHier(id->decl);
@@ -1047,6 +1053,51 @@ void CodeNavigator::onHierDblClicked(QTreeWidgetItem* item, int)
         item->setExpanded(true);
     }
     d_hierLock = false;
+}
+
+void CodeNavigator::onSymFocus()
+{
+    d_searchFor->selectAll();
+    d_searchFor->setFocus();
+}
+
+void CodeNavigator::onSymSearch()
+{
+    d_usedBy->clear();
+    d_usedByTitle->clear();
+
+    const QByteArrayList components = d_searchFor->text().toUtf8().split('.');
+    if( components.isEmpty() || components.size() > 2 )
+        return;
+    Ast::Declaration* module = 0;
+    if( components.size() == 2 )
+    {
+        const QByteArray mod = Token::getSymbol(components.first());
+        module = d_pro->findModuleByPath(mod);
+        if( module == 0 )
+            module = AstModel::getGlobalScope()->find(mod);
+    }else
+        module = d_pro->findModuleByPath(d_view->d_path);
+
+    Declaration* sym = 0;
+    QByteArray name;
+    if( components.size() == 1 )
+        name = Token::getSymbol(components.first());
+    else
+        name = Token::getSymbol(components.last());
+    if( module )
+        sym = module->find(name);
+    if( sym == 0 )
+        sym = AstModel::getGlobalScope()->find(name);
+    if( sym == 0 )
+        sym = d_pro->findModule(name);
+
+    if( sym == 0 )
+        return;
+
+    Symbol s;
+    s.decl = sym;
+    fillUsedBy(&s, module);
 }
 
 template<class T>
@@ -1314,7 +1365,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.5.5");
+    a.setApplicationVersion("0.5.6");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX

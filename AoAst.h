@@ -348,6 +348,7 @@ namespace Ast
         static void cleanupGlobals();
         static DeclList toList(Declaration* d);
         static Declaration* getSystem();
+        static Declaration* getGlobalScope() { return globalScope; }
     protected:
         Type* newType(int form, int size);
         Type* addType(const QByteArray& name, int form, int size);
