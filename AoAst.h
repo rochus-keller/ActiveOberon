@@ -273,7 +273,7 @@ namespace Ast
     public:
         enum Kind { Invalid,
                     StatBlock, // head of statseq, and also possible member of statseq
-            Assig, Call, If, Elsif, Else, Case, TypeCase, CaseLabel, With,
+            Assig, Call, If, Elsif, Else, Case, CaseLabel, With,
             Loop, While, Repeat, Exit, Return, ForAssig, ForToBy, End, Assembler
         };
         quint8 kind;
