@@ -28,7 +28,7 @@ namespace Ao {
     class Validator2 {
 	public:
         Validator2() {}
-        void validate(Ast::Declaration* module);
+        bool validate(Ast::Declaration* module);
 		struct Error {
 		    QString msg;
             RowCol pos;
@@ -59,20 +59,17 @@ namespace Ao {
 		void Attributes();
         void StatBlock(Ast::Statement *);
         void StatSeq(Ast::Statement *s);
-		void IfStat();
-		void CaseStat();
-		void WhileStat();
-		void RepeatStat();
-		void ForStat();
-		void LoopStat();
-		void WithStat();
+        Ast::Statement * IfStat(Ast::Statement *s);
+        Ast::Statement * CaseStat(Ast::Statement *s);
+        void WhileStat(Ast::Statement *s);
+        void RepeatStat(Ast::Statement *s);
+        Ast::Statement * ForStat(Ast::Statement *s);
+        void LoopStat(Ast::Statement *s);
+        Ast::Statement * WithStat(Ast::Statement *s);
         void ReturnStat(Ast::Statement *s);
         Ast::Statement *Statement(Ast::Statement *s);
-		void Case();
-		void CaseLabels();
         bool ConstExpr(Ast::Expression *e);
         bool Expr(Ast::Expression *e);
-		void Qualident();
     protected:
         bool relation(Ast::Expression *e);
         bool unaryOp(Ast::Expression *e);

@@ -1008,14 +1008,18 @@ int Parser2::Attribute() {
 
 Statement* Parser2::StatBlock() {
 	expect(Tok_BEGIN, false, "StatBlock");
-    Statement* s = new Statement(Statement::StatBlock, cur.toRowCol());
+    Statement* s = 0;
     if( FIRST_Attributes(la.d_type) ) {
+        s = new Statement(Statement::StatBlock, cur.toRowCol());
         std::bitset<MaxAttr> a = Attributes();
         s->active = a.test(ACTIVE);
         s->exclusive = a.test(EXCLUSIVE);
 	}
 	if( FIRST_StatSeq(la.d_type) ) {
-        s->body = StatSeq();
+        if( s )
+            s->body = StatSeq();
+        else
+            s = StatSeq(); // skip block if no attributes set
 	}
     return s;
 }
@@ -1094,9 +1098,10 @@ Statement* Parser2::IfStat() {
     }
 	if( la.d_type == Tok_ELSE ) {
 		expect(Tok_ELSE, false, "IfStat");
-        Statement* stat = StatSeq();
-        if( stat )
-            last->append(stat);
+        Statement* stat = new Statement(Statement::Else, cur.toRowCol());
+        last->append(stat);
+        last = stat;
+        stat->body = StatSeq();
     }
 	expect(Tok_END, false, "IfStat");
     return first;
@@ -1278,7 +1283,7 @@ Statement* Parser2::Statement_() {
 		} else if( FIRST_ReturnStat(la.d_type) ) {
             s = ReturnStat();
 		} else if( FIRST_StatBlock(la.d_type) ) {
-            s = StatBlock();
+            s = StatBlock(); // embedded BEGIN {Attribute} supported in ActiveOberon
 			expect(Tok_END, false, "Statement");
 		} else
             invalid("Statement", true);
@@ -1786,7 +1791,7 @@ Expression* Parser2::number() {
     return res;
 }
 
-Declaration*Parser2::addDecl(const Token& id, quint8 visi, quint8 mode)
+Declaration*Parser2::addDecl(const Token& id, quint8 visi, Declaration::Kind mode)
 {
     // NOTE: we don't check here whether names are unique; this is to be done in the validator
     Declaration* d = mdl->addDecl(id.d_val);

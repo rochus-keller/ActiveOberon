@@ -61,7 +61,9 @@ namespace Ast
     public:
         enum Meta { T, D, E }; // Type, Declaration, Expression
         uint meta : 2;
+#ifndef _DEBUG
         uint kind : 5;
+#endif
 
         uint validated : 1;
         uint inList : 1; // private
@@ -94,7 +96,11 @@ namespace Ast
         void setType(Type*);
         Type* overrideType(Type*);
 
-        Node():meta(0),kind(0),validated(0),deferred(0),delegate(0),allocated(0),receiver(0),
+        Node():meta(0),
+    #ifndef _DEBUG
+            kind(0),
+    #endif
+            validated(0),deferred(0),delegate(0),allocated(0),receiver(0),
             varParam(0),constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),
             byVal(0),needsLval(0),nonlocal(0),ty(0),owned(0){}
         ~Node();
@@ -137,6 +143,10 @@ namespace Ast
         };
         static const char* name[];
 
+#ifdef _DEBUG
+        Kind kind;
+#endif
+
         union {
             quint32 len; // array length
             Quali* quali; // NameRef
@@ -178,6 +188,9 @@ namespace Ast
                     VarDecl, LocalDecl,
                     Procedure, ParamDecl,
                     Max };
+#ifdef _DEBUG
+        Kind kind;
+#endif
         enum { IdWidth = 16, NoSlot = (1 << IdWidth) - 1 };
         Declaration* link; // member list or imported module decl
         Declaration* outer; // the owning declaration to reconstruct the qualident
@@ -236,6 +249,10 @@ namespace Ast
             Super,   // ^ supercall
             MAX
         };
+#ifdef _DEBUG
+        Kind kind;
+#endif
+
         QVariant val; // set elements and call args are ExpList embedded in val
         Expression* lhs; // for unary and binary ops
         Expression* rhs; // for binary ops
@@ -276,7 +293,9 @@ namespace Ast
             Assig, Call, If, Elsif, Else, Case, CaseLabel, With,
             Loop, While, Repeat, Exit, Return, ForAssig, ForToBy, End, Assembler
         };
-        quint8 kind;
+#ifdef _DEBUG
+        Kind kind;
+#endif
         bool active;
         bool exclusive;
         RowCol pos;
@@ -350,8 +369,8 @@ namespace Ast
         static Declaration* getSystem();
         static Declaration* getGlobalScope() { return globalScope; }
     protected:
-        Type* newType(int form, int size);
-        Type* addType(const QByteArray& name, int form, int size);
+        Type* newType(Type::Kind form, int size);
+        Type* addType(const QByteArray& name, Type::Kind form, int size);
         void addTypeAlias(const QByteArray& name, Type*);
         void addBuiltin(const QByteArray& name, Builtin::Kind);
         void addConst(const QByteArray& name, quint8, const QVariant& = QVariant());

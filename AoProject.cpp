@@ -23,6 +23,7 @@
 #include "AoParser2.h"
 #include "AoLexer.h"
 #include "AoClosureLifter.h"
+#include "AoValidator2.h"
 #include <QBuffer>
 #include <QDir>
 #include <QtDebug>
@@ -578,6 +579,15 @@ Declaration* Project::loadModule(const Import& imp)
 #endif
         }
 #if 0
+        Validator2 v2;
+        if( !v2.validate(module) )
+        {
+            foreach( const Validator2::Error& e, v2.errors )
+                errors << Error(e.msg, e.pos, e.path);
+            module->hasErrors = true;
+        }
+#endif
+#if 0
         QHash<int,QList<Ast::Expression*> >::const_iterator j;
         for( j = v.uses.begin(); j != v.uses.end(); ++j )
             uses[j.key()] += j.value().size();
@@ -675,7 +685,16 @@ bool Project::parse()
         Declaration* module = loadModule(imp); // recursively compiles all imported files
         all++;
         if( module && !module->hasErrors )
+        {
             ok++;
+            // TEST
+            Validator2 v2;
+            if( !v2.validate(module) )
+            {
+                foreach( const Validator2::Error& e, v2.errors )
+                    qCritical() << "error" << QFileInfo(e.path).completeBaseName() << ":" << e.pos.d_row << ":" << e.pos.d_col << ":" << e.msg;
+            }
+        }
     }
 
 #if 0

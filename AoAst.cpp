@@ -245,7 +245,7 @@ void AstModel::cleanupGlobals()
     }
 }
 
-Type*AstModel::newType(int form, int size)
+Type*AstModel::newType(Type::Kind form, int size)
 {
     Type* t = new Type();
     t->kind = form;
@@ -253,7 +253,7 @@ Type*AstModel::newType(int form, int size)
     return t;
 }
 
-Type*AstModel::addType(const QByteArray& name, int form, int size)
+Type*AstModel::addType(const QByteArray& name, Type::Kind form, int size)
 {
     Type* t = newType(form, size);
     addTypeAlias(name, t);

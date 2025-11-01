@@ -20,10 +20,12 @@
 #include "AoValidator2.h"
 using namespace Ao;
 
-void Validator2::validate(Ast::Declaration* module) {
+bool Validator2::validate(Ast::Declaration* module) {
 	errors.clear();
-    sourcePath = module->data.toString();
+    Ast::ModuleData md = module->data.value<Ast::ModuleData>();
+    sourcePath = md.sourcePath;
     Module(module);
+    return errors.isEmpty();
 }
 
 void Validator2::invalid(const char* what, const RowCol& pos) {
@@ -33,12 +35,13 @@ void Validator2::invalid(const char* what, const RowCol& pos) {
 static inline void dummy() {}
 
 void Validator2::Module(Ast::Declaration *module) {
+
     Ast::Declaration* d = module->link;
     if( d && d->kind == Ast::Declaration::Import ) {
         d = ImportList(d);
 	}
     d = DeclSeq(d);
-    if( d->body ) {
+    if( d && d->body ) {
         Body(d->body);
 	}
 }
@@ -87,10 +90,8 @@ Ast::Declaration* Validator2::DeclSeq(Ast::Declaration* d) {
 
 void Validator2::ConstDecl(Ast::Declaration* d) {
     // TODO
-    if( ConstExpr(d->expr) )
-    {
-
-    }
+    if( !ConstExpr(d->expr) )
+        return;
 }
 
 void Validator2::TypeDecl(Ast::Declaration* d) {
@@ -115,7 +116,8 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
     Ast::Declaration* d = proc->link;
     while( d && d->kind == Ast::Declaration::ParamDecl )
     {
-        Type(d->type());
+        if( !d->receiver )
+            Type(d->type());
         d = d->next;
     }
     d = DeclSeq(d);
@@ -124,8 +126,7 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
             Assembler(proc);
         else
             Body(proc->body);
-    } else
-        invalid("ProcDecl", proc->pos);
+    }
 }
 
 void Validator2::SysFlag() {
@@ -135,16 +136,16 @@ void Validator2::SysFlag() {
 bool Validator2::ArrayType(Ast::Type* t) {
     // TODO
     // SysFlag();
-    if( !ConstExpr(t->expr) )
-        return false;
+    if( t->expr )
+        ConstExpr(t->expr);
     return Type(t->type());
 }
 
 bool Validator2::RecordType(Ast::Type* t) {
     // TODO
     // SysFlag();
-    if( !Type(t->type()) )  // base class
-        return false;
+    if( t->type() )
+        Type(t->type());  // optional base class
     return FieldList(t);
 }
 
@@ -157,14 +158,14 @@ bool Validator2::PointerType(Ast::Type* t) {
 bool Validator2::ObjectType(Ast::Type* t) {
     // TODO
     // SysFlag();
-    if( !Type(t->type()) )  // base class
-        return false;
+    if( t->type() )
+        Type(t->type());  // optional base class
 
     foreach( Ast::Declaration* member, t->subs )
     {
         switch( member->kind )
         {
-        case Ast::Declaration::VarDecl:
+        case Ast::Declaration::Field:
             VarDecl(member);
             break;
         case Ast::Declaration::Procedure:
@@ -188,7 +189,8 @@ bool Validator2::ProcedureType(Ast::Type* t) {
         if( param->kind == Ast::Declaration::ParamDecl )
             ok &= Type(param->type());
     }
-    ok &= Type(t->type());
+    if( t->type() && t->type()->kind != Ast::Type::NoType )
+        ok &= Type(t->type());
     return ok;
 }
 
@@ -238,9 +240,7 @@ void Validator2::Attributes() {
 void Validator2::StatBlock(Ast::Statement* s) {
     // TODO
     // Attributes();
-    if( s ) {
-        StatSeq(s);
-	}
+    StatSeq(s->body);
 }
 
 void Validator2::StatSeq(Ast::Statement*s) {
@@ -251,89 +251,102 @@ void Validator2::StatSeq(Ast::Statement*s) {
 }
 
 void Validator2::assig(Ast::Statement* s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::Assig);
     // TODO
-    // Designator();
+    Expr(s->lhs);
     Expr(s->rhs);
 }
 
-void Validator2::IfStat() {
+Ast::Statement *Validator2::IfStat(Ast::Statement *s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::If);
     // TODO
-    // case Ast::Statement::Elsif:
-    // case Ast::Statement::Else:
-    Expr(0);
-    StatSeq(0);
-    //while( la.d_type == Tok_ELSIF ) {
-        Expr(0);
-        // expect(Tok_THEN, false, "IfStat");
-        StatSeq(0);
-    //}
-    //if( la.d_type == Tok_ELSE ) {
-        //expect(Tok_ELSE, false, "IfStat");
-        StatSeq(0);
-    //}
+    Expr(s->rhs); // if
+    StatSeq(s->body);
+    while( s && s->getNext() && s->getNext()->kind == Ast::Statement::Elsif ) {
+        s = s->getNext();
+        Expr(s->rhs);
+        StatSeq(s->body);
+    }
+    if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
+        s = s->getNext();
+        StatSeq(s->body);
+    }
+    return s;
 }
 
-void Validator2::CaseStat() {
+Ast::Statement *Validator2::CaseStat(Ast::Statement *s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::Case);
     // TODO
-    //case Ast::Statement::CaseLabel:
 
-    Expr(0);
-    /*
-	if( la.d_type == Tok_DO ) {
-		expect(Tok_DO, false, "CaseStat");
-	} else if( la.d_type == Tok_OF ) {
-		expect(Tok_OF, false, "CaseStat");
-	} else
-		invalid("CaseStat");
-        */
-	Case();
-    //while( la.d_type == Tok_Bar ) {
-		Case();
-    //}
-    //if( la.d_type == Tok_ELSE ) {
-        StatSeq(0);
-    //}
+    Expr(s->rhs); // case
+
+    while( s && s->getNext() && s->getNext()->kind == Ast::Statement::CaseLabel )
+    {
+        s = s->getNext();
+        Ast::Expression* label = s->rhs;
+        while( label )
+        {
+            Expr(label);
+            label = label->next;
+        }
+        StatSeq(s->body);
+    }
+    if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
+        s = s->getNext();
+        StatSeq(s->body);
+    }
+    return s;
 }
 
-void Validator2::WhileStat() {
+void Validator2::WhileStat(Ast::Statement *s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::While);
     // TODO
-    Expr(0);
-    //expect(Tok_DO, false, "WhileStat");
-    StatSeq(0);
+    Expr(s->rhs);
+    StatSeq(s->body);
 }
 
-void Validator2::RepeatStat() {
+void Validator2::RepeatStat(Ast::Statement *s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::Repeat);
     // TODO
-    StatSeq(0);
-    //expect(Tok_UNTIL, false, "RepeatStat");
-    Expr(0);
+    StatSeq(s->body);
+    Expr(s->rhs);
 }
 
-void Validator2::ForStat() {
+Ast::Statement *Validator2::ForStat(Ast::Statement *s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::ForAssig);
     // TODO
-    Expr(0);
-    //expect(Tok_TO, false, "ForStat");
-    Expr(0);
-    //if( la.d_type == Tok_BY ) {
-        ConstExpr(0);
-    //}
-    //expect(Tok_DO, false, "ForStat");
-    StatSeq(0);
+    Expr(s->lhs); // i := val
+    Expr(s->rhs); // val
+    Ast::Statement* body = s->body;
+
+    if( s && s->getNext() && s->getNext()->kind == Ast::Statement::ForToBy )
+    {
+        s = s->getNext();
+        Expr(s->lhs); // to
+        if( s->rhs )
+            ConstExpr(s->rhs); // by
+    }else
+        invalid("For Statement", s->pos);
+
+    StatSeq(body);
+    return s;
 }
 
-void Validator2::LoopStat() {
-    StatSeq(0);
+void Validator2::LoopStat(Ast::Statement *s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::Loop);
+    StatSeq(s->body);
 }
 
-void Validator2::WithStat() {
-	Qualident();
-    //expect(Tok_Colon, false, "WithStat");
-	Qualident();
-    //expect(Tok_DO, false, "WithStat");
-    StatSeq(0);
+Ast::Statement *Validator2::WithStat(Ast::Statement *s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::With);
+    Expr(s->lhs);
+    Expr(s->rhs);
+    StatSeq(s->body);
+    return s;
 }
 
 void Validator2::ReturnStat(Ast::Statement* s) {
+    Q_ASSERT(s && s->kind == Ast::Statement::Return);
     // TODO
     if( s->rhs ) {
         Expr(s->rhs);
@@ -341,6 +354,8 @@ void Validator2::ReturnStat(Ast::Statement* s) {
 }
 
 Ast::Statement* Validator2::Statement(Ast::Statement* s) {
+    if( s == 0 )
+        return 0;
     switch( s->kind )
     {
     case Ast::Statement::Assig:
@@ -350,22 +365,22 @@ Ast::Statement* Validator2::Statement(Ast::Statement* s) {
         call(s);
         break;
     case Ast::Statement::If:
-        IfStat();
+        s = IfStat(s);
         break;
     case Ast::Statement::Case:
-        CaseStat();
+        s = CaseStat(s);
         break;
     case Ast::Statement::With:
-        WithStat();
+        WithStat(s);
         break;
     case Ast::Statement::Loop:
-        LoopStat();
+        LoopStat(s);
         break;
     case Ast::Statement::While:
-        WhileStat();
+        WhileStat(s);
         break;
     case Ast::Statement::Repeat:
-        RepeatStat();
+        RepeatStat(s);
         break;
     case Ast::Statement::Exit:
         break;
@@ -373,34 +388,19 @@ Ast::Statement* Validator2::Statement(Ast::Statement* s) {
         ReturnStat(s);
         break;
     case Ast::Statement::ForAssig:
-        ForStat();
+        s = ForStat(s);
         break;
-    case Ast::Statement::ForToBy:
+    case Ast::Statement::StatBlock:
+        StatBlock(s);
         break;
     case Ast::Statement::End:
-        break;
+        break; // just marks the end of a non-empty statement sequence
     default:
         invalid("Statement", s->pos);
     }
-    return s->getNext();
-}
-
-void Validator2::Case() {
-    // TODO
-		CaseLabels();
-        //while( la.d_type == Tok_Comma ) {
-			CaseLabels();
-        //}
-        //expect(Tok_Colon, false, "Case");
-        StatSeq(0);
-}
-
-void Validator2::CaseLabels() {
-    // TODO
-    ConstExpr(0);
-    //if( la.d_type == Tok_2Dot ) {
-        ConstExpr(0);
-    //}
+    if( s )
+        s = s->getNext();
+    return s;
 }
 
 bool Validator2::ConstExpr(Ast::Expression* e) {
@@ -409,6 +409,9 @@ bool Validator2::ConstExpr(Ast::Expression* e) {
 }
 
 bool Validator2::Expr(Ast::Expression* e) {
+    // Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     switch (e->kind) {
     case Ast::Expression::Lt:
     case Ast::Expression::Leq:
@@ -484,99 +487,152 @@ bool Validator2::Expr(Ast::Expression* e) {
     return true;
 }
 
-void Validator2::Qualident() {
-    /*
-	if( ( peek(1).d_type == Tok_ident && peek(2).d_type == Tok_Dot )  ) {
-		expect(Tok_ident, false, "Qualident");
-		expect(Tok_Dot, false, "Qualident");
-		expect(Tok_ident, false, "Qualident");
-	} else if( la.d_type == Tok_ident ) {
-		expect(Tok_ident, false, "Qualident");
-	} else
-		invalid("Qualident");
-        */
-}
-
 bool Validator2::relation(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
+    Expr(e->lhs);
+    Expr(e->rhs);
     // TODO
     return false;
 }
 
 bool Validator2::unaryOp(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
+    Expr(e->lhs);
     // TODO
     return false;
 }
 
 bool Validator2::arithOp(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
+    Expr(e->lhs);
+    Expr(e->rhs);
     // TODO
     return false;
 }
 
 bool Validator2::logicOp(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
+    Expr(e->lhs);
+    Expr(e->rhs);
     // TODO
     return false;
 }
 
 bool Validator2::declRef(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     // TODO
     return false;
 }
 
 bool Validator2::select(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     // TODO
+    Expr(e->lhs);
+    Expr(e->rhs);
     return false;
 }
 
 bool Validator2::index(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     // TODO
+    Expr(e->lhs);
+    Expr(e->rhs);
     return false;
 }
 
 bool Validator2::deref(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     // TODO
+    Expr(e->lhs);
     return false;
 }
 
 bool Validator2::cast(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     // TODO
+    Expr(e->lhs);
     return false;
 }
 
 bool Validator2::call(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     // TODO
+    Expr(e->lhs);
+    Expr(e->rhs);
     return false;
 }
 
 bool Validator2::literal(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     // TODO
     return false;
 }
 
 bool Validator2::constructor(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
+    Ast::Expression* elem = e->rhs;
+    while( elem )
+    {
+        Expr(elem);
+        elem = elem->next;
+    }
     // TODO
     return false;
 }
 
 bool Validator2::nameRef(Ast::Expression *e)
 {
+    Q_ASSERT(e); // TEST
+    if( e == 0 )
+        return false;
     // TODO
     return false;
 }
 
 void Validator2::call(Ast::Statement *s)
 {
+    Q_ASSERT(s); // TEST
+    if( s == 0 )
+        return;
+    Expr(s->lhs);
+    if( s->rhs )
+        Expr(s->rhs);
     // TODO
 }
 

@@ -118,7 +118,7 @@ namespace Ao {
         Ast::Expression* number();
 
     protected:
-        Ast::Declaration* addDecl(const Token& id, quint8 visi, quint8 mode);
+        Ast::Declaration* addDecl(const Token& id, quint8 visi, Ast::Declaration::Kind mode);
         void error( const Token&, const QString& msg);
         void error( const RowCol&, const QString& msg );
         Ast::Type* smallestIntType(quint64 i);
