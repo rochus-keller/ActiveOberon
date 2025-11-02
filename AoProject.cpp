@@ -563,6 +563,7 @@ Declaration* Project::loadModule(const Import& imp)
     }else
     {
         module = p.takeResult();
+#if 0
         Validator v(&mdl, this, true);
         if( !v.validate(module, imp) )
         {
@@ -578,11 +579,11 @@ Declaration* Project::loadModule(const Import& imp)
                 ca.printPlans(out);
 #endif
         }
-#if 0
-        Validator2 v2;
-        if( !v2.validate(module) )
+#else
+        Validator2 v(&mdl, this, true);
+        if( !v.validate(module) )
         {
-            foreach( const Validator2::Error& e, v2.errors )
+            foreach( const Validator2::Error& e, v.errors )
                 errors << Error(e.msg, e.pos, e.path);
             module->hasErrors = true;
         }
@@ -687,6 +688,7 @@ bool Project::parse()
         if( module && !module->hasErrors )
         {
             ok++;
+#if 0
             // TEST
             Validator2 v2;
             if( !v2.validate(module) )
@@ -694,6 +696,7 @@ bool Project::parse()
                 foreach( const Validator2::Error& e, v2.errors )
                     qCritical() << "error" << QFileInfo(e.path).completeBaseName() << ":" << e.pos.d_row << ":" << e.pos.d_col << ":" << e.msg;
             }
+#endif
         }
     }
 

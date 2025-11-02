@@ -27,15 +27,19 @@ namespace Ao {
 
     class Validator2 {
 	public:
-        Validator2() {}
-        bool validate(Ast::Declaration* module);
+        Validator2(Ast::AstModel* mdl, Ast::Importer* imp = 0, bool haveXref = false);
+        ~Validator2();
+
+        bool validate(Ast::Declaration* module, const Ast::Import& import = Ast::Import());
+        Ast::Xref takeXref();
+
 		struct Error {
 		    QString msg;
             RowCol pos;
 		    QString path;
             Error( const QString& m, const RowCol& rc, const QString& p):msg(m),pos(rc),path(p){}
 		};
-		QList<Error> errors;
+        mutable QList<Error> errors;
 	protected:
         void Module(Ast::Declaration* module);
         void ImportDecl(Ast::Declaration *import);
@@ -78,7 +82,7 @@ namespace Ao {
         bool declRef(Ast::Expression *e);
         bool select(Ast::Expression *e);
         bool index(Ast::Expression *e);
-        bool deref(Ast::Expression *e);
+        bool depoint(Ast::Expression *e);
         bool cast(Ast::Expression *e);
         bool call(Ast::Expression *e);
         bool literal(Ast::Expression *e);
@@ -89,9 +93,30 @@ namespace Ao {
 
 	protected:
         void invalid(const char* what, const RowCol&);
+        bool error( const RowCol&, const QString& msg ) const;
+        void markDecl(Ast::Declaration* d);
+        Ast::Symbol* markRef(Ast::Declaration* d, const RowCol& pos);
+        Ast::Symbol* markUnref(int len, const RowCol& pos);
+        Ast::Type* deref(Ast::Type* t);
+        void resolveIfNamedType(Ast::Type* nameRef);
+        void resolveDesig(Ast::Expression* nameRef);
+        typedef QPair<Ast::Declaration*,Ast::Declaration*> ResolvedQ; // [module .] member
+        ResolvedQ find(const Ast::Qualident& q, RowCol pos);
+        Ast::Declaration* findInType(Ast::Type*, const QByteArray& field);
+        bool checkBuiltinArgs(quint8 builtin, const Ast::ExpList& args, Ast::Type** ret, const RowCol& pos);
 
     private:
+        Ast::Declaration* module;
         QString sourcePath;
+        Ast::AstModel* mdl;
+        Ast::Importer* imp;
+        QList<Ast::Declaration*> scopeStack, boundProcs;
+        Ast::Declaration* curObjectTypeDecl;
+        Ast::Symbol* first;
+        Ast::Symbol* last;
+        QHash<Ast::Declaration*,Ast::SymList> xref;
+        QHash<Ast::Declaration*,Ast::DeclList> subs;
+
 	};
 }
 #endif // include __AO_VALIDATOR2__

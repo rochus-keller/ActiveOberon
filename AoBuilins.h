@@ -1,0 +1,42 @@
+#ifndef AOBUILINS_H
+#define AOBUILINS_H
+
+/*
+** Copyright (C) 2025 Rochus Keller (me@rochus-keller.ch)
+**
+** This file is part of the ActiveOberon language project.
+**
+**
+** GNU Lesser General Public License Usage
+** This file may be used under the terms of the GNU Lesser
+** General Public License version 2.1 or version 3 as published by the Free
+** Software Foundation and appearing in the file LICENSE.LGPLv21 and
+** LICENSE.LGPLv3 included in the packaging of this file. Please review the
+** following information to ensure the GNU Lesser General Public License
+** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
+** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
+*/
+
+#include <AoAst.h>
+
+namespace Ao
+{
+class Builins
+{
+public:
+    Builins(Ast::AstModel* mdl);
+
+    bool checkArgs(quint8 builtin, const Ast::ExpList& args, Ast::Type** ret, const RowCol& pos);
+
+    QString error;
+    RowCol errPos;
+
+protected:
+    Ast::Type* deref(Ast::Type* t);
+
+private:
+    Ast::AstModel* mdl;
+};
+}
+
+#endif // AOBUILINS_H

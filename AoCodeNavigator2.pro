@@ -14,6 +14,7 @@ QMAKE_CXXFLAGS += -Wno-reorder -Wno-unused-parameter -Wno-unused-function -Wno-u
 }
 
 SOURCES += \
+    AoBuilins.cpp \
     AoRowCol.cpp \
     AoToken.cpp \
     AoLexer.cpp \
@@ -29,6 +30,7 @@ SOURCES += \
     AoValidator2.cpp
 
 HEADERS += \
+    AoBuilins.h \
     AoRowCol.h \
     AoToken.h \
     AoLexer.h \

@@ -24,15 +24,10 @@
 
 namespace Ao
 {
-    class Importer {
-    public:
-        virtual Ast::Declaration* loadModule( const Ast::Import& imp ) = 0;
-    };
-
     class Validator
     {
     public:
-        Validator(Ast::AstModel* mdl, Importer* imp = 0, bool haveXref = false);
+        Validator(Ast::AstModel* mdl, Ast::Importer* imp = 0, bool haveXref = false);
         ~Validator();
 
         bool validate(Ast::Declaration* module, const Ast::Import& import = Ast::Import());
@@ -58,7 +53,6 @@ namespace Ao
         typedef QPair<Ast::Declaration*,Ast::Declaration*> ResolvedQ; // [module .] member
         ResolvedQ find(const Ast::Qualident& q, RowCol pos);
         Ast::Declaration* findInType(Ast::Type*, const QByteArray& field);
-        bool checkBuiltinArgs(quint8 builtin, const Ast::ExpList& args, Ast::Type** ret, const RowCol& pos);
 
         void visitScope( Ast::Declaration* scope );
         void visitDecl( Ast::Declaration* );
@@ -76,7 +70,7 @@ namespace Ao
 
     private:
         Ast::AstModel* mdl;
-        Importer* imp;
+        Ast::Importer* imp;
         Ast::Declaration* module;
         QList<Ast::Declaration*> scopeStack, boundProcs;
         Ast::Declaration* curObjectTypeDecl;

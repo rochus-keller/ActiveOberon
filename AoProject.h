@@ -32,7 +32,7 @@ class QBuffer;
 
 namespace Ao
 {
-    class Project : public QObject, public Importer
+    class Project : public QObject, public Ast::Importer
     {
 #ifndef QT_NO_QOBJECT
         Q_OBJECT

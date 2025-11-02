@@ -347,6 +347,10 @@ namespace Ast
         Xref():syms(0){}
     };
 
+    class Importer {
+    public:
+        virtual Declaration* loadModule( const Ast::Import& imp ) = 0;
+    };
 
     class AstModel
     {

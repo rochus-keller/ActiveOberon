@@ -18,13 +18,71 @@
 */
 
 #include "AoValidator2.h"
+#include "AoToken.h"
+#include "AoBuilins.h"
+#include <QtDebug>
 using namespace Ao;
+using namespace Ast;
 
-bool Validator2::validate(Ast::Declaration* module) {
-	errors.clear();
+#define _ALLOW_POINTER_BASE_TYPE
+#define _ALLOW_RETURN_STRUCTURED_TYPES
+
+static QByteArray SELF;
+
+static inline void dummy() {}
+
+Validator2::Validator2(Ast::AstModel *mdl, Ast::Importer *imp, bool haveXref):module(0),mdl(mdl),imp(imp),
+    first(0),last(0),curObjectTypeDecl(0)
+{
+    Q_ASSERT(mdl);
+    if( haveXref )
+        first = last = new Symbol();
+    SELF = Token::getSymbol("SELF");
+}
+
+Validator2::~Validator2()
+{
+    if( first )
+        Symbol::deleteAll(first);
+}
+
+bool Validator2::validate(Ast::Declaration* module, const Ast::Import &import) {
+    Q_ASSERT(module);
+
+    if( module->validated )
+        return true;
+
+    errors.clear();
+    if( first )
+    {
+        first->decl = module;
+        first->kind = Symbol::Module;
+        first->pos = module->pos;
+        first->len = module->name.size();
+    }
+
+    markDecl(module);
+
     Ast::ModuleData md = module->data.value<Ast::ModuleData>();
+
     sourcePath = md.sourcePath;
-    Module(module);
+    this->module = module;
+    try
+    {
+
+        md.fullName = import.moduleName;
+        module->data = QVariant::fromValue(md);
+        Module(module);
+    }catch(...)
+    {
+    }
+
+    if( first )
+        last->next = first; // close the circle
+
+    module->validated = true;
+    module->hasErrors = !errors.isEmpty();
+
     return errors.isEmpty();
 }
 
@@ -32,11 +90,9 @@ void Validator2::invalid(const char* what, const RowCol& pos) {
     errors << Error(QString("invalid %1").arg(what),pos, sourcePath);
 }
 
-static inline void dummy() {}
-
 void Validator2::Module(Ast::Declaration *module) {
-
     Ast::Declaration* d = module->link;
+    scopeStack.push_back(module);
     if( d && d->kind == Ast::Declaration::Import ) {
         d = ImportList(d);
 	}
@@ -44,10 +100,32 @@ void Validator2::Module(Ast::Declaration *module) {
     if( d && d->body ) {
         Body(d->body);
 	}
+    scopeStack.pop_back();
+
 }
 
 void Validator2::ImportDecl(Ast::Declaration* import) {
-    // TODO
+    if( import->outer->kind != Declaration::Module )
+        error(import->pos,"imports are only supported on module level");
+
+    Declaration* mod = 0;
+    Import i = import->data.value<Import>();
+    if( imp )
+        mod = imp->loadModule(i);
+    if( mod )
+    {
+        // loadModule returns the module decl; we just need the list of module elements:
+        mod->hasSubs = true; // the module is used by at least this one
+        import->link = mod->link;
+        i.resolved = mod;
+        import->data = QVariant::fromValue(i);
+        markRef(mod, i.importedAt);
+    }else
+    {
+        error(import->pos,QString("cannot import module '%1'").arg(i.moduleName.constData()));
+        throw "";
+    }
+    import->validated = true;
 }
 
 Ast::Declaration* Validator2::ImportList(Ast::Declaration* import) {
@@ -89,14 +167,59 @@ Ast::Declaration* Validator2::DeclSeq(Ast::Declaration* d) {
 }
 
 void Validator2::ConstDecl(Ast::Declaration* d) {
-    // TODO
-    if( !ConstExpr(d->expr) )
-        return;
+    if( ConstExpr(d->expr) )
+    {
+        d->setType(d->expr->type());
+        d->data = d->expr->val;
+    }
 }
 
 void Validator2::TypeDecl(Ast::Declaration* d) {
-    // TODO
+    if( d->type() && d->type()->kind == Type::Object )
+        curObjectTypeDecl = d;
+
     Type(d->type());
+
+    if( d->type() && d->type()->kind == Type::Object )
+    {
+        QList<Declaration*> bounds_ = boundProcs;
+        boundProcs.clear();
+        foreach(Declaration* proc, bounds_)
+        {
+            Q_ASSERT(proc->link && proc->link->kind == Declaration::ParamDecl &&
+                     proc->link->receiver && proc->link->type() );
+            Ast::Type* objectType = proc->link->type()->deref();
+            Q_ASSERT(objectType == d->type());
+            if( objectType->type() )
+            {
+                Declaration* super = findInType(objectType->type()->deref(),proc->name);
+                if( super )
+                {
+                    super->hasSubs = true;
+                    proc->super = super;
+                    if( first )
+                        subs[super].append(proc);
+                }
+            }
+            // TODO visitScope(proc);
+        }
+        curObjectTypeDecl = 0;
+    }
+    if( d->type() && (d->type()->kind == Type::Object || d->type()->kind == Type::Record) )
+    {
+        if( d->type()->type() )
+        {
+            Ast::Type* baseType = d->type()->type();
+            Q_ASSERT( baseType->kind == Type::NameRef );
+            if( !baseType->validated || baseType->type() == 0 )
+                return;
+            Declaration* super = baseType->type()->deref()->decl;
+            super->hasSubs = true;
+            d->super = super;
+            if( first )
+                subs[super].append(d);
+        }
+    }
 }
 
 void Validator2::VarDecl(Ast::Declaration* d) {
@@ -110,14 +233,32 @@ void Validator2::Assembler(Ast::Declaration* proc) {
 }
 
 void Validator2::ProcDecl(Ast::Declaration * proc) {
-    // TODO
     // SysFlag();
+    scopeStack.push_back(proc);
+
+    if( curObjectTypeDecl )
+    {
+        proc->receiver = true;
+        proc->outer = curObjectTypeDecl;
+        // TODO boundProcs << proc; // do body later
+        Declaration* self = new Declaration();
+        self->kind = Declaration::ParamDecl;
+        self->name = SELF;
+        self->setType(curObjectTypeDecl->type());
+        self->pos = curObjectTypeDecl->pos;
+        self->receiver = true;
+        self->next = proc->link;
+        self->outer = proc;
+        proc->link = self;
+    }
 
     Ast::Declaration* d = proc->link;
     while( d && d->kind == Ast::Declaration::ParamDecl )
     {
         if( !d->receiver )
             Type(d->type());
+        else
+            dummy();
         d = d->next;
     }
     d = DeclSeq(d);
@@ -127,6 +268,7 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
         else
             Body(proc->body);
     }
+    scopeStack.pop_back();
 }
 
 void Validator2::SysFlag() {
@@ -158,8 +300,17 @@ bool Validator2::PointerType(Ast::Type* t) {
 bool Validator2::ObjectType(Ast::Type* t) {
     // TODO
     // SysFlag();
-    if( t->type() )
-        Type(t->type());  // optional base class
+    if( t->type() && !t->type()->validated ) // optional base class
+    {
+        // resolve base objects if present
+        // we have to disable curObjectType here because otherwise findInType is called with
+        // curObjectType->type()->base which leads to infinite loop
+        Declaration* tmp = curObjectTypeDecl;
+        Q_ASSERT(curObjectTypeDecl != 0);
+        curObjectTypeDecl = 0;
+        resolveIfNamedType(t->type());
+        curObjectTypeDecl = tmp;
+    }
 
     foreach( Ast::Declaration* member, t->subs )
     {
@@ -169,7 +320,7 @@ bool Validator2::ObjectType(Ast::Type* t) {
             VarDecl(member);
             break;
         case Ast::Declaration::Procedure:
-            ProcDecl(member);
+                ProcDecl(member);
             break;
         default:
             invalid("ObjectDeclSeq", t->pos);
@@ -195,11 +346,15 @@ bool Validator2::ProcedureType(Ast::Type* t) {
 }
 
 bool Validator2::AliasType(Ast::Type* t) {
-    // TODO Qualident();
+    t->validated = false; // it was false when entering this proc, and resolveIfNamedType does nothing otherwise
+    resolveIfNamedType(t);
     return true;
 }
 
 bool Validator2::Type(Ast::Type* t) {
+    if( t == 0 || t->validated )
+        return true;
+    t->validated = true;
     switch( t->kind )
     {
     case Ast::Type::NameRef:
@@ -341,7 +496,13 @@ Ast::Statement *Validator2::WithStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::With);
     Expr(s->lhs);
     Expr(s->rhs);
+
+    Q_ASSERT( s->lhs->kind == Expression::DeclRef );
+    Declaration* d = s->lhs->val.value<Declaration*>();
+    Ast::Type* t = d->overrideType(s->rhs->type());
     StatSeq(s->body);
+    d->overrideType(t);
+
     return s;
 }
 
@@ -457,7 +618,7 @@ bool Validator2::Expr(Ast::Expression* e) {
             return false;
         break;
     case Ast::Expression::Deref:
-        if( !deref(e) )
+        if( !depoint(e) )
             return false;
         break;
     case Ast::Expression::Cast:
@@ -495,6 +656,7 @@ bool Validator2::relation(Ast::Expression *e)
     Expr(e->lhs);
     Expr(e->rhs);
     // TODO
+    e->setType(mdl->getType(Type::BOOLEAN));
     return false;
 }
 
@@ -503,8 +665,29 @@ bool Validator2::unaryOp(Ast::Expression *e)
     Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
+
     Expr(e->lhs);
-    // TODO
+
+    if( e->lhs->type() == 0 )
+        return true; // already reported
+
+    Ast::Type* lhsT = deref(e->lhs->type());
+    if( e->kind == Expression::Plus )
+    {
+        if( !lhsT->isNumber() )
+            return error(e->pos, "unary operator not applicable to this type");
+    }else if( e->kind == Expression::Minus )
+    {
+        if( !lhsT->isNumber() && !lhsT->isSet() )
+            return error(e->pos, "unary operator not applicable to this type");
+    }else if( e->kind == Expression::Not )
+    {
+        if( !lhsT->isBoolean()  )
+            return error(e->pos, "unary '~' or 'NOT' not applicable to this type");
+    }
+    if( e->lhs == 0 )
+        return true; // already reported
+    e->setType(lhsT);
     return false;
 }
 
@@ -516,6 +699,7 @@ bool Validator2::arithOp(Ast::Expression *e)
     Expr(e->lhs);
     Expr(e->rhs);
     // TODO
+    e->setType(deref(e->lhs->type()));
     return false;
 }
 
@@ -527,6 +711,7 @@ bool Validator2::logicOp(Ast::Expression *e)
     Expr(e->lhs);
     Expr(e->rhs);
     // TODO
+    e->setType(mdl->getType(Type::BOOLEAN));
     return false;
 }
 
@@ -541,39 +726,115 @@ bool Validator2::declRef(Ast::Expression *e)
 
 bool Validator2::select(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    // TODO
+
     Expr(e->lhs);
     Expr(e->rhs);
-    return false;
+
+    if( e->lhs == 0 || e->lhs->type() == 0 )
+        return true;
+
+    Ast::Type* lhsT = deref(e->lhs->type());
+    if( lhsT->kind == Type::Pointer )
+    {
+        Expression* tmp = new Expression(Expression::Deref, e->lhs->pos );
+        tmp->lhs = e->lhs;
+        tmp->setType(lhsT->type());
+        e->lhs = tmp;
+        lhsT = deref(e->lhs->type());
+    }
+    if( lhsT->kind == Type::Record || lhsT->kind == Type::Object )
+    {
+        Declaration* ld = e->lhs->val.value<Declaration*>();
+        if( ld && ld->kind == Declaration::TypeDecl )
+            return error(e->lhs->pos,"selector expects a variable on the left side");
+        Declaration* field = findInType(lhsT,e->val.toByteArray());
+        if( field == 0 )
+        {
+            error(e->pos,QString("the record doesn't have a field named '%1'"). arg(e->val.toString()) );
+            markUnref(e->val.toString().size(), e->pos);
+            return false;
+        }else
+        {
+            Symbol* s = markRef(field, e->pos);
+            if( e->needsLval )
+                s->kind = Symbol::Lval;
+            e->val = QVariant::fromValue(field); // Field or bound proc
+            e->setType(field->type());
+        }
+    }else
+        return error(e->pos,"cannot select a field in given type");
+    return true;
 }
 
 bool Validator2::index(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    // TODO
+
     Expr(e->lhs);
     Expr(e->rhs);
-    return false;
+
+    if( e->lhs == 0 || e->lhs->type() == 0 || e->rhs == 0 ||e->rhs->type() == 0 )
+        return true;
+
+    Ast::Type* lhsT = deref(e->lhs->type());
+    Ast::Type* rhsT = deref(e->rhs->type());
+
+    if( lhsT->kind == Type::Pointer )
+    {
+        Expression* tmp = new Expression(Expression::Deref, e->lhs->pos );
+        tmp->lhs = e->lhs;
+        tmp->setType(lhsT->type());
+        e->lhs = tmp;
+        lhsT = deref(e->lhs->type());
+    }
+
+    e->setType(lhsT->type());
+    if( lhsT->kind == Type::Array )
+    {
+        if( !rhsT->isInteger() )
+            return error(e->rhs->pos,"expecting an array index of integer type");
+    }else
+        return error(e->pos,"cannot index an element in given type");
+    return true;
 }
 
-bool Validator2::deref(Ast::Expression *e)
+bool Validator2::depoint(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    // TODO
+
     Expr(e->lhs);
-    return false;
+
+    if( e->lhs == 0 || e->lhs->type() == 0 )
+        return true;
+
+    if( (e->lhs->kind == Expression::Select || e->lhs->kind == Expression::DeclRef) &&
+            e->lhs->val.value<Declaration*>() &&
+            e->lhs->val.value<Declaration*>()->kind == Declaration::Procedure )
+    {
+        Declaration* d = e->lhs->val.value<Declaration*>();
+        if( !d->receiver )
+            return error(e->pos,"super calls only supported for type-bound procedures");
+        else
+            e->kind = Expression::Super;
+        return true;
+    }
+    // else
+    Ast::Type* lhsT = deref(e->lhs->type());
+    if( lhsT->kind == Type::Pointer
+            || lhsT->kind == Type::Object // this happens in some places and is likely an error
+            )
+        e->setType(lhsT->type());
+    else
+        return error(e->pos,"can only dereference a pointer");
+    return true;
 }
 
 bool Validator2::cast(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
     // TODO
@@ -583,18 +844,96 @@ bool Validator2::cast(Ast::Expression *e)
 
 bool Validator2::call(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    // TODO
-    Expr(e->lhs);
-    Expr(e->rhs);
-    return false;
+    if( e->lhs && e->lhs->kind == Expression::Super )
+        Expr(e->lhs->lhs);
+    else
+        Expr(e->lhs);
+
+    bool supercall = false;
+    Expression* lhs = e->lhs;
+    if( lhs && lhs->kind == Expression::Super )
+    {
+        supercall = true;
+        lhs = lhs->lhs;
+    }
+    if( lhs == 0 || lhs->type() == 0 ) // e->rhs is null in case there are no args
+        return true;
+
+    Declaration* proc = lhs->val.value<Declaration*>();
+    if( proc && proc->kind != Declaration::Procedure && proc->kind != Declaration::Builtin )
+        proc = 0;
+    Ast::Type* procType = deref(lhs->type());
+    if( procType && procType->kind != Type::Procedure )
+        procType = 0;
+
+    const DeclList formals = proc ? proc->getParams(true) : procType ? procType->subs : DeclList();
+    Expression* arg = e->rhs;
+    for(int i = 0; arg != 0; i++, arg = arg->next )
+        Expr(arg);
+
+    const bool isTypeCast = (proc == 0 || proc->kind != Declaration::Builtin) &&
+            e->rhs &&
+            e->rhs->kind == Expression::DeclRef &&
+            e->rhs->val.value<Declaration*>()->kind == Declaration::TypeDecl;
+
+    Ast::Type* lhsT = deref(lhs->type());
+    if( isTypeCast )
+    {
+        if( supercall )
+            return error(e->pos,"super call operator cannot be used here");
+        e->kind = Expression::Cast;
+        e->setType(deref(e->rhs->type()));
+        if( e->rhs->next )
+            return error(e->rhs->next->pos,"type guard requires a single argument");
+        if( lhsT->kind == Type::Pointer )
+            lhsT = deref(lhsT->type());
+        if( lhsT->kind != Type::Record && lhsT->kind != Type::Object
+                && lhsT->kind != Type::PTR // this is used allover in AOS/Sys
+                && lhsT->kind != Type::ANY // this also happens
+                )
+            return error(e->rhs->pos,"a type guard is not supported for this type");
+    }else
+    {
+        Ast::Type* ret = 0;
+        if( proc )
+        {
+            if( proc->kind != Declaration::Procedure && proc->kind != Declaration::Builtin )
+                return error(lhs->pos,"this expression cannot be called");
+            ret = proc->type();
+        }else if( lhsT->kind != Type::Procedure )
+            return error(lhs->pos,"this expression cannot be called");
+        else
+            ret = lhsT->type();
+
+        if( supercall && (proc == 0 || !proc->receiver || proc->super == 0) )
+            return error(e->pos,"super call operator cannot be used here");
+
+        ExpList actuals = Expression::getList(e->rhs);
+
+        if( proc && proc->kind == Declaration::Builtin )
+        {
+            Builins bi(mdl);
+            if( bi.checkArgs(proc->id, actuals, &ret, e->pos) )
+            {
+                // NOTE: no eval done here
+            }else
+                error(bi.errPos, bi.error);
+        }else
+        {
+            if( actuals.size() != formals.size() )
+                error(e->pos,"number of actual doesn't fit number of formal arguments");
+            // NOTE: no param type checking here
+        }
+        if( ret )
+            e->setType(ret);
+    }
+    return true;
 }
 
 bool Validator2::literal(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
     // TODO
@@ -603,37 +942,286 @@ bool Validator2::literal(Ast::Expression *e)
 
 bool Validator2::constructor(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    Ast::Expression* elem = e->rhs;
-    while( elem )
+
+    e->setType(mdl->getType(Type::SET));
+    Expression* comp = e->rhs;
+    while( comp )
     {
-        Expr(elem);
-        elem = elem->next;
+        if( comp->kind == Expression::Constructor )
+            return error(comp->pos,"component type not supported for SET constructors");
+        Expr(comp);
+        if( comp->type() && !deref(comp->type())->isInteger() )
+            return error(comp->pos,"expecting integer compontents for SET constructors");
+        comp = comp->next;
     }
-    // TODO
-    return false;
+    return true;
 }
 
-bool Validator2::nameRef(Ast::Expression *e)
+bool Validator2::nameRef(Ast::Expression * nameRef)
 {
-    Q_ASSERT(e); // TEST
-    if( e == 0 )
+    if( nameRef == 0 )
         return false;
-    // TODO
-    return false;
+
+    Qualident q = nameRef->val.value<Qualident>();
+
+    ResolvedQ r = find(q,nameRef->pos);
+    RowCol pos = nameRef->pos;
+    if( r.second == 0 )
+    {
+        if( r.first )
+        {
+            markRef(r.first, pos);
+            pos.d_col += q.first.size() + 1;
+        }
+        markUnref(q.second.size(), pos);
+        return true;
+    }
+
+    if( r.first != 0 )
+    {
+        markRef(r.first, pos);
+        pos.d_col += q.first.size() + 1;
+    }
+    Symbol* s = markRef(r.second, pos);
+    if( nameRef->needsLval )
+        s->kind = Symbol::Lval;
+    resolveIfNamedType(r.second->type());
+
+    nameRef->kind = Expression::DeclRef;
+    nameRef->val = QVariant::fromValue(r.second);
+    nameRef->setType(r.second->type());
+
+    if( r.second->kind == Declaration::LocalDecl || r.second->kind == Declaration::ParamDecl )
+    {
+        if( !scopeStack.isEmpty() && r.second->outer && r.second->outer != scopeStack.back() )
+        {
+            nameRef->nonlocal = true;
+            Q_ASSERT(r.second->outer->kind == Declaration::Procedure);
+            r.second->outer->nonlocal = true;
+            // accessing parameter or local variable of outer procedures
+        }
+    }
+    return true;
 }
 
 void Validator2::call(Ast::Statement *s)
 {
-    Q_ASSERT(s); // TEST
     if( s == 0 )
         return;
+    if( s->lhs->kind != Expression::Call )
+    {
+        // calling without args; so add an explicit call expression for consistency
+        Expression* call = new Expression(Expression::Call, s->lhs->pos);
+        call->lhs = s->lhs;
+        s->lhs = call;
+    }
     Expr(s->lhs);
-    if( s->rhs )
-        Expr(s->rhs);
-    // TODO
+    Q_ASSERT( s->rhs == 0 );
 }
 
+Xref Validator2::takeXref()
+{
+    Xref res;
+    if( first == 0 )
+        return res;
+    res.uses = xref;
+    res.syms = first;
+    res.subs = subs;
+    xref.clear();
+    subs.clear();
+    first = last = new Symbol();
+    return res;
+}
+
+bool Validator2::error(const RowCol& pos, const QString& msg) const
+{
+    errors << Error(msg, pos, sourcePath);
+    return false;
+}
+
+void Validator2::markDecl(Ast::Declaration* d)
+{
+    if( first == 0 )
+        return;
+    Symbol* s = new Symbol();
+    s->kind = Symbol::Decl;
+    s->decl = d;
+    s->pos = d->pos;
+    s->len = d->name.size();
+    xref[d].append(s);
+    last->next = s;
+    last = last->next;
+}
+
+Symbol* Validator2::markRef(Declaration* d, const RowCol& pos)
+{
+    if( first == 0 )
+        return 0;
+    Symbol* s = new Symbol();
+    s->kind = Symbol::DeclRef;
+    s->decl = d;
+    s->pos = pos;
+    s->len = d->name.size();
+    xref[d].append(s);
+    last->next = s;
+    last = last->next;
+    return s;
+}
+
+Symbol*Validator2::markUnref(int len, const RowCol& pos)
+{
+    if( first == 0 )
+        return 0;
+    Symbol* s = new Symbol();
+    s->kind = Symbol::DeclRef;
+    s->pos = pos;
+    s->len = len;
+    last->next = s;
+    last = last->next;
+    return s;
+}
+
+Type *Validator2::deref(Ast::Type *t)
+{
+    // never returns zero
+    if( t == 0 )
+        return mdl->getType(Type::NoType);
+    if( t->kind == Type::NameRef )
+    {
+        if( !t->validated )
+        {
+            // This is necessary because declarations can follow their use, but all so far unvalidated NameRefs
+            // must be local, assuming that all NameRefs in imported modules must already have been validated at
+            // this point.
+#ifdef _DEBUG_ // TODO
+            Qualident q = t->quali;
+            if( q.first && q.first.constData() != module->name.constData() )
+                qWarning() << "Validator::deref: unvalidated quali" << q.first << "." << q.second << "in"
+                           << module->name;
+#endif
+            resolveIfNamedType(t);
+        }
+        return deref(t->type());
+    }else
+        return t;
+}
+
+void Validator2::resolveIfNamedType(Ast::Type *nameRef)
+{
+    if( nameRef == 0 || nameRef->kind != Type::NameRef)
+        return;
+    if( nameRef->validated )
+        return;
+    Q_ASSERT(nameRef->quali);
+    Q_ASSERT(nameRef->expr == 0);
+    Qualident q = *nameRef->quali;
+    ResolvedQ r = find(q, nameRef->pos);
+    if(r.second == 0)
+        return;
+    RowCol pos = nameRef->pos;
+    if( r.first != 0 )
+    {
+        markRef(r.first, pos);
+        pos.d_col += q.first.size() + 1;
+    }
+    markRef(r.second, pos);
+    nameRef->validated = true;
+    nameRef->setType(r.second->type());
+    if( r.second->kind != Declaration::TypeDecl )
+    {
+        error(nameRef->pos,"identifier doesn't refer to a type declaration");
+        return;
+    }
+
+    resolveIfNamedType(r.second->type());
+}
+
+Validator2::ResolvedQ Validator2::find(const Ast::Qualident &q, RowCol pos)
+{
+    if( scopeStack.isEmpty() )
+        return ResolvedQ();
+
+    ResolvedQ res;
+    if( !q.first.isEmpty() )
+    {
+        Declaration* import = scopeStack.back()->find(q.first);
+
+        if( import == 0 || import->kind != Declaration::Import )
+        {
+            error(pos,"identifier doesn't refer to an imported module");
+            markUnref(q.first.size(), pos);
+            return ResolvedQ();
+        }
+        if( !import->validated )
+            ImportDecl(import);
+        res.first = import;
+        Declaration* member = mdl->findDeclInImport(import,q.second);
+        pos.d_col += q.first.size() + 1;
+        if( member == 0 )
+        {
+            error(pos,QString("declaration '%1' not found in imported module '%2'").
+                  arg(q.second.constData()).arg(q.first.constData()) );
+            markUnref(q.second.size(), pos);
+        }else
+        {
+            if( member->visi == Declaration::Private )
+                error(pos,QString("cannot access private declaration '%1' from module '%2'").
+                      arg(q.second.constData()).arg(q.first.constData()) );
+            res.second = member;
+        }
+    }else
+    {
+        Declaration* d = 0;
+
+        Declaration* nested = scopeStack.back();
+        while( d == 0 && nested && nested->kind != Declaration::Module )
+        {
+            d = nested->find(q.second, false); // check for local vars
+            nested = nested->outer;
+        }
+
+        if( d == 0 && curObjectTypeDecl )
+            d = findInType(deref(curObjectTypeDecl->type()),q.second);
+        if( d == 0 )
+            d = module->find(q.second,false);
+        if( d == 0 )
+            d = mdl->findDecl(q.second); // built-ins
+        if( d == 0 )
+        {
+            error(pos,QString("declaration '%1' not found").arg(q.second.constData()));
+            markUnref(q.second.size(), pos);
+        }
+        res.second = d;
+    }
+    return res;
+}
+
+Declaration *Validator2::findInType(Ast::Type * t, const QByteArray &field)
+{
+    if( t == 0 )
+        return 0;
+#if 0
+    Type* base = deref(t->base);
+    while( base && base->base && base->base->kind == Type::NameRef && !base->base->validated )
+        base = deref(base->base);
+    return t->find(field);
+#else
+    Declaration* res = t->find(field, false);
+    QList<Ast::Type*> done;
+    while( res == 0 && (t->kind == Type::Record || t->kind == Type::Object) && t->type() )
+    {
+        Ast::Type* super = deref(t->type());
+        if( super->kind == Type::Pointer && super->type() )
+            super = deref(super->type());
+        res = super->find(field, false);
+        t = super;
+        if( done.contains(t) ) // in OberonSystem3_Native_2.2_1997 there is a cycle over TextGadgets.FrameDesc, TextGadgets0.FrameDesc and Gadgets.ViewDesc
+            break;
+        done.append(t);
+    }
+    return res;
+#endif
+}
 
