@@ -130,48 +130,50 @@ void Validator2::ImportDecl(Ast::Declaration* import) {
 
 Ast::Declaration* Validator2::ImportList(Ast::Declaration* import) {
     ImportDecl(import);
-    while( import->next && import->next->kind == Ast::Declaration::Import ) {
-        import = import->next;
+    import = import->next;
+    while( import && import->kind == Ast::Declaration::Import ) {
         ImportDecl(import);
-	}
+        import = import->next;
+    }
     return import;
 }
 
 Ast::Declaration* Validator2::DeclSeq(Ast::Declaration* d) {
+
     while( d && (d->kind == Ast::Declaration::ConstDecl || d->kind == Ast::Declaration::TypeDecl ||
-           d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::Procedure ) ) {
-        if( d->kind == Ast::Declaration::ConstDecl ) {
-            while( d && d->kind == Ast::Declaration::ConstDecl ) {
-                ConstDecl(d);
-                d = d->next;
-			}
-        } else if( d->kind == Ast::Declaration::TypeDecl ) {
-            while( d && d->kind == Ast::Declaration::TypeDecl ) {
-                TypeDecl(d);
-                d = d->next;
-			}
-        } else if( d->kind == Ast::Declaration::VarDecl ) {
-            while( d && d->kind == Ast::Declaration::VarDecl ) {
-                VarDecl(d);
-                d = d->next;
-			}
-        } else if( d->kind == Ast::Declaration::Procedure ) {
-            while( d && d->kind == Ast::Declaration::Procedure ) {
-                ProcDecl(d);
-                d = d->next;
-			}
-		} else
-            invalid("DeclSeq", d->pos);
+           d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl || d->kind == Ast::Declaration::Procedure ) )
+    {
+        if( d->validated )
+            continue;
+        markDecl(d);
+        d->validated = true;
+        switch( d->kind )
+        {
+        case Ast::Declaration::ConstDecl:
+            ConstDecl(d);
+            break;
+        case Ast::Declaration::TypeDecl:
+            TypeDecl(d);
+            break;
+        case Ast::Declaration::VarDecl:
+        case Ast::Declaration::LocalDecl:
+            VarDecl(d);
+            break;
+        case Ast::Declaration::Procedure:
+            ProcDecl(d);
+            break;
+        default:
+            Q_ASSERT(false);
+        }
+        d = d->next;
 	}
     return d;
 }
 
 void Validator2::ConstDecl(Ast::Declaration* d) {
-    if( ConstExpr(d->expr) )
-    {
-        d->setType(d->expr->type());
-        d->data = d->expr->val;
-    }
+    ConstExpr(d->expr);
+    d->setType(d->expr->type());
+    d->data = d->expr->val;
 }
 
 void Validator2::TypeDecl(Ast::Declaration* d) {
@@ -255,12 +257,14 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
     Ast::Declaration* d = proc->link;
     while( d && d->kind == Ast::Declaration::ParamDecl )
     {
+        markDecl(d);
+        d->validated = true;
         if( !d->receiver )
             Type(d->type());
-        else
-            dummy();
         d = d->next;
     }
+    if( proc->type() )
+        Type(proc->type());
     d = DeclSeq(d);
     if( proc->body ) {
         if( proc->body->kind == Ast::Statement::Assembler )
@@ -308,19 +312,24 @@ bool Validator2::ObjectType(Ast::Type* t) {
         Declaration* tmp = curObjectTypeDecl;
         Q_ASSERT(curObjectTypeDecl != 0);
         curObjectTypeDecl = 0;
-        resolveIfNamedType(t->type());
+        resolveIfNamedType(t->type(), t->pos);
         curObjectTypeDecl = tmp;
     }
 
     foreach( Ast::Declaration* member, t->subs )
     {
+        if( member->validated )
+            continue;
+        member->validated = true;
+        markDecl(member);
+
         switch( member->kind )
         {
         case Ast::Declaration::Field:
             VarDecl(member);
             break;
         case Ast::Declaration::Procedure:
-                ProcDecl(member);
+            ProcDecl(member);
             break;
         default:
             invalid("ObjectDeclSeq", t->pos);
@@ -347,7 +356,7 @@ bool Validator2::ProcedureType(Ast::Type* t) {
 
 bool Validator2::AliasType(Ast::Type* t) {
     t->validated = false; // it was false when entering this proc, and resolveIfNamedType does nothing otherwise
-    resolveIfNamedType(t);
+    resolveIfNamedType(t, t->pos);
     return true;
 }
 
@@ -369,6 +378,8 @@ bool Validator2::Type(Ast::Type* t) {
         return RecordType(t);
     case Ast::Type::Object:
         return ObjectType(t);
+    case Ast::Type::NoType:
+        return true;
     default:
         invalid("Type", t->pos);
     }
@@ -378,14 +389,20 @@ bool Validator2::Type(Ast::Type* t) {
 bool Validator2::FieldList(Ast::Type* t) {
     foreach( Ast::Declaration* f, t->subs )
     {
-        if( !Type(f->type()) )
-            return false;
+        if( f->validated )
+            continue;
+        f->validated = true;
+        markDecl(f);
+        Type(f->type());
     }
     return true;
 }
 
 void Validator2::Body(Ast::Statement* s) {
-    StatBlock(s);
+    if( s && s->kind == Ast::Statement::StatBlock )
+        StatBlock(s);
+    else
+        StatSeq(s);
 }
 
 void Validator2::Attributes() {
@@ -636,6 +653,11 @@ bool Validator2::Expr(Ast::Expression* e) {
     case Ast::Expression::Constructor:
         if( !constructor(e) )
             return false;
+        break;
+    case Ast::Expression::Range:
+        Expr(e->lhs);
+        Expr(e->rhs);
+        e->setType(e->lhs->type());
         break;
     case Ast::Expression::NameRef:
         if( !nameRef(e) )
@@ -937,7 +959,7 @@ bool Validator2::literal(Ast::Expression *e)
     if( e == 0 )
         return false;
     // TODO
-    return false;
+    return true;
 }
 
 bool Validator2::constructor(Ast::Expression *e)
@@ -987,7 +1009,7 @@ bool Validator2::nameRef(Ast::Expression * nameRef)
     Symbol* s = markRef(r.second, pos);
     if( nameRef->needsLval )
         s->kind = Symbol::Lval;
-    resolveIfNamedType(r.second->type());
+    resolveIfNamedType(r.second->type(), nameRef->pos);
 
     nameRef->kind = Expression::DeclRef;
     nameRef->val = QVariant::fromValue(r.second);
@@ -1101,14 +1123,14 @@ Type *Validator2::deref(Ast::Type *t)
                 qWarning() << "Validator::deref: unvalidated quali" << q.first << "." << q.second << "in"
                            << module->name;
 #endif
-            resolveIfNamedType(t);
+            resolveIfNamedType(t, t->pos);
         }
         return deref(t->type());
     }else
         return t;
 }
 
-void Validator2::resolveIfNamedType(Ast::Type *nameRef)
+void Validator2::resolveIfNamedType(Ast::Type *nameRef, const RowCol& where)
 {
     if( nameRef == 0 || nameRef->kind != Type::NameRef)
         return;
@@ -1117,7 +1139,7 @@ void Validator2::resolveIfNamedType(Ast::Type *nameRef)
     Q_ASSERT(nameRef->quali);
     Q_ASSERT(nameRef->expr == 0);
     Qualident q = *nameRef->quali;
-    ResolvedQ r = find(q, nameRef->pos);
+    ResolvedQ r = find(q, where);
     if(r.second == 0)
         return;
     RowCol pos = nameRef->pos;
@@ -1131,11 +1153,11 @@ void Validator2::resolveIfNamedType(Ast::Type *nameRef)
     nameRef->setType(r.second->type());
     if( r.second->kind != Declaration::TypeDecl )
     {
-        error(nameRef->pos,"identifier doesn't refer to a type declaration");
+        error(where,"identifier doesn't refer to a type declaration");
         return;
     }
 
-    resolveIfNamedType(r.second->type());
+    resolveIfNamedType(r.second->type(), where);
 }
 
 Validator2::ResolvedQ Validator2::find(const Ast::Qualident &q, RowCol pos)

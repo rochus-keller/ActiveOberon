@@ -98,7 +98,7 @@ namespace Ao {
         Ast::Symbol* markRef(Ast::Declaration* d, const RowCol& pos);
         Ast::Symbol* markUnref(int len, const RowCol& pos);
         Ast::Type* deref(Ast::Type* t);
-        void resolveIfNamedType(Ast::Type* nameRef);
+        void resolveIfNamedType(Ast::Type* nameRef, const RowCol &pos);
         void resolveDesig(Ast::Expression* nameRef);
         typedef QPair<Ast::Declaration*,Ast::Declaration*> ResolvedQ; // [module .] member
         ResolvedQ find(const Ast::Qualident& q, RowCol pos);
