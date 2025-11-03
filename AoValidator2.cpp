@@ -32,7 +32,7 @@ static QByteArray SELF;
 static inline void dummy() {}
 
 Validator2::Validator2(Ast::AstModel *mdl, Ast::Importer *imp, bool haveXref):module(0),mdl(mdl),imp(imp),
-    first(0),last(0),curObjectTypeDecl(0)
+    first(0),last(0),curObj(0)
 {
     Q_ASSERT(mdl);
     if( haveXref )
@@ -177,51 +177,9 @@ void Validator2::ConstDecl(Ast::Declaration* d) {
 }
 
 void Validator2::TypeDecl(Ast::Declaration* d) {
-    if( d->type() && d->type()->kind == Type::Object )
-        curObjectTypeDecl = d;
 
     Type(d->type());
 
-    if( d->type() && d->type()->kind == Type::Object )
-    {
-        QList<Declaration*> bounds_ = boundProcs;
-        boundProcs.clear();
-        foreach(Declaration* proc, bounds_)
-        {
-            Q_ASSERT(proc->link && proc->link->kind == Declaration::ParamDecl &&
-                     proc->link->receiver && proc->link->type() );
-            Ast::Type* objectType = proc->link->type()->deref();
-            Q_ASSERT(objectType == d->type());
-            if( objectType->type() )
-            {
-                Declaration* super = findInType(objectType->type()->deref(),proc->name);
-                if( super )
-                {
-                    super->hasSubs = true;
-                    proc->super = super;
-                    if( first )
-                        subs[super].append(proc);
-                }
-            }
-            // TODO visitScope(proc);
-        }
-        curObjectTypeDecl = 0;
-    }
-    if( d->type() && (d->type()->kind == Type::Object || d->type()->kind == Type::Record) )
-    {
-        if( d->type()->type() )
-        {
-            Ast::Type* baseType = d->type()->type();
-            Q_ASSERT( baseType->kind == Type::NameRef );
-            if( !baseType->validated || baseType->type() == 0 )
-                return;
-            Declaration* super = baseType->type()->deref()->decl;
-            super->hasSubs = true;
-            d->super = super;
-            if( first )
-                subs[super].append(d);
-        }
-    }
 }
 
 void Validator2::VarDecl(Ast::Declaration* d) {
@@ -237,22 +195,6 @@ void Validator2::Assembler(Ast::Declaration* proc) {
 void Validator2::ProcDecl(Ast::Declaration * proc) {
     // SysFlag();
     scopeStack.push_back(proc);
-
-    if( curObjectTypeDecl )
-    {
-        proc->receiver = true;
-        proc->outer = curObjectTypeDecl;
-        // TODO boundProcs << proc; // do body later
-        Declaration* self = new Declaration();
-        self->kind = Declaration::ParamDecl;
-        self->name = SELF;
-        self->setType(curObjectTypeDecl->type());
-        self->pos = curObjectTypeDecl->pos;
-        self->receiver = true;
-        self->next = proc->link;
-        self->outer = proc;
-        proc->link = self;
-    }
 
     Ast::Declaration* d = proc->link;
     while( d && d->kind == Ast::Declaration::ParamDecl )
@@ -302,20 +244,15 @@ bool Validator2::PointerType(Ast::Type* t) {
 }
 
 bool Validator2::ObjectType(Ast::Type* t) {
-    // TODO
+
     // SysFlag();
     if( t->type() && !t->type()->validated ) // optional base class
     {
         // resolve base objects if present
-        // we have to disable curObjectType here because otherwise findInType is called with
-        // curObjectType->type()->base which leads to infinite loop
-        Declaration* tmp = curObjectTypeDecl;
-        Q_ASSERT(curObjectTypeDecl != 0);
-        curObjectTypeDecl = 0;
         resolveIfNamedType(t->type(), t->pos);
-        curObjectTypeDecl = tmp;
     }
 
+    QList<Ast::Declaration*> boundProcs;
     foreach( Ast::Declaration* member, t->subs )
     {
         if( member->validated )
@@ -329,13 +266,27 @@ bool Validator2::ObjectType(Ast::Type* t) {
             VarDecl(member);
             break;
         case Ast::Declaration::Procedure:
-            ProcDecl(member);
+            bindProc(t, member);
+            boundProcs << member;
             break;
         default:
             invalid("ObjectDeclSeq", t->pos);
             break;
         }
     }
+
+    if( !boundProcs.isEmpty() )
+    {
+        if(curObj == 0)
+        {
+            curObj = t;
+            foreach( Ast::Declaration* p, boundProcs )
+                ProcDecl(p);
+            curObj = 0;
+        }else
+            error(t->pos, "nested object type and method declarations not supported");
+    }
+
     return true;
 }
 
@@ -364,26 +315,55 @@ bool Validator2::Type(Ast::Type* t) {
     if( t == 0 || t->validated )
         return true;
     t->validated = true;
+
+    bool res = false;
     switch( t->kind )
     {
     case Ast::Type::NameRef:
-        return AliasType(t);
+        res = AliasType(t);
+        break;
     case Ast::Type::Pointer:
-        return PointerType(t);
+        res = PointerType(t);
+        break;
     case Ast::Type::Procedure:
-        return ProcedureType(t);
+        res = ProcedureType(t);
+        break;
     case Ast::Type::Array:
-        return ArrayType(t);
+        res = ArrayType(t);
+        break;
     case Ast::Type::Record:
-        return RecordType(t);
+        res = RecordType(t);
+        break;
     case Ast::Type::Object:
-        return ObjectType(t);
+        res = ObjectType(t);
+        break;
     case Ast::Type::NoType:
         return true;
     default:
         invalid("Type", t->pos);
     }
-    return true;
+
+    if( t->kind == Type::Object || t->kind == Type::Record)
+    {
+        if( t->type() )
+        {
+            if( t->decl == 0 )
+                return error(t->pos, "try to register anonymous base object/record type TODO");
+            Ast::Type* baseType = t->type();
+            Q_ASSERT( baseType->kind == Type::NameRef );
+            if( !baseType->validated || baseType->type() == 0 )
+                return error(t->pos, "base type not yet validated TODO");
+            Declaration* super = baseType->type()->deref()->decl;
+            if( super == 0 )
+                return error(t->pos, "try to reference anonymous base object/record type TODO");
+            super->hasSubs = true;
+            t->decl->super = super;
+            if( first )
+                subs[super].append(t->decl);
+        }
+    }
+
+    return res;
 }
 
 bool Validator2::FieldList(Ast::Type* t) {
@@ -514,11 +494,14 @@ Ast::Statement *Validator2::WithStat(Ast::Statement *s) {
     Expr(s->lhs);
     Expr(s->rhs);
 
-    Q_ASSERT( s->lhs->kind == Expression::DeclRef );
-    Declaration* d = s->lhs->val.value<Declaration*>();
-    Ast::Type* t = d->overrideType(s->rhs->type());
-    StatSeq(s->body);
-    d->overrideType(t);
+    if( s->lhs->kind == Expression::DeclRef )
+    {
+        Declaration* d = s->lhs->val.value<Declaration*>();
+        Ast::Type* t = d->overrideType(s->rhs->type());
+        StatSeq(s->body);
+        d->overrideType(t);
+    } else
+        error(s->pos, "error in with statement TODO");
 
     return s;
 }
@@ -1043,6 +1026,39 @@ void Validator2::call(Ast::Statement *s)
     Q_ASSERT( s->rhs == 0 );
 }
 
+void Validator2::bindProc(Ast::Type* object, Ast::Declaration * proc)
+{
+    // object->decl can be a type decl or even a var decl, see AosFS:604
+    Q_ASSERT( object && object->kind == Ast::Type::Object );
+
+    // do this only for module-level procedures; these can have nested procedures
+    // which are not bound to the object, e.g. Adaptec7 line 335 proc Data nested in proc Synchronize
+    proc->receiver = true;
+    proc->outer = object->decl;
+    Declaration* self = new Declaration();
+    self->kind = Declaration::ParamDecl;
+    self->name = SELF;
+    self->setType(object);
+    self->pos = object->pos;
+    self->receiver = true;
+    self->next = proc->link;
+    self->outer = proc;
+    proc->link = self;
+
+    if( object->type() )
+    {
+        // there is a super class, so look whether this is an inherited method and connect
+        Declaration* super = findInType(object->type()->deref(),proc->name);
+        if( super )
+        {
+            super->hasSubs = true;
+            proc->super = super;
+            if( first )
+                subs[super].append(proc);
+        }
+    }
+}
+
 Xref Validator2::takeXref()
 {
     Xref res;
@@ -1204,8 +1220,8 @@ Validator2::ResolvedQ Validator2::find(const Ast::Qualident &q, RowCol pos)
             nested = nested->outer;
         }
 
-        if( d == 0 && curObjectTypeDecl )
-            d = findInType(deref(curObjectTypeDecl->type()),q.second);
+        if( d == 0 && curObj )
+            d = findInType(curObj,q.second);
         if( d == 0 )
             d = module->find(q.second,false);
         if( d == 0 )

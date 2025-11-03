@@ -612,8 +612,7 @@ void Parser2::TypeDecl() {
         return;
 
     d->setType(Type_());
-    if( d->type() && d->type()->decl == 0 )
-        d->type()->decl = d;
+    deanonymizeType(d);
 }
 
 void Parser2::VarDecl(bool inObjectType) {
@@ -636,6 +635,7 @@ void Parser2::VarDecl(bool inObjectType) {
         else
             d->outer = outer;
         d->setType(t);
+        deanonymizeType(d);
     }
 }
 
@@ -704,6 +704,7 @@ Declaration* Parser2::ProcHead(bool forwardDecl) {
     Declaration* procDecl = addDecl(id.name, id.visi, Declaration::Procedure);
     if( procDecl == 0 )
         return 0;
+
     procDecl->constructor = isConstr;
 
     procDecl->outer = mdl->getTopScope();
@@ -770,6 +771,7 @@ void Parser2::FPSection() {
             continue;
         d->varParam = varParam;
         d->setType(t);
+        deanonymizeType(d);
     }
 }
 
@@ -938,6 +940,8 @@ Type* Parser2::Type_() {
         res = ProcedureType();
 	} else
 		invalid("Type");
+    if( res->kind != Type::NameRef )
+        res->anonymous = true;
     return res;
 }
 
@@ -952,6 +956,7 @@ void Parser2::FieldDecl() {
             if( d == 0 )
                 continue;
             d->setType(t);
+            deanonymizeType(d);
         }
     }
 }
@@ -1587,6 +1592,18 @@ Expression* Parser2::maybeQualident()
         q.second = tok.d_val;
         res->val = QVariant::fromValue(q);
         return res;
+    }
+}
+
+void Parser2::deanonymizeType(Ast::Declaration * d)
+{
+    if( d->type() && d->type()->decl == 0 )
+    {
+        d->type()->pos = d->pos;
+        d->type()->decl = d;
+        d->type()->anonymous = false;
+        if( d->type()->kind == Type::Pointer && d->type()->type() && d->type()->type()->decl == 0 )
+            d->type()->type()->decl = d; // many types are declared as POINTER TO RECORD .. END
     }
 }
 

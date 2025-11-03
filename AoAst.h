@@ -73,6 +73,7 @@ namespace Ast
         uint delegate : 1;
         uint allocated : 1;
         uint owned : 1;
+        uint anonymous : 1;
 
         // Declaration:
         uint varParam : 1; // var param
@@ -88,7 +89,7 @@ namespace Ast
         uint needsLval : 1;
         uint nonlocal : 1;
 
-        // 25 bits
+        // 26 bits
 
         RowCol pos;
 
@@ -102,7 +103,7 @@ namespace Ast
     #endif
             validated(0),deferred(0),delegate(0),allocated(0),receiver(0),
             varParam(0),constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),
-            byVal(0),needsLval(0),nonlocal(0),ty(0),owned(0){}
+            byVal(0),needsLval(0),nonlocal(0),ty(0),owned(0),anonymous(0){}
         ~Node();
     private:
         Type* ty;

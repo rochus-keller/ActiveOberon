@@ -90,6 +90,7 @@ namespace Ao {
         bool nameRef(Ast::Expression *e);
         void assig(Ast::Statement* s);
         void call(Ast::Statement* s);
+        void bindProc(Ast::Type *object, Ast::Declaration*);
 
 	protected:
         void invalid(const char* what, const RowCol&);
@@ -110,8 +111,8 @@ namespace Ao {
         QString sourcePath;
         Ast::AstModel* mdl;
         Ast::Importer* imp;
-        QList<Ast::Declaration*> scopeStack, boundProcs;
-        Ast::Declaration* curObjectTypeDecl;
+        Ast::Type* curObj;
+        QList<Ast::Declaration*> scopeStack;
         Ast::Symbol* first;
         Ast::Symbol* last;
         QHash<Ast::Declaration*,Ast::SymList> xref;

@@ -1106,7 +1106,10 @@ static QTreeWidgetItem* fillHierProc( T* parent, Declaration* p, Declaration* re
     QTreeWidgetItem* item = new QTreeWidgetItem(parent);
     Q_ASSERT( p->receiver && p->link && p->link->receiver && p->link->type() );
 
-    item->setText(0, p->link->type()->decl->scopedName(true));
+    if( p->link->type()->decl )
+        item->setText(0, p->link->type()->decl->scopedName(true));
+    else
+        item->setText(0, "???");
     item->setData(0, Qt::UserRole, QVariant::fromValue(p) );
     item->setIcon(0, QPixmap( p->visi >= Declaration::ReadWrite ? ":/images/func.png" : ":/images/func_priv.png" ) );
     item->setToolTip(0,item->text(0));
@@ -1365,7 +1368,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.5.8");
+    a.setApplicationVersion("0.5.9");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX

@@ -123,6 +123,7 @@ namespace Ao {
         void error( const RowCol&, const QString& msg );
         Ast::Type* smallestIntType(quint64 i);
         Ast::Expression* maybeQualident();
+        void deanonymizeType(Ast::Declaration*);
 
 	protected:
         Ast::Declaration* thisMod;
