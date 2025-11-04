@@ -57,7 +57,7 @@ namespace Ao {
         bool ObjectType(Ast::Type *t);
         bool ProcedureType(Ast::Type *t);
         bool AliasType(Ast::Type *t);
-        bool Type(Ast::Type *t);
+        bool Type_(Ast::Type *t);
         bool FieldList(Ast::Type *t);
         void Body(Ast::Statement *s);
 		void Attributes();
@@ -87,10 +87,14 @@ namespace Ao {
         bool call(Ast::Expression *e);
         bool literal(Ast::Expression *e);
         bool constructor(Ast::Expression *e);
+        bool range(Ast::Expression* e);
         bool nameRef(Ast::Expression *e);
         void assig(Ast::Statement* s);
         void call(Ast::Statement* s);
         void bindProc(Ast::Type *object, Ast::Declaration*);
+        bool decl(Ast::Declaration*);
+        bool assigCompat(Ast::Type* lhs, Ast::Type* rhs);
+        bool isPtrOrVarWithRecordObject(Ast::Expression* e);
 
 	protected:
         void invalid(const char* what, const RowCol&);
@@ -105,6 +109,8 @@ namespace Ao {
         ResolvedQ find(const Ast::Qualident& q, RowCol pos);
         Ast::Declaration* findInType(Ast::Type*, const QByteArray& field);
         bool checkBuiltinArgs(quint8 builtin, const Ast::ExpList& args, Ast::Type** ret, const RowCol& pos);
+        Ast::Type* includingType(Ast::Type*,Ast::Type*);
+        bool lhsIncludeRhs(Ast::Type* lhs, Ast::Type* rhs);
 
     private:
         Ast::Declaration* module;
@@ -113,6 +119,7 @@ namespace Ao {
         Ast::Importer* imp;
         Ast::Type* curObj;
         QList<Ast::Declaration*> scopeStack;
+        QList<Ast::Statement*> loopStack;
         Ast::Symbol* first;
         Ast::Symbol* last;
         QHash<Ast::Declaration*,Ast::SymList> xref;

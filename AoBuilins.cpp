@@ -81,7 +81,7 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
         if(!expectingNMArgs(args,1,2))
             break;
         if( deref(args[0]->type())->kind == Type::SET )
-            *ret = mdl->getType(Type::BYTE);
+            *ret = mdl->getType(Type::SHORTINT);
         else
             *ret = args[0]->type();
         break;
@@ -123,6 +123,7 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
         break;
     case Builtin::CAP:
         expectingNArgs(args,1);
+        *ret = mdl->getType(Type::CHAR);
         break;
     case Builtin::ASH:
         expectingNArgs(args,2);

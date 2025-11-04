@@ -1243,6 +1243,7 @@ Statement* Parser2::WithStat() {
     expect(Tok_Colon, false, "WithStat");
     res->rhs = new Expression(); // dummy to hold type
     res->rhs->kind = Expression::Literal;
+    res->rhs->pos = la.toRowCol();
     res->rhs->setType(NamedType());
 
 	expect(Tok_DO, false, "WithStat");

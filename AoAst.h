@@ -93,7 +93,7 @@ namespace Ast
 
         RowCol pos;
 
-        Type* type() const { return ty; }
+        Type* type() const { return _ty; }
         void setType(Type*);
         Type* overrideType(Type*);
 
@@ -103,10 +103,10 @@ namespace Ast
     #endif
             validated(0),deferred(0),delegate(0),allocated(0),receiver(0),
             varParam(0),constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),
-            byVal(0),needsLval(0),nonlocal(0),ty(0),owned(0),anonymous(0){}
+            byVal(0),needsLval(0),nonlocal(0),_ty(0),owned(0),anonymous(0){}
         ~Node();
     private:
-        Type* ty;
+        Type* _ty;
     };
 
     class Expression;
@@ -124,8 +124,8 @@ namespace Ast
             NIL,
             BOOLEAN,
             CHAR,       // 1 byte
-            SHORTINT,   // 1 byte
             BYTE,       // 1 byte, SYSTEM.BYTE
+            SHORTINT,   // 1 byte
             INTEGER,    // 2 bytes
             LONGINT,    // 4 bytes
             HUGEINT,    // 8 bytes
@@ -159,8 +159,10 @@ namespace Ast
         Expression* expr; // array len
 
         bool isNumber() const { return kind >= SHORTINT && kind <= LONGREAL; }
+        bool isNumberOrByte() const { return isNumber() || kind == BYTE; }
         bool isReal() const { return kind == REAL || kind == LONGREAL; }
         bool isInteger() const { return kind >= SHORTINT && kind <= HUGEINT;  }
+        bool isIntegerOrByte() const { return isInteger() || kind == BYTE;  }
         bool isSet() const { return kind == SET; }
         bool isBoolean() const { return kind == BOOLEAN; }
         bool isStructured() const { return kind == Array || kind == Record; }
@@ -178,7 +180,7 @@ namespace Ast
         static QVariant getMax(quint8 form);
         static QVariant getMin(quint8 form);
 
-        Type():expr(0),quali(0),decl(0){meta = T;}
+        Type():expr(0),quali(0),decl(0){meta = T; kind = Undefined;}
         ~Type();
     };
 
@@ -205,11 +207,11 @@ namespace Ast
         QVariant data; // value for Const and Enum, path for Import, name for Extern
         Expression* expr; // const decl, enum, meta actuals
 
-        Declaration():next(0),link(0),outer(0),super(0),body(0),id(NoSlot),expr(0),visi(0) { meta = D; }
+        Declaration():next(0),link(0),outer(0),super(0),body(0),id(NoSlot),expr(0),visi(0) { meta = D; kind = Invalid; }
 
         QList<Declaration*> getParams(bool skipReceiver = false) const;
         int getIndexOf(Declaration*) const;
-        bool isLvalue() const { return kind == VarDecl || kind == LocalDecl || kind == ParamDecl; }
+        bool isLvalue() const { return kind == VarDecl || kind == LocalDecl || kind == ParamDecl || kind == Field; }
         bool isPublic() const { return visi >= ReadOnly; }
         Declaration* getNext() const { return next; }
         Declaration* getLast() const;
@@ -304,8 +306,8 @@ namespace Ast
         Expression* rhs; // owns: rhs, args, cond, case, label, return
         Statement* body; // owns: then
 
-        Statement(Kind k = Invalid, const RowCol& p = RowCol()):kind(k),active(0),exclusive(0),pos(p),lhs(0),rhs(0),
-            next(0),body(0) {}
+        Statement(Kind k = Invalid, const RowCol& p = RowCol()):active(0),exclusive(0),pos(p),lhs(0),rhs(0),
+            next(0),body(0) { kind = k; }
         Statement* getLast() const;
         Statement* getNext() const { return next; }
         void append(Statement*s);

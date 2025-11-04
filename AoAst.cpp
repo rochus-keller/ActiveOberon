@@ -29,13 +29,14 @@ const char* Type::name[] = {
     "Undefined",
     "NoType",
     "StrLit",
-    "ByteArrayLit",
     "NIL",
     "BOOLEAN",
-    "SHORTINT",
+    "CHAR",
     "BYTE",
+    "SHORTINT",
     "INTEGER",
     "LONGINT",
+    "HUGEINT",
     "REAL",
     "LONGREAL",
     "SET",
@@ -947,26 +948,32 @@ bool Import::equals(const Import& other) const
 
 void Node::setType(Type * t)
 {
-    if( ty == t )
+    if( _ty == t )
         return;
-    Q_ASSERT(ty == 0);
+    if( _ty != 0 )
+    {
+        if( ownstype )
+            delete _ty;
+        ownstype = false;
+        _ty = 0;
+    }
     if( t && !t->owned )
     {
         ownstype = true;
         t->owned = true;
     }
-    ty = t;
+    _ty = t;
 }
 
 Type *Node::overrideType(Type * t)
 {
-    Type* old = ty;
-    ty = t;
+    Type* old = _ty;
+    _ty = t;
     return old;
 }
 
 Node::~Node()
 {
-    if( ty && ownstype )
-        delete ty;
+    if( _ty && ownstype )
+        delete _ty;
 }

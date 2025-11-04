@@ -26,10 +26,49 @@ using namespace Ast;
 
 #define _ALLOW_POINTER_BASE_TYPE
 #define _ALLOW_RETURN_STRUCTURED_TYPES
+// #define _SUPPORT_STRANGE_RELATIONS
 
 static QByteArray SELF;
 
 static inline void dummy() {}
+
+static inline bool isConstChar( Expression* e )
+{
+    if( e == 0 )
+        return false;
+    if( e->type() && e->type()->deref()->kind == Type::CHAR )
+        return true;
+    if( e->kind == Expression::Literal && e->type() && e->type()->kind == Type::StrLit )
+        return e->val.toByteArray().size() == 1;
+    if( e->kind == Expression::DeclRef && e->type() && e->type()->kind == Type::StrLit )
+    {
+        Declaration* d = e->val.value<Declaration*>();
+        if( d && d->kind == Declaration::ConstDecl )
+            return d->data.toByteArray().size() == 1;
+    }
+    return false;
+}
+
+static inline bool isCharArray( Expression* e )
+{
+    if( e == 0 )
+        return false;
+    Type* t = e->type() ? e->type()->deref() : 0;
+    if( t && t->kind == Type::StrLit )
+        return true;
+    if( t && t->kind == Type::Array )
+    {
+        t = t->type() ? t->type()->deref() : 0;
+        return t && t->kind == Type::CHAR;
+    }
+    if( e->kind == Expression::DeclRef && e->type() && e->type()->kind == Type::StrLit )
+    {
+        Declaration* d = e->val.value<Declaration*>();
+        if( d && d->kind == Declaration::ConstDecl )
+            return true;
+    }
+    return false;
+}
 
 Validator2::Validator2(Ast::AstModel *mdl, Ast::Importer *imp, bool haveXref):module(0),mdl(mdl),imp(imp),
     first(0),last(0),curObj(0)
@@ -143,28 +182,7 @@ Ast::Declaration* Validator2::DeclSeq(Ast::Declaration* d) {
     while( d && (d->kind == Ast::Declaration::ConstDecl || d->kind == Ast::Declaration::TypeDecl ||
            d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl || d->kind == Ast::Declaration::Procedure ) )
     {
-        if( d->validated )
-            continue;
-        markDecl(d);
-        d->validated = true;
-        switch( d->kind )
-        {
-        case Ast::Declaration::ConstDecl:
-            ConstDecl(d);
-            break;
-        case Ast::Declaration::TypeDecl:
-            TypeDecl(d);
-            break;
-        case Ast::Declaration::VarDecl:
-        case Ast::Declaration::LocalDecl:
-            VarDecl(d);
-            break;
-        case Ast::Declaration::Procedure:
-            ProcDecl(d);
-            break;
-        default:
-            Q_ASSERT(false);
-        }
+        decl(d);
         d = d->next;
 	}
     return d;
@@ -177,14 +195,11 @@ void Validator2::ConstDecl(Ast::Declaration* d) {
 }
 
 void Validator2::TypeDecl(Ast::Declaration* d) {
-
-    Type(d->type());
-
+    Type_(d->type());
 }
 
 void Validator2::VarDecl(Ast::Declaration* d) {
-    // TODO
-    Type(d->type());
+    Type_(d->type());
 }
 
 void Validator2::Assembler(Ast::Declaration* proc) {
@@ -202,11 +217,11 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
         markDecl(d);
         d->validated = true;
         if( !d->receiver )
-            Type(d->type());
+            Type_(d->type());
         d = d->next;
     }
     if( proc->type() )
-        Type(proc->type());
+        Type_(proc->type());
     d = DeclSeq(d);
     if( proc->body ) {
         if( proc->body->kind == Ast::Statement::Assembler )
@@ -222,25 +237,33 @@ void Validator2::SysFlag() {
 }
 
 bool Validator2::ArrayType(Ast::Type* t) {
-    // TODO
     // SysFlag();
     if( t->expr )
+    {
         ConstExpr(t->expr);
-    return Type(t->type());
+        if( !deref(t->expr->type())->isInteger() )
+            error(t->expr->pos,"expecting an integer array length");
+    }
+    return Type_(t->type());
 }
 
 bool Validator2::RecordType(Ast::Type* t) {
-    // TODO
     // SysFlag();
     if( t->type() )
-        Type(t->type());  // optional base class
+        Type_(t->type());  // optional base class
+    // TODO check base is record or pointer to record
     return FieldList(t);
 }
 
 bool Validator2::PointerType(Ast::Type* t) {
-    // TODO
     // SysFlag();
-    return Type(t->type());
+    if( Type_(t->type()) )
+    {
+        Type* to = deref(t->type());
+        if( to->kind != Type::Record && to->kind != Type::Array )
+            return error(t->pos, "pointer base type must be ARRAY or RECORD");
+    }else
+        return false;
 }
 
 bool Validator2::ObjectType(Ast::Type* t) {
@@ -251,6 +274,9 @@ bool Validator2::ObjectType(Ast::Type* t) {
         // resolve base objects if present
         resolveIfNamedType(t->type(), t->pos);
     }
+    if( t->type() )
+        Type_(t->type());  // optional base class
+    // TODO check base is object
 
     QList<Ast::Declaration*> boundProcs;
     foreach( Ast::Declaration* member, t->subs )
@@ -291,17 +317,16 @@ bool Validator2::ObjectType(Ast::Type* t) {
 }
 
 bool Validator2::ProcedureType(Ast::Type* t) {
-    // TODO
     // SysFlag();
     // Attributes();
     int ok = 1;
     foreach( Ast::Declaration* param, t->subs )
     {
         if( param->kind == Ast::Declaration::ParamDecl )
-            ok &= Type(param->type());
+            ok &= Type_(param->type());
     }
     if( t->type() && t->type()->kind != Ast::Type::NoType )
-        ok &= Type(t->type());
+        ok &= Type_(t->type());
     return ok;
 }
 
@@ -311,7 +336,7 @@ bool Validator2::AliasType(Ast::Type* t) {
     return true;
 }
 
-bool Validator2::Type(Ast::Type* t) {
+bool Validator2::Type_(Ast::Type* t) {
     if( t == 0 || t->validated )
         return true;
     t->validated = true;
@@ -373,7 +398,7 @@ bool Validator2::FieldList(Ast::Type* t) {
             continue;
         f->validated = true;
         markDecl(f);
-        Type(f->type());
+        Type_(f->type());
     }
     return true;
 }
@@ -390,7 +415,6 @@ void Validator2::Attributes() {
 }
 
 void Validator2::StatBlock(Ast::Statement* s) {
-    // TODO
     // Attributes();
     StatSeq(s->body);
 }
@@ -404,19 +428,22 @@ void Validator2::StatSeq(Ast::Statement*s) {
 
 void Validator2::assig(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Assig);
-    // TODO
+    // TODO check assig compat
     Expr(s->lhs);
     Expr(s->rhs);
 }
 
 Ast::Statement *Validator2::IfStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::If);
-    // TODO
     Expr(s->rhs); // if
+    if( s->rhs && !deref(s->rhs->type())->kind == Type ::BOOLEAN )
+        error(s->rhs->pos, "expecting a boolean expression");
     StatSeq(s->body);
     while( s && s->getNext() && s->getNext()->kind == Ast::Statement::Elsif ) {
         s = s->getNext();
         Expr(s->rhs);
+        if( s->rhs && !deref(s->rhs->type())->kind == Type ::BOOLEAN )
+            error(s->rhs->pos, "expecting a boolean expression");
         StatSeq(s->body);
     }
     if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
@@ -431,14 +458,21 @@ Ast::Statement *Validator2::CaseStat(Ast::Statement *s) {
     // TODO
 
     Expr(s->rhs); // case
+    Type* te = s->rhs ? deref(s->rhs->type()) : deref(0);
+    if( s->rhs && te->kind != Type::CHAR && !te->isInteger() )
+        error(s->rhs->pos, "expecing an integer or CHAR case expression");
 
+    // TODO: check labels unique
     while( s && s->getNext() && s->getNext()->kind == Ast::Statement::CaseLabel )
     {
         s = s->getNext();
         Ast::Expression* label = s->rhs;
         while( label )
         {
-            Expr(label);
+            ConstExpr(label);
+            Type* tl = deref(label->type());
+            if( (te->kind == Type::CHAR && !isConstChar(label)) || (te->kind != Type::CHAR && !tl->isInteger()) )
+                error(label->pos, "label not compatible with case expression type");
             label = label->next;
         }
         StatSeq(s->body);
@@ -452,31 +486,44 @@ Ast::Statement *Validator2::CaseStat(Ast::Statement *s) {
 
 void Validator2::WhileStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::While);
-    // TODO
     Expr(s->rhs);
+    if( s->rhs && deref(s->rhs->type())->kind != Type::BOOLEAN )
+        error(s->rhs->pos, "expecting boolean expression");
     StatSeq(s->body);
 }
 
 void Validator2::RepeatStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Repeat);
-    // TODO
     StatSeq(s->body);
     Expr(s->rhs);
+    if( s->rhs && deref(s->rhs->type())->kind != Type::BOOLEAN )
+        error(s->rhs->pos, "expecting boolean expression");
 }
 
 Ast::Statement *Validator2::ForStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::ForAssig);
-    // TODO
-    Expr(s->lhs); // i := val
+
+    Expression* cv = s->lhs;
+    Expr(cv); // i := val
+    if( cv && !deref(cv->type())->isInteger() )
+        error(cv->pos, "expecting integer type control variable");
     Expr(s->rhs); // val
+    if( cv && s->rhs && !assigCompat(cv->type(), s->rhs->type()) )
+        error(s->rhs->pos, "expression not compatible with control variable");
     Ast::Statement* body = s->body;
 
     if( s && s->getNext() && s->getNext()->kind == Ast::Statement::ForToBy )
     {
         s = s->getNext();
         Expr(s->lhs); // to
+        if( cv && s->lhs && !assigCompat(cv->type(), s->lhs->type()) )
+            error(s->lhs->pos, "expression not compatible with control variable");
         if( s->rhs )
+        {
             ConstExpr(s->rhs); // by
+            if( cv && !assigCompat(cv->type(), s->rhs->type()) )
+                error(s->rhs->pos, "expression not compatible with control variable");
+        }
     }else
         invalid("For Statement", s->pos);
 
@@ -486,7 +533,30 @@ Ast::Statement *Validator2::ForStat(Ast::Statement *s) {
 
 void Validator2::LoopStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Loop);
+    loopStack.push_back(s);
     StatSeq(s->body);
+    loopStack.pop_back();
+}
+
+bool Validator2::isPtrOrVarWithRecordObject(Expression* e)
+{
+    if( e->kind != Expression::DeclRef )
+        return false;
+    Declaration* d = e->val.value<Declaration*>();
+    if( d == 0 || !d->isLvalue() )
+        return false;
+    Type* t = deref(d->type());
+    if( t->kind == Type::Object )
+        return true;
+    if( t->kind == Type::PTR )
+        return true; // special case which happens 20 times in Bluebottle
+    else if( t->kind == Type::Pointer )
+    {
+        t = deref(t->type());
+        return t->kind == Type::Record;
+    }else if( t->kind == Type::Record )
+        return d->kind == Declaration::ParamDecl && d->varParam;
+    return false;
 }
 
 Ast::Statement *Validator2::WithStat(Ast::Statement *s) {
@@ -494,24 +564,54 @@ Ast::Statement *Validator2::WithStat(Ast::Statement *s) {
     Expr(s->lhs);
     Expr(s->rhs);
 
-    if( s->lhs->kind == Expression::DeclRef )
+    if( s->lhs == 0 || s->rhs == 0 )
+        return s; // already reported
+
+    if( !isPtrOrVarWithRecordObject(s->lhs) )
     {
-        Declaration* d = s->lhs->val.value<Declaration*>();
-        Ast::Type* t = d->overrideType(s->rhs->type());
-        StatSeq(s->body);
-        d->overrideType(t);
-    } else
-        error(s->pos, "error in with statement TODO");
+        error(s->lhs->pos, "expecting pointer variable or a variable parameter of record/object type");
+        return s;
+    }
+
+    Q_ASSERT(s->rhs->kind == Expression::Literal); // just a dummy expression to hold the type
+
+    if( !assigCompat(s->lhs->type(), s->rhs->type()) )
+    {
+        error(s->rhs->pos, "guard is not an extension of the variable type");
+        return s;
+    }
+
+    Declaration* d = s->lhs->val.value<Declaration*>();
+    Ast::Type* t = d->overrideType(s->rhs->type());
+    StatSeq(s->body);
+    d->overrideType(t);
 
     return s;
 }
 
 void Validator2::ReturnStat(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Return);
-    // TODO
+    Declaration* proc = 0;
+    if( !scopeStack.isEmpty() && scopeStack.back()->kind == Declaration::Procedure )
+        proc = scopeStack.back();
+    if( proc == 0 )
+    {
+        error(s->pos, "RETURN statement is not in a PROCEDURE");
+        return;
+    }
+    bool isFunction = false;
+    if( proc->type() && proc->type()->kind != Type::NoType )
+        isFunction = true;
     if( s->rhs ) {
-        Expr(s->rhs);
-	}
+        if( !isFunction )
+            error(s->pos, "RETURN expression in a proper procedure");
+        else
+        {
+            if( Expr(s->rhs) && !assigCompat(proc->type(), s->rhs->type()) )
+                error( s->rhs->pos, "incompatible return expression");
+        }
+    }else if( isFunction )
+        error(s->pos, "RETURN requires an expression");
 }
 
 Ast::Statement* Validator2::Statement(Ast::Statement* s) {
@@ -544,6 +644,8 @@ Ast::Statement* Validator2::Statement(Ast::Statement* s) {
         RepeatStat(s);
         break;
     case Ast::Statement::Exit:
+        if( loopStack.isEmpty() )
+            error(s->pos, "EXIT statement is not in a LOOP statement");
         break;
     case Ast::Statement::Return:
         ReturnStat(s);
@@ -565,8 +667,11 @@ Ast::Statement* Validator2::Statement(Ast::Statement* s) {
 }
 
 bool Validator2::ConstExpr(Ast::Expression* e) {
-    // TODO
-    return Expr(e);
+    if( !Expr(e) )
+        return false;
+    if( !e->isConst() )
+        return error(e->pos, "expression is not constant");
+    return true;
 }
 
 bool Validator2::Expr(Ast::Expression* e) {
@@ -638,9 +743,8 @@ bool Validator2::Expr(Ast::Expression* e) {
             return false;
         break;
     case Ast::Expression::Range:
-        Expr(e->lhs);
-        Expr(e->rhs);
-        e->setType(e->lhs->type());
+        if( !range(e) )
+            return false;
         break;
     case Ast::Expression::NameRef:
         if( !nameRef(e) )
@@ -655,19 +759,119 @@ bool Validator2::Expr(Ast::Expression* e) {
 
 bool Validator2::relation(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
     Expr(e->lhs);
     Expr(e->rhs);
-    // TODO
+    Ast::Type* lhsT = e->lhs ? deref(e->lhs->type()) : deref(0);
+    Ast::Type* rhsT = e->rhs ? deref(e->rhs->type()) : deref(0);
+
+    if( e->kind == Expression::Is )
+    {
+        if(lhsT->kind == Type::Object)
+        {
+            if( rhsT->kind == Type::Pointer )
+            {
+                // in bluebottle there are some cases where OBJECT IS POINTER TO RECORD!
+                rhsT = deref(rhsT->type());
+                if( rhsT->kind != Type::Record )
+                    error(e->pos, "IS cannot be applied to these operand types");
+            }else if( rhsT->kind != Type::Object )
+                error(e->pos, "IS cannot be applied to these operand types");
+            else if( !assigCompat(lhsT,rhsT) )
+                error(e->pos, "OBJECT operands not related, so IS cannot be applied");
+        }else if( lhsT->kind == Type::PTR )
+        {
+            if( !assigCompat(lhsT, rhsT) )
+                error(e->pos, "IS cannot be applied to these operand types");
+        }else if( lhsT->kind == Type::Pointer )
+        {
+            lhsT = deref(lhsT->type());
+            if( lhsT->kind != Type::Record )
+                error(e->pos, "IS can only be applied to RECORD or OBJECT types");
+            else if( !assigCompat(lhsT, rhsT) )
+                error(e->pos, "RECORD operands not related, so IS cannot be applied");
+        }else if( lhsT->kind == Type::Record )
+        {
+#if 0
+            // lhs must be a VAR param to RECORD
+            Declaration* d = e->lhs->val.value<Declaration*>();
+            // NOTE: according to the report, "d->kind != Declaration::ParamDecl || !d->varParam" should apply, but Bluebottle
+            // also has local vars of record type as LHS of IS.
+            if( e->lhs->kind != Expression::DeclRef || d == 0 || !d->isLvalue() )
+                error(e->pos, "expecting a VAR parameter of RECORD type");
+#else
+            if( !assigCompat(lhsT, rhsT) )
+                error(e->pos, "RECORD operands not related, so IS cannot be applied");
+
+#endif
+        }
+#ifdef _SUPPORT_STRANGE_RELATIONS
+        // TODO: ANY IS OBJECT kommt vor!
+        else
+            error(e->pos, "IS cannot be applied to given operand types");
+#endif
+    }else if( isConstChar(e->lhs) && isConstChar(e->rhs) )
+    {
+        if( e->kind == Expression::In || e->kind == Expression::Is )
+            error(e->pos, "CHAR operands not compatible with IN or IS operator");
+    }else if( isCharArray(e->lhs) && isCharArray(e->rhs) )
+    {
+        if( e->kind == Expression::In || e->kind == Expression::Is )
+            error(e->pos, "string operands not compatible with IN or IS operator");
+    }else if( lhsT->isNumber() && rhsT->isNumber() )
+    {
+        if( e->kind == Expression::In || e->kind == Expression::Is )
+            error(e->pos, "numeric operands not compatible with IN or IS operator");
+    }else if( lhsT->isSet() && rhsT->isSet() )
+    {
+        if( e->kind != Expression::Eq && e->kind != Expression::Neq )
+            error(e->pos, "SET operands not compatible with given operator");
+    }else if( lhsT->isInteger() && rhsT->isSet() )
+    {
+        if( e->kind != Expression::In )
+            error(e->pos, "operands not compatible with IN operator");
+    }else if( lhsT->kind == Type::BOOLEAN && rhsT->kind == Type::BOOLEAN )
+    {
+        if( e->kind != Expression::Eq && e->kind != Expression::Neq )
+            error(e->pos, "BOOLEAN operands not compatible with given operator");
+    }else if( (lhsT->kind == Type::Pointer && rhsT->kind == Type::Pointer) ||
+              (lhsT->kind == Type::NIL && rhsT->kind == Type::Pointer) ||
+              (lhsT->kind == Type::Pointer && rhsT->kind == Type::NIL) )
+    {
+        if( e->kind != Expression::Eq && e->kind != Expression::Neq )
+            error(e->pos, "POINTER operands not compatible with given operator");
+    }else if( (lhsT->kind == Type::Procedure && rhsT->kind == Type::Procedure) ||
+              (lhsT->kind == Type::NIL && rhsT->kind == Type::Procedure) ||
+              (lhsT->kind == Type::Procedure && rhsT->kind == Type::NIL) )
+    {
+        if( e->kind != Expression::Eq && e->kind != Expression::Neq )
+            error(e->pos, "procedure type operands not compatible with given operator");
+    }else if( (lhsT->kind == Type::Object && rhsT->kind == Type::Object) ||
+              (lhsT->kind == Type::NIL && rhsT->kind == Type::Object) ||
+              (lhsT->kind == Type::Object && rhsT->kind == Type::NIL) )
+    {
+        if( e->kind != Expression::Eq && e->kind != Expression::Neq )
+            error(e->pos, "object operands not compatible with given operator");
+    }else if( (lhsT->kind == Type::PTR && rhsT->kind == Type::PTR) ||
+              (lhsT->kind == Type::NIL && rhsT->kind == Type::PTR) ||
+              (lhsT->kind == Type::PTR && rhsT->kind == Type::NIL) )
+    {
+        if( e->kind != Expression::Eq && e->kind != Expression::Neq )
+            error(e->pos, "SYSTEM.PTR operands not compatible with given operator");
+    }
+#ifdef _SUPPORT_STRANGE_RELATIONS
+    else
+        error(e->pos, "operands not compatible with given operator");
+        // TODO: folgendes kommt vor: POINTER TO ARRAY-StrLit, POINTER-PTR, ANY-NIL, ANY-ANY, ANY-PTR, PTR-OBJECT
+#endif
+
     e->setType(mdl->getType(Type::BOOLEAN));
     return false;
 }
 
 bool Validator2::unaryOp(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
 
@@ -698,34 +902,79 @@ bool Validator2::unaryOp(Ast::Expression *e)
 
 bool Validator2::arithOp(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
     Expr(e->lhs);
     Expr(e->rhs);
-    // TODO
-    e->setType(deref(e->lhs->type()));
-    return false;
+
+    Ast::Type* lhsT = e->lhs ? deref(e->lhs->type()) : deref(0);
+    Ast::Type* rhsT = e->rhs ? deref(e->rhs->type()) : deref(0);
+
+    if( lhsT->isIntegerOrByte() && rhsT->isIntegerOrByte() )
+    {
+        if( e->kind == Expression::Fdiv )
+            e->setType(mdl->getType(Ast::Type::REAL));
+        else
+            e->setType(includingType(lhsT,rhsT));
+    }else if( lhsT->isNumberOrByte() && rhsT->isNumberOrByte() )
+    {
+        if( e->kind == Expression::Mod || e->kind == Expression::Div )
+            error(e->pos, "incompatible operands for DIV or MOD operator");
+        e->setType(includingType(lhsT,rhsT));
+    }else if( lhsT->isSet() && rhsT->isSet() )
+    {
+        switch(e->kind)
+        {
+        case Expression::Add:
+        case Expression::Sub:
+        case Expression::Mul:
+        case Expression::Fdiv:
+            break;
+        default:
+            error(e->pos, "incompatible operands for SET operators");
+            break;
+        }
+
+        e->setType(lhsT);
+    }else
+    {
+        error(e->pos, QString("incompatible operands (%1, %2) for arithmetic operators")
+              .arg(Type::name[lhsT->kind]).arg(Type::name[rhsT->kind]));
+        Expr(e->lhs); // TEST
+        Expr(e->rhs);
+        e->setType(mdl->getType(Type::NoType));
+    }
+    return true;
 }
 
 bool Validator2::logicOp(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
     Expr(e->lhs);
     Expr(e->rhs);
-    // TODO
+    Ast::Type* lhsT = e->lhs ? deref(e->lhs->type()) : deref(0);
+    Ast::Type* rhsT = e->rhs ? deref(e->rhs->type()) : deref(0);
+    if( (lhsT->kind != Ast::Type::BOOLEAN) || (rhsT->kind != Ast::Type::BOOLEAN) )
+        return error(e->pos, "expecing boolean operators");
+
     e->setType(mdl->getType(Type::BOOLEAN));
-    return false;
+    return true;
 }
 
 bool Validator2::declRef(Ast::Expression *e)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    // TODO
+    Declaration* d = e->val.value<Declaration*>();
+    if( d )
+    {
+        if( !d->validated )
+            decl(d);
+        e->setType(d->type());
+        return true;
+    }
+    e->setType(mdl->getType(Type::NoType));
     return false;
 }
 
@@ -939,8 +1188,6 @@ bool Validator2::call(Ast::Expression *e)
 
 bool Validator2::literal(Ast::Expression *e)
 {
-    if( e == 0 )
-        return false;
     // TODO
     return true;
 }
@@ -950,17 +1197,32 @@ bool Validator2::constructor(Ast::Expression *e)
     if( e == 0 )
         return false;
 
-    e->setType(mdl->getType(Type::SET));
     Expression* comp = e->rhs;
     while( comp )
     {
         if( comp->kind == Expression::Constructor )
             return error(comp->pos,"component type not supported for SET constructors");
         Expr(comp);
-        if( comp->type() && !deref(comp->type())->isInteger() )
+        if( comp->type() && !deref(comp->type())->isIntegerOrByte() )
             return error(comp->pos,"expecting integer compontents for SET constructors");
         comp = comp->next;
     }
+    e->setType(mdl->getType(Type::SET));
+    return true;
+}
+
+bool Validator2::range(Ast::Expression *e)
+{
+    if( e->lhs == 0 || e->rhs == 0 )
+        return false;
+    Expr(e->lhs);
+    Expr(e->rhs);
+    if( isConstChar(e->lhs) && isConstChar(e->rhs) )
+        e->setType(mdl->getType(Type::CHAR));
+    else if( deref(e->lhs->type())->isInteger() && deref(e->rhs->type())->isInteger() )
+        e->setType(includingType(deref(e->lhs->type()), deref(e->rhs->type())));
+    else
+        return error(e->pos, "invalid range");
     return true;
 }
 
@@ -996,6 +1258,11 @@ bool Validator2::nameRef(Ast::Expression * nameRef)
 
     nameRef->kind = Expression::DeclRef;
     nameRef->val = QVariant::fromValue(r.second);
+
+    if( !r.second->validated && r.second->kind == Declaration::ConstDecl )
+        decl(r.second); // AosTV does use ConstDecls in expressions before they were visited
+    // TODO: maybe we should conduct a separate initial run to just import and resolve NameRefs.
+
     nameRef->setType(r.second->type());
 
     if( r.second->kind == Declaration::LocalDecl || r.second->kind == Declaration::ParamDecl )
@@ -1057,6 +1324,60 @@ void Validator2::bindProc(Ast::Type* object, Ast::Declaration * proc)
                 subs[super].append(proc);
         }
     }
+}
+
+bool Validator2::decl(Ast::Declaration * d)
+{
+    if( d->validated )
+        return true;
+    markDecl(d);
+    d->validated = true;
+    switch( d->kind )
+    {
+    case Ast::Declaration::ConstDecl:
+        ConstDecl(d);
+        break;
+    case Ast::Declaration::TypeDecl:
+        TypeDecl(d);
+        break;
+    case Ast::Declaration::VarDecl:
+    case Ast::Declaration::LocalDecl:
+        VarDecl(d);
+        break;
+    case Ast::Declaration::Procedure:
+        ProcDecl(d);
+        break;
+    default:
+        Q_ASSERT(false);
+    }
+    return true;
+}
+
+bool Validator2::assigCompat(Ast::Type *lhs, Ast::Type *rhs)
+{
+    return true; // TODO
+}
+
+Type *Validator2::includingType(Ast::Type * lhs, Ast::Type * rhs)
+{
+    Q_ASSERT( lhs && rhs );
+    if( !lhs->isNumber() || !rhs->isNumber() )
+        return mdl->getType(Ast::Type::NoType);
+    if( lhs->kind == rhs->kind == Type::BYTE )
+        return mdl->getType(Type::SHORTINT);
+    if( lhs->kind >= rhs->kind )
+        return lhs;
+    else
+        return rhs;
+}
+
+bool Validator2::lhsIncludeRhs(Ast::Type *lhs, Ast::Type *rhs)
+{
+    Q_ASSERT( lhs && rhs );
+    if( !lhs->isNumber() || !rhs->isNumber() )
+        return false;
+    // LONGREAL ⊇ REAL ⊇ HUGEINT ⊇ LONGINT ⊇ INTEGER ⊇ SHORTINT
+    return lhs->kind >= rhs->kind;
 }
 
 Xref Validator2::takeXref()
@@ -1240,12 +1561,6 @@ Declaration *Validator2::findInType(Ast::Type * t, const QByteArray &field)
 {
     if( t == 0 )
         return 0;
-#if 0
-    Type* base = deref(t->base);
-    while( base && base->base && base->base->kind == Type::NameRef && !base->base->validated )
-        base = deref(base->base);
-    return t->find(field);
-#else
     Declaration* res = t->find(field, false);
     QList<Ast::Type*> done;
     while( res == 0 && (t->kind == Type::Record || t->kind == Type::Object) && t->type() )
@@ -1260,6 +1575,5 @@ Declaration *Validator2::findInType(Ast::Type * t, const QByteArray &field)
         done.append(t);
     }
     return res;
-#endif
 }
 
