@@ -249,9 +249,25 @@ bool Validator2::ArrayType(Ast::Type* t) {
 
 bool Validator2::RecordType(Ast::Type* t) {
     // SysFlag();
-    if( t->type() )
-        Type_(t->type());  // optional base class
-    // TODO check base is record or pointer to record
+    if( t->type() && Type_(t->type()) ) // optional base class
+    {
+        Type* base = deref(t->type());
+        if( base->kind == Type::Object )
+        {
+            // ok?
+            // happens indeed four time in bluebottle:
+            // Apps/PCBT.Mod:114:23
+            // Apps/PCT.Mod:412:22
+            // Apps/PCT.Mod:417:25
+            // Apps/PCT.Mod:441:21
+        }else
+        {
+            if( base->kind == Type::Pointer )
+                base = deref(base->type());
+            if( base->kind != Type::Record )
+                error(t->pos, "invalid base record type");
+        }
+    }
     return FieldList(t);
 }
 
@@ -274,9 +290,30 @@ bool Validator2::ObjectType(Ast::Type* t) {
         // resolve base objects if present
         resolveIfNamedType(t->type(), t->pos);
     }
-    if( t->type() )
-        Type_(t->type());  // optional base class
-    // TODO check base is object
+    if( t->type() && Type_(t->type()) ) // optional base class
+    {
+        Type* base = deref(t->type());
+        if( base->kind == Type::Pointer )
+        {
+            base = deref(base->type());
+            if( base->kind != Type::Record )
+                error(t->pos, "invalid base object type");
+                /*
+                indeed happens in bluebottle:
+                Sys/AosActive.Mod:186:2
+                Apps/WMGraphics.Mod:27:2
+                Apps/PCBT.Mod:62:2
+                Apps/PCBT.Mod:86:2
+                Apps/PCBT.Mod:118:2
+                Apps/PCLIR.Mod:246:2
+                Apps/PCB.Mod:78:2
+                Apps/PCOM.Mod:165:2
+                Apps/PCOM.Mod:182:2
+                Apps/PCGARM.Mod:55:2
+                */
+        }else if( base->kind != Type::Object )
+            error(t->pos, "invalid base object type");
+    }
 
     QList<Ast::Declaration*> boundProcs;
     foreach( Ast::Declaration* member, t->subs )
@@ -373,14 +410,14 @@ bool Validator2::Type_(Ast::Type* t) {
         if( t->type() )
         {
             if( t->decl == 0 )
-                return error(t->pos, "try to register anonymous base object/record type TODO");
+                return error(t->pos, "cannot use anonymous base object/record type TODO");
             Ast::Type* baseType = t->type();
             Q_ASSERT( baseType->kind == Type::NameRef );
             if( !baseType->validated || baseType->type() == 0 )
                 return error(t->pos, "base type not yet validated TODO");
             Declaration* super = baseType->type()->deref()->decl;
             if( super == 0 )
-                return error(t->pos, "try to reference anonymous base object/record type TODO");
+                return error(t->pos, "referencing anonymous base object/record type TODO");
             super->hasSubs = true;
             t->decl->super = super;
             if( first )
@@ -428,9 +465,18 @@ void Validator2::StatSeq(Ast::Statement*s) {
 
 void Validator2::assig(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Assig);
-    // TODO check assig compat
+
     Expr(s->lhs);
     Expr(s->rhs);
+
+    if( s->lhs == 0 || s->rhs == 0 )
+        return; // already reported
+
+    if( !s->lhs->isLvalue() )
+        error(s->pos, "cannot assign to lhs (not an lvalue)");
+
+    if( !assigCompat(s->lhs->type(), s->rhs) )
+        error(s->pos, "rhs is not assignment compatible with lhs");
 }
 
 Ast::Statement *Validator2::IfStat(Ast::Statement *s) {
@@ -455,7 +501,6 @@ Ast::Statement *Validator2::IfStat(Ast::Statement *s) {
 
 Ast::Statement *Validator2::CaseStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Case);
-    // TODO
 
     Expr(s->rhs); // case
     Type* te = s->rhs ? deref(s->rhs->type()) : deref(0);
@@ -763,11 +808,18 @@ bool Validator2::relation(Ast::Expression *e)
         return false;
     Expr(e->lhs);
     Expr(e->rhs);
-    Ast::Type* lhsT = e->lhs ? deref(e->lhs->type()) : deref(0);
-    Ast::Type* rhsT = e->rhs ? deref(e->rhs->type()) : deref(0);
+
+    if( e->lhs == 0 || e->rhs == 0 )
+        return true; // already reported
+
+    Ast::Type* lhsT = deref(e->lhs->type());
+    Ast::Type* rhsT = deref(e->rhs->type());
 
     if( e->kind == Expression::Is )
     {
+        if( !e->lhs->isLvalue() )
+            error(e->pos, "lhs of IS relation must be an lvalue");
+
         if(lhsT->kind == Type::Object)
         {
             if( rhsT->kind == Type::Pointer )
@@ -793,18 +845,8 @@ bool Validator2::relation(Ast::Expression *e)
                 error(e->pos, "RECORD operands not related, so IS cannot be applied");
         }else if( lhsT->kind == Type::Record )
         {
-#if 0
-            // lhs must be a VAR param to RECORD
-            Declaration* d = e->lhs->val.value<Declaration*>();
-            // NOTE: according to the report, "d->kind != Declaration::ParamDecl || !d->varParam" should apply, but Bluebottle
-            // also has local vars of record type as LHS of IS.
-            if( e->lhs->kind != Expression::DeclRef || d == 0 || !d->isLvalue() )
-                error(e->pos, "expecting a VAR parameter of RECORD type");
-#else
             if( !assigCompat(lhsT, rhsT) )
                 error(e->pos, "RECORD operands not related, so IS cannot be applied");
-
-#endif
         }
 #ifdef _SUPPORT_STRANGE_RELATIONS
         // TODO: ANY IS OBJECT kommt vor!
@@ -1091,7 +1133,7 @@ bool Validator2::cast(Ast::Expression *e)
 {
     if( e == 0 )
         return false;
-    // TODO
+    // NOTE: this is not yet generated by parser
     Expr(e->lhs);
     return false;
 }
@@ -1188,7 +1230,6 @@ bool Validator2::call(Ast::Expression *e)
 
 bool Validator2::literal(Ast::Expression *e)
 {
-    // TODO
     return true;
 }
 
@@ -1358,6 +1399,11 @@ bool Validator2::assigCompat(Ast::Type *lhs, Ast::Type *rhs)
     return true; // TODO
 }
 
+bool Validator2::assigCompat(Ast::Type *lhs, Ast::Expression *rhs)
+{
+    return true; // TODO
+}
+
 Type *Validator2::includingType(Ast::Type * lhs, Ast::Type * rhs)
 {
     Q_ASSERT( lhs && rhs );
@@ -1454,11 +1500,11 @@ Type *Validator2::deref(Ast::Type *t)
             // This is necessary because declarations can follow their use, but all so far unvalidated NameRefs
             // must be local, assuming that all NameRefs in imported modules must already have been validated at
             // this point.
-#ifdef _DEBUG_ // TODO
-            Qualident q = t->quali;
-            if( q.first && q.first.constData() != module->name.constData() )
+#if 0
+            Quali q = *t->quali;
+            if( !q.first.isEmpty() && q.first.constData() != module->name.constData() )
                 qWarning() << "Validator::deref: unvalidated quali" << q.first << "." << q.second << "in"
-                           << module->name;
+                           << module->name; // happens 21 times in bluebottle
 #endif
             resolveIfNamedType(t, t->pos);
         }

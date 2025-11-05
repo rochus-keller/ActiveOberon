@@ -94,6 +94,7 @@ namespace Ao {
         void bindProc(Ast::Type *object, Ast::Declaration*);
         bool decl(Ast::Declaration*);
         bool assigCompat(Ast::Type* lhs, Ast::Type* rhs);
+        bool assigCompat(Ast::Type* lhs, Ast::Expression* rhs);
         bool isPtrOrVarWithRecordObject(Ast::Expression* e);
 
 	protected:
