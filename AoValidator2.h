@@ -112,6 +112,9 @@ namespace Ao {
         bool checkBuiltinArgs(quint8 builtin, const Ast::ExpList& args, Ast::Type** ret, const RowCol& pos);
         Ast::Type* includingType(Ast::Type*,Ast::Type*);
         bool lhsIncludeRhs(Ast::Type* lhs, Ast::Type* rhs);
+        bool lhsIsBaseOfRhs(Ast::Type* lhs, Ast::Type* rhs);
+        bool paramListsMatch( const Ast::DeclList&, Ast::Type*, const Ast::DeclList&, Ast::Type*);
+        bool equals(Ast::Type*, Ast::Type*);
 
     private:
         Ast::Declaration* module;

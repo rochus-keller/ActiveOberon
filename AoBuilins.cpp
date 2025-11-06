@@ -130,9 +130,49 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
         *ret = mdl->getType(Type::LONGINT);
         break;
     case Builtin::SHORT:
+        if( !expectingNArgs(args,1) )
+            break;
+        switch(deref(args[0]->type())->kind)
+        {
+        case Type::HUGEINT:
+            *ret = mdl->getType(Type::LONGINT);
+            break;
+        case Type::LONGINT:
+            *ret = mdl->getType(Type::INTEGER);
+            break;
+        case Type::INTEGER:
+            *ret = mdl->getType(Type::SHORTINT);
+            break;
+        case Type::LONGREAL:
+            *ret = mdl->getType(Type::REAL);
+            break;
+        default:
+            *ret = args[0]->type();
+            break;
+        }
+        break;
     case Builtin::LONG:
-        expectingNArgs(args,1);
-        *ret = args[0]->type(); // TODO
+        if( !expectingNArgs(args,1) )
+            break;
+        switch(deref(args[0]->type())->kind)
+        {
+        case Type::LONGINT:
+            *ret = mdl->getType(Type::HUGEINT);
+            break;
+        case Type::INTEGER:
+            *ret = mdl->getType(Type::LONGINT);
+            break;
+        case Type::SHORTINT:
+        case Type::CHAR: // CHAR is equivalent to BYTE
+            *ret = mdl->getType(Type::INTEGER);
+            break;
+        case Type::REAL:
+            *ret = mdl->getType(Type::LONGREAL);
+            break;
+        default:
+            *ret = args[0]->type();
+            break;
+        }
         break;
     case Builtin::SIZE:
         expectingNArgs(args,1);

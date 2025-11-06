@@ -42,6 +42,7 @@ const char* Type::name[] = {
     "SET",
     "PTR",
     "ANY",
+    "OBJECT" // any object
 };
 
 const char* Builtin::name[] = {
@@ -86,6 +87,7 @@ AstModel::AstModel()
         types[Type::SET] = addType("SET", Type::SET, 4 );
         types[Type::PTR] = addType("PTR", Type::PTR, 4 );
         types[Type::ANY] = addType("ANY", Type::ANY, 4 );
+        types[Type::ANYOBJ] = addType("OBJECT", Type::ANY, 4 );
 
         addTypeAlias("INT", types[Type::INTEGER] );
 

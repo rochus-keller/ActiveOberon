@@ -24,6 +24,9 @@
 using namespace Ao;
 using namespace Ast;
 
+// TODO
+// check visibility/accessibility
+
 #define _ALLOW_POINTER_BASE_TYPE
 #define _ALLOW_RETURN_STRUCTURED_TYPES
 // #define _SUPPORT_STRANGE_RELATIONS
@@ -400,6 +403,8 @@ bool Validator2::Type_(Ast::Type* t) {
         res = ObjectType(t);
         break;
     case Ast::Type::NoType:
+    case Ast::Type::ANYOBJ:
+    case Ast::Type::ANY:
         return true;
     default:
         invalid("Type", t->pos);
@@ -476,7 +481,10 @@ void Validator2::assig(Ast::Statement* s) {
         error(s->pos, "cannot assign to lhs (not an lvalue)");
 
     if( !assigCompat(s->lhs->type(), s->rhs) )
+    {
+        assigCompat(s->lhs->type(), s->rhs);
         error(s->pos, "rhs is not assignment compatible with lhs");
+    }
 }
 
 Ast::Statement *Validator2::IfStat(Ast::Statement *s) {
@@ -515,8 +523,12 @@ Ast::Statement *Validator2::CaseStat(Ast::Statement *s) {
         while( label )
         {
             ConstExpr(label);
+#if 1
+            if( !assigCompat(te, label) )
+#else
             Type* tl = deref(label->type());
             if( (te->kind == Type::CHAR && !isConstChar(label)) || (te->kind != Type::CHAR && !tl->isInteger()) )
+#endif
                 error(label->pos, "label not compatible with case expression type");
             label = label->next;
         }
@@ -561,12 +573,12 @@ Ast::Statement *Validator2::ForStat(Ast::Statement *s) {
     {
         s = s->getNext();
         Expr(s->lhs); // to
-        if( cv && s->lhs && !assigCompat(cv->type(), s->lhs->type()) )
+        if( cv && s->lhs && !assigCompat(cv->type(), s->lhs) )
             error(s->lhs->pos, "expression not compatible with control variable");
         if( s->rhs )
         {
             ConstExpr(s->rhs); // by
-            if( cv && !assigCompat(cv->type(), s->rhs->type()) )
+            if( cv && !assigCompat(cv->type(), s->rhs) )
                 error(s->rhs->pos, "expression not compatible with control variable");
         }
     }else
@@ -652,7 +664,7 @@ void Validator2::ReturnStat(Ast::Statement* s) {
             error(s->pos, "RETURN expression in a proper procedure");
         else
         {
-            if( Expr(s->rhs) && !assigCompat(proc->type(), s->rhs->type()) )
+            if( Expr(s->rhs) && !assigCompat(proc->type(), s->rhs) )
                 error( s->rhs->pos, "incompatible return expression");
         }
     }else if( isFunction )
@@ -1396,12 +1408,62 @@ bool Validator2::decl(Ast::Declaration * d)
 
 bool Validator2::assigCompat(Ast::Type *lhs, Ast::Type *rhs)
 {
-    return true; // TODO
+    if( lhs == 0 || rhs == 0 )
+        return true; // already reported
+    lhs = deref(lhs);
+    rhs = deref(rhs);
+
+    if( lhs == rhs )
+        return true;
+    if(lhs->isNumber() && rhs->isNumber() )
+        return lhsIncludeRhs(lhs, rhs);
+    if( lhs->kind == Type::BYTE && (rhs->kind == Type::CHAR || rhs->kind == Type::SHORTINT) )
+        return true;
+    if(lhs->kind == Type::Pointer && rhs->kind == Type::Pointer )
+        return assigCompat(lhs->type(), rhs->type());
+    if( (lhs->kind == Type::Object && rhs->kind == Type::Object) ||
+        (lhs->kind == Type::Record && rhs->kind == Type::Record) )
+        return lhsIsBaseOfRhs(lhs, rhs);
+    if( lhs->kind == Type::ANYOBJ && rhs->kind == Type::Object )
+        return true;
+    if( (lhs->kind == Type::Pointer || lhs->kind == Type::Object || lhs->kind == Type::ANYOBJ ||
+         lhs->kind == Type::PTR || lhs->kind == Type::Procedure)
+            && rhs->kind == Type::NIL )
+        return true;
+    return true;
 }
 
-bool Validator2::assigCompat(Ast::Type *lhs, Ast::Expression *rhs)
+bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
 {
-    return true; // TODO
+    if( lhsT == 0 || rhs == 0 )
+        return true; // already reported
+
+    lhsT = deref(lhsT);
+    Type* rhsT = deref(rhs->type());
+
+    if( /*rhs->isConst() && */ lhsT->isNumber() && rhsT->isNumber() )
+        return true; // NOTE: joker added because we don't do const eval here so that e.g. OPM.Mod:169 is INTEGER instead of SHORTINT,
+                     // or, there are LONGREAL consts assigned to REAL, e.g. JPEG.Mod:1559
+                     // there are LONGREAL consts used in arith exprs and assigned to REAL, e.g. JPEG.Mod:2027, same for integers
+
+    if( lhsT->kind == Type::Array && lhsT->expr != 0 && deref(lhsT->type())->kind == Type::CHAR && rhsT->kind == Type::StrLit )
+        return true; // TODO: check m < n for ARRAY n OF CHAR and string constant with m characters
+
+    if( lhsT->kind == Type::Procedure && rhs->kind == Expression::DeclRef )
+    {
+        Declaration* d = rhs->val.value<Declaration*>();
+        if( d && d->kind == Declaration::Procedure )
+        {
+            if( d->outer && d->outer->kind == Declaration::Procedure )
+            {
+                error(rhs->pos, "cannot take address of nested procedures");
+                return false;
+            }
+            return paramListsMatch(lhsT->subs, lhsT->type(), d->getParams(true), d->type());
+        } // else: lhs could be a variable of proc type
+    }
+
+    return assigCompat(lhsT, rhsT);
 }
 
 Type *Validator2::includingType(Ast::Type * lhs, Ast::Type * rhs)
@@ -1424,6 +1486,56 @@ bool Validator2::lhsIncludeRhs(Ast::Type *lhs, Ast::Type *rhs)
         return false;
     // LONGREAL ⊇ REAL ⊇ HUGEINT ⊇ LONGINT ⊇ INTEGER ⊇ SHORTINT
     return lhs->kind >= rhs->kind;
+}
+
+bool Validator2::lhsIsBaseOfRhs(Ast::Type *lhs, Ast::Type *rhs)
+{
+    if( lhs == 0 || rhs == 0 )
+        return false;
+    lhs = deref(lhs);
+    if( lhs->kind == Type::Pointer )
+        lhs = deref(lhs->type());
+    if( lhs->kind != Type::Object && lhs->kind != Type::Record )
+        return false;
+    rhs = deref(rhs);
+    while( rhs->kind != Type::NoType )
+    {
+        if( rhs->kind == Type::Pointer )
+            rhs = deref(rhs->type());
+        if( rhs == lhs )
+            return true;
+        rhs = deref(rhs->type());
+    }
+    return false;
+}
+
+bool Validator2::paramListsMatch(const Ast::DeclList & lhs, Ast::Type * lt, const Ast::DeclList & rhs, Ast::Type * rt)
+{
+    if( lhs.size() != rhs.size() )
+        return false;
+    for(int i = 0; i < lhs.size(); i++ )
+    {
+        Declaration* l = lhs[i];
+        Declaration* r = rhs[i];
+        if( l->varParam != r->varParam )
+            return false;
+        if( !equals(l->type(), r->type()) )
+            return false;
+    }
+    return equals(lt, rt);
+}
+
+bool Validator2::equals(Ast::Type * lhs, Ast::Type * rhs)
+{
+    lhs = deref(lhs);
+    rhs = deref(rhs);
+    if( lhs == rhs )
+        return true;
+    if( lhs->kind == Type::Array && lhs->expr == 0 && rhs->kind == Type::Array && rhs->expr == 0 )
+        return equals( lhs->type(), rhs->type() );
+    if( lhs->kind == Type::Procedure && rhs->kind == Type::Procedure )
+        return paramListsMatch(lhs->subs, lhs->type(), rhs->subs, rhs->type() );
+    return false;
 }
 
 Xref Validator2::takeXref()

@@ -134,6 +134,7 @@ namespace Ast
             SET,        // 4 bytes
             PTR,
             ANY,
+            ANYOBJ,
             MaxBasicType,
             Pointer,
             Procedure,

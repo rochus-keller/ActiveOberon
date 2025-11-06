@@ -863,11 +863,12 @@ Type* Parser2::PointerType() {
 
 Type* Parser2::ObjectType() {
 	expect(Tok_OBJECT, false, "ObjectType");
-    Type* obj = new Type();
-    obj->pos = cur.toRowCol();
-    obj->kind = Type::Object;
+    const Token pos = cur;
     if( FIRST_SysFlag(la.d_type) || la.d_type == Tok_Lpar || FIRST_DeclSeq(la.d_type) || FIRST_Body(la.d_type) || la.d_type == Tok_END ) {
-		if( FIRST_SysFlag(la.d_type) ) {
+        Type* obj = new Type();
+        obj->pos = pos.toRowCol();
+        obj->kind = Type::Object;
+        if( FIRST_SysFlag(la.d_type) ) {
             SysFlag(); // ignored
 		}
         mdl->openScope(0);
@@ -893,8 +894,9 @@ Type* Parser2::ObjectType() {
 		if( la.d_type == Tok_ident ) {
 			expect(Tok_ident, false, "ObjectType");
 		}
-	}
-    return obj;
+        return obj;
+    }else
+        return mdl->getType(Type::ANYOBJ);
 }
 
 Type* Parser2::ProcedureType() {
