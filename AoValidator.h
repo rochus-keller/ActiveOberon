@@ -24,6 +24,7 @@
 
 namespace Ao
 {
+    // NOTE: obsolete, replaced by Validator2
     class Validator
     {
     public:

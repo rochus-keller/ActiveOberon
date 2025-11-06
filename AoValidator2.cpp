@@ -931,6 +931,9 @@ bool Validator2::unaryOp(Ast::Expression *e)
 
     Expr(e->lhs);
 
+    if( e->lhs == 0 )
+        return true; // already reported
+
     if( e->lhs->type() == 0 )
         return true; // already reported
 
@@ -939,19 +942,23 @@ bool Validator2::unaryOp(Ast::Expression *e)
     {
         if( !lhsT->isNumber() )
             return error(e->pos, "unary operator not applicable to this type");
+        e->setType(lhsT);
     }else if( e->kind == Expression::Minus )
     {
-        if( !lhsT->isNumber() && !lhsT->isSet() )
+        if( lhsT->isNumber() || lhsT->isSet() )
+            e->setType(lhsT);
+        else if( lhsT->kind == Type::PTR )
+            e->setType(mdl->getType(Type::LONGINT)); // happens once in AosActive.Mod:1052
+        else
             return error(e->pos, "unary operator not applicable to this type");
     }else if( e->kind == Expression::Not )
     {
         if( !lhsT->isBoolean()  )
             return error(e->pos, "unary '~' or 'NOT' not applicable to this type");
-    }
-    if( e->lhs == 0 )
-        return true; // already reported
-    e->setType(lhsT);
-    return false;
+        e->setType(lhsT);
+    }else
+        Q_ASSERT(false);
+    return true;
 }
 
 bool Validator2::arithOp(Ast::Expression *e)
@@ -975,6 +982,22 @@ bool Validator2::arithOp(Ast::Expression *e)
         if( e->kind == Expression::Mod || e->kind == Expression::Div )
             error(e->pos, "incompatible operands for DIV or MOD operator");
         e->setType(includingType(lhsT,rhsT));
+    }else if( (lhsT->isIntegerOrByte() && rhsT->kind == Type::PTR) ||
+              (lhsT->kind == Type::PTR && rhsT->isIntegerOrByte()) )
+    {
+        // explicit pointer arithmetics
+        if( e->kind == Expression::Add || e->kind == Expression::Sub )
+            e->setType(mdl->getType(Type::PTR));
+        else if( lhsT->kind == Type::PTR && (e->kind == Expression::Div || e->kind == Expression::Mod) )
+            e->setType(mdl->getType(Type::LONGINT));
+        else
+            error(e->pos, "operation not supported in pointer arithmetics");
+    }else if( lhsT->kind == Type::PTR && rhsT->kind == Type::PTR )
+    {
+        // explicit pointer difference
+        if( e->kind != Expression::Sub )
+            error(e->pos, "only pointer difference is supported");
+        e->setType(mdl->getType(Type::LONGINT));
     }else if( lhsT->isSet() && rhsT->isSet() )
     {
         switch(e->kind)
@@ -994,8 +1017,6 @@ bool Validator2::arithOp(Ast::Expression *e)
     {
         error(e->pos, QString("incompatible operands (%1, %2) for arithmetic operators")
               .arg(Type::name[lhsT->kind]).arg(Type::name[rhsT->kind]));
-        Expr(e->lhs); // TEST
-        Expr(e->rhs);
         e->setType(mdl->getType(Type::NoType));
     }
     return true;

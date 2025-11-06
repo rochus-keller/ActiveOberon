@@ -184,7 +184,7 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
 
     case Builtin::SYSTEM_ADR:
         expectingNArgs(args,1);
-        *ret = mdl->getType(Type::LONGINT);
+        *ret = mdl->getType(Type::PTR);
         // TODO: should be PTR, but there is a lot of code storing the result of ADR in LONGINT vars
         // and doing arithmetic operations assuming LONGINT
         break;

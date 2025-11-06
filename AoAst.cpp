@@ -703,10 +703,8 @@ bool Expression::isLvalue() const
         Declaration* d = val.value<Declaration*>();
         Q_ASSERT(d);
         return d->kind == Declaration::LocalDecl || d->kind == Declaration::VarDecl || d->kind == Declaration::ParamDecl || d->kind == Declaration::Field;
-    }else if( kind == Deref && lhs )
-        return lhs->isLvalue();
-    else
-        return kind == Select || kind == Index;
+    }else
+        return kind == Select || kind == Index || kind == Deref;
 }
 
 void Expression::setByVal()
