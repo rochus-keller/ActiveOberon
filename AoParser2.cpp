@@ -1602,7 +1602,8 @@ void Parser2::deanonymizeType(Ast::Declaration * d)
 {
     if( d->type() && d->type()->decl == 0 )
     {
-        d->type()->pos = d->pos;
+        if( !d->type()->pos.isValid() )
+            d->type()->pos = d->pos;
         d->type()->decl = d;
         d->type()->anonymous = false;
         if( d->type()->kind == Type::Pointer && d->type()->type() && d->type()->type()->decl == 0 )

@@ -42,6 +42,27 @@ static inline bool expectingNMArgs(const ExpList& args,int n, int m)
     return true;
 }
 
+static inline bool expectingPtr(Expression* e, quint8 which)
+{
+    static const char* names[] = { "", "first", "second", "third", "fourth", "fifth" };
+    if( e == 0 )
+        return true;
+    bool res = true;
+    if( e->type() )
+    {
+        Type* t = e->type();
+        if( t )
+            t = t->deref();
+        res = t && (t->kind == Type::PTR
+                    || t->isInteger()  // should be replaced by PTR
+                    || t->kind == Type::Pointer // also happens one time in the Oberon System 2001-10-11
+                    );
+        if( !res )
+            throw QString("expecting SYSTEM.PTR type %1 argument").arg(names[which]);
+    }
+    return res;
+}
+
 bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const RowCol& pos)
 {
     // NOTE: args are already visited at this point
@@ -207,35 +228,67 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
         *ret = mdl->getType(Type::LONGINT);
         break;
     case Builtin::SYSTEM_GET8:
-        expectingNArgs(args,1);
+        if( !expectingNArgs(args,1) )
+            break;
+        expectingPtr(args[0], 1);
         *ret = mdl->getType(Type::SHORTINT);
         break;
     case Builtin::SYSTEM_GET16:
-        expectingNArgs(args,1);
+        if( !expectingNArgs(args,1) )
+            break;
+        expectingPtr(args[0], 1);
         *ret = mdl->getType(Type::INTEGER);
         break;
     case Builtin::SYSTEM_GET32:
-        expectingNArgs(args,1);
+        if( !expectingNArgs(args,1) )
+            break;
+        expectingPtr(args[0], 1);
         *ret = mdl->getType(Type::LONGINT);
         break;
     case Builtin::SYSTEM_GET64:
-        expectingNArgs(args,1);
+        if( !expectingNArgs(args,1) )
+            break;
+        expectingPtr(args[0], 1);
         *ret = mdl->getType(Type::HUGEINT);
         break;
 
-        // system procs
     case Builtin::SYSTEM_GET:
+        if( !expectingNArgs(args,2) )
+            break;
+        expectingPtr(args[0], 1);
+        break;
+
     case Builtin::SYSTEM_PUT:
-    case Builtin::SYSTEM_MOVE:
-    case Builtin::SYSTEM_NEW:
-    case Builtin::SYSTEM_PORTOUT:
-    case Builtin::SYSTEM_PORTIN:
-    case Builtin::SYSTEM_CLI:
-    case Builtin::SYSTEM_STI:
     case Builtin::SYSTEM_PUT8:
     case Builtin::SYSTEM_PUT16:
     case Builtin::SYSTEM_PUT32:
     case Builtin::SYSTEM_PUT64:
+        if( !expectingNArgs(args,2) )
+            break;
+        expectingPtr(args[0], 1);
+        break;
+
+    case Builtin::SYSTEM_MOVE:
+        if( !expectingNArgs(args,3) )
+            break;
+        expectingPtr(args[0], 1);
+        expectingPtr(args[1], 2);
+        break;
+
+    case Builtin::SYSTEM_NEW:
+        if( args.isEmpty() )
+            throw "expecting at least one argument";
+        if( deref(args[0]->type())->kind != Type::Pointer
+                && deref(args[0]->type())->kind != Type::PTR // this one only happens once in Bluebootle, not in Oberon System
+                )
+            throw "first argument must be a pointer";
+        break;
+
+        // system procs
+    case Builtin::SYSTEM_PORTOUT:
+    case Builtin::SYSTEM_PORTIN:
+    case Builtin::SYSTEM_CLI:
+    case Builtin::SYSTEM_STI:
     case Builtin::SYSTEM_GETREG:
     case Builtin::SYSTEM_PUTREG:
     case Builtin::SYSTEM_ENABLEINTERRUPTS:

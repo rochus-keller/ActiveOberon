@@ -1655,7 +1655,7 @@ void Validator2::resolveIfNamedType(Ast::Type *nameRef, const RowCol& where)
     Q_ASSERT(nameRef->quali);
     Q_ASSERT(nameRef->expr == 0);
     Qualident q = *nameRef->quali;
-    ResolvedQ r = find(q, where);
+    ResolvedQ r = find(q, nameRef->pos);
     if(r.second == 0)
         return;
     RowCol pos = nameRef->pos;
