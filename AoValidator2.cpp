@@ -20,6 +20,7 @@
 #include "AoValidator2.h"
 #include "AoToken.h"
 #include "AoBuilins.h"
+#include "AoAsmToIntelXpiler.h"
 #include <QtDebug>
 using namespace Ao;
 using namespace Ast;
@@ -208,6 +209,15 @@ void Validator2::VarDecl(Ast::Declaration* d) {
 void Validator2::Assembler(Ast::Declaration* proc) {
     //expect(Tok_CODE, false, "Assembler");
     // TODO
+    // qDebug() << module->name << proc->pos.d_row << proc->name << proc->data.toByteArray().mid(5);
+#if 0
+    // TEST
+    QString err;
+    TranspileOptions opt;
+    qDebug() << module->name << proc->pos.d_row << proc->name << AsmToIntelXpiler::transform(proc->data.toString().mid(5), opt, &err);
+    if( !err.isEmpty() )
+        qCritical() << "### error" << err;
+#endif
 }
 
 void Validator2::ProcDecl(Ast::Declaration * proc) {
@@ -1324,7 +1334,9 @@ bool Validator2::nameRef(Ast::Expression * nameRef)
     {
         markRef(r.first, pos);
         pos.d_col += q.first.size() + 1;
-    }
+    }else
+        nameRef->forward = true;
+
     Symbol* s = markRef(r.second, pos);
     if( nameRef->needsLval )
         s->kind = Symbol::Lval;
@@ -1663,7 +1675,8 @@ void Validator2::resolveIfNamedType(Ast::Type *nameRef, const RowCol& where)
     {
         markRef(r.first, pos);
         pos.d_col += q.first.size() + 1;
-    }
+    }else
+        nameRef->forward = true;
     markRef(r.second, pos);
     nameRef->validated = true;
     nameRef->setType(r.second->type());
