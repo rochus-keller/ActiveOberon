@@ -93,6 +93,7 @@ namespace Ao
         bool removeFile( const QString& filePath );
 
         bool parse();
+        bool generateC(const QString& outDir);
 
         const FileHash& getFiles() const { return d_files; }
         File* findFile( const QString& file ) const;

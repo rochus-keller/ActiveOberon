@@ -96,6 +96,7 @@ protected slots:
     void onHierDblClicked(QTreeWidgetItem*,int);
     void onSymFocus();
     void onSymSearch();
+    void onExportC();
 
 private:
     class Viewer;

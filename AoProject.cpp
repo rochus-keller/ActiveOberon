@@ -24,6 +24,7 @@
 #include "AoLexer.h"
 #include "AoClosureLifter.h"
 #include "AoValidator2.h"
+#include <AoCeeGen.h>
 #include <QBuffer>
 #include <QDir>
 #include <QtDebug>
@@ -708,6 +709,38 @@ bool Project::parse()
 
     emit sigReparsed();
     return all == ok;
+}
+
+bool Project::generateC(const QString &outDir)
+{
+    QSet<Ast::Declaration*> used;
+    QDir dir(outDir);
+    // TODO: check if files can be created and written
+    foreach( const ModuleSlot& module, modules )
+    {
+        if( module.decl == 0 || !module.decl->validated )
+            continue;
+#if 0
+        Ast::Declaration* sub = module.decl->link;
+        while(sub)
+        {
+            if( sub->kind == Ast::Declaration::Import )
+            {
+                Ast::Declaration* imported = sub->imported;
+                used.insert(imported);
+            }
+            sub = sub->next;
+        }
+#endif
+        CeeGen cg;
+        QFile header( dir.absoluteFilePath(module.decl->name + ".h"));
+        header.open(QFile::WriteOnly);
+        QFile body( dir.absoluteFilePath(module.decl->name + ".c"));
+        body.open(QFile::WriteOnly);
+
+        cg.generate(module.decl, &header, &body);
+    }
+    return true;
 }
 
 bool Project::save()

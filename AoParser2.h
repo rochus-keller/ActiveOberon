@@ -124,6 +124,7 @@ namespace Ao {
         Ast::Type* smallestIntType(quint64 i);
         Ast::Expression* maybeQualident();
         void deanonymizeType(Ast::Declaration*);
+        void deanonymizeType(Ast::Declaration*, Ast::Type*);
 
 	protected:
         Ast::Declaration* thisMod;
@@ -131,6 +132,7 @@ namespace Ao {
         Token cur;
 		Token la;
 		Scanner2* scanner;
+        quint32 count;
 		void next();
 		Token peek(int off);
         void invalid(const char* what, bool eat = false);

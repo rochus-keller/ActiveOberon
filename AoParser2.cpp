@@ -431,6 +431,7 @@ Parser2::~Parser2()
 
 void Parser2::RunParser() {
 	errors.clear();
+    count = 0;
 	next();
 	Module();
 }
@@ -1606,8 +1607,35 @@ void Parser2::deanonymizeType(Ast::Declaration * d)
             d->type()->pos = d->pos;
         d->type()->decl = d;
         d->type()->anonymous = false;
+#if 1
+        deanonymizeType(d, d->type());
+#else
         if( d->type()->kind == Type::Pointer && d->type()->type() && d->type()->type()->decl == 0 )
             d->type()->type()->decl = d; // many types are declared as POINTER TO RECORD .. END
+#endif
+    }
+}
+
+void Parser2::deanonymizeType(Ast::Declaration * d, Ast::Type * t)
+{
+    if( t && t->anonymous && t->decl == 0 )
+    {
+        Declaration* helper = new Declaration();
+        helper->name = "_$" + QByteArray::number(count++);
+        helper->kind = Declaration::TypeDecl;
+        helper->pos = t->pos;
+        t->decl = helper;
+        Declaration* tmp = d->helper;
+        d->helper = helper;
+        d->helper->next = tmp;
+    }
+    if( t )
+    {
+        deanonymizeType(d, t->type() );
+        foreach( Declaration* sub, t->subs )
+        {
+            deanonymizeType(d, sub->type() );
+        }
     }
 }
 

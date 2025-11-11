@@ -16,6 +16,7 @@ QMAKE_CXXFLAGS += -Wno-reorder -Wno-unused-parameter -Wno-unused-function -Wno-u
 SOURCES += \
     AoAsmToIntelXpiler.cpp \
     AoBuilins.cpp \
+    AoCeeGen.cpp \
     AoRowCol.cpp \
     AoToken.cpp \
     AoLexer.cpp \
@@ -32,6 +33,7 @@ SOURCES += \
 HEADERS += \
     AoAsmToIntelXpiler.h \
     AoBuilins.h \
+    AoCeeGen.h \
     AoRowCol.h \
     AoToken.h \
     AoLexer.h \

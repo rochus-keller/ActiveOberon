@@ -68,6 +68,7 @@ namespace Ast
         uint validated : 1;
         uint inList : 1; // private
         uint forward : 1; // Type and Expression NameRefs
+        uint nonlocal : 1; // namerefs, proc decls
 
         // Type:
         uint deferred : 1;
@@ -88,7 +89,6 @@ namespace Ast
         // Expression:
         uint byVal : 1; // option for LocalVar, Param, ModuleVar, Select, Index
         uint needsLval : 1;
-        uint nonlocal : 1;
 
         // 27 bits
 
@@ -170,6 +170,9 @@ namespace Ast
         bool isStructured() const { return kind == Array || kind == Record; }
         QPair<int,int> countAllocRecordMembers(bool recursive = false);
         static bool isSubtype(Type* super, Type* sub);
+        bool isSO() const { return kind == Record || kind == Object; }
+        bool isSOA() const { return isSO() || (kind == Array && len); }
+        bool isPtrToOpenArray() const;
 
         bool isDerefCharArray() const;
         bool isDerefByteArray() const;
@@ -207,7 +210,10 @@ namespace Ast
         uint visi : 2;
         uint id : IdWidth; // used for built-in code and local/param number
         QVariant data; // value for Const and Enum, path for Import, name for Extern
-        Expression* expr; // const decl, enum, meta actuals
+        union {
+        Expression* expr; // const decl
+        Declaration* helper; // type, var, param, local and field decls
+        };
 
         Declaration():next(0),link(0),outer(0),super(0),body(0),id(NoSlot),expr(0),visi(0) { meta = D; kind = Invalid; }
 

@@ -341,6 +341,18 @@ bool Type::isSubtype(Type* super, Type* sub)
     return super == sub;
 }
 
+bool Type::isPtrToOpenArray() const
+{
+    if( kind == Pointer )
+    {
+        Type* base = type();
+        if( base )
+            base = base->deref();
+        return base->kind == Array && base->len == 0;
+    }else
+        return false;
+}
+
 bool Type::isDerefCharArray() const
 {
     Type* t = deref();
@@ -480,8 +492,10 @@ Declaration::~Declaration()
             )
         Declaration::deleteAll(link);
     Statement::deleteAll(body);
-    if( expr )
+    if( kind == ConstDecl && expr )
         delete expr;
+    else if( helper )
+        delete helper;
 }
 
 QList<Declaration*> Declaration::getParams(bool skipReceiver) const

@@ -1351,7 +1351,8 @@ bool Validator2::nameRef(Ast::Expression * nameRef)
 
     nameRef->setType(r.second->type());
 
-    if( r.second->kind == Declaration::LocalDecl || r.second->kind == Declaration::ParamDecl )
+    if( r.second->kind == Declaration::LocalDecl || r.second->kind == Declaration::ParamDecl ||
+            (r.second->kind == Declaration::Procedure && r.second->outer->kind == Declaration::Procedure) )
     {
         if( !scopeStack.isEmpty() && r.second->outer && r.second->outer != scopeStack.back() )
         {

@@ -39,6 +39,7 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QScrollBar>
+#include <QMessageBox>
 using namespace Ao;
 using namespace Ast;
 
@@ -433,6 +434,7 @@ CodeNavigator::CodeNavigator(QWidget *parent) : QMainWindow(parent),d_pushBackLo
     new QShortcut(tr("F3"),this,SLOT(onFindAgain()) );
     new QShortcut(tr("F2"),this,SLOT(onGotoDefinition()) );
     new QShortcut(tr("CTRL+O"),this,SLOT(onOpen()) );
+    new QShortcut(tr("CTRL+E"),this,SLOT(onExportC()) );
     new QShortcut(Qt::CTRL + Qt::Key_Plus,this,SLOT(onIncreaseSize()) );
     new QShortcut(Qt::CTRL + Qt::Key_Minus,this,SLOT(onDecreaseSize()) );
     new QShortcut(tr("CTRL+SHIFT+F"), this, SLOT(onSymFocus()));
@@ -449,6 +451,7 @@ CodeNavigator::CodeNavigator(QWidget *parent) : QMainWindow(parent),d_pushBackLo
     logMessage(tr("Double-click on the elements in the Modules or Uses lists to show in source code") );
     logMessage(tr("CTRL-click or F2 on the idents in the source to navigate to declarations") );
     logMessage(tr("CTRL+L to go to a specific line in the source code file") );
+    logMessage(tr("CTRL+E to export equivalent C99 code") );
     logMessage(tr("CTRL+F to find a string in the current file") );
     logMessage(tr("CTRL+SHIFT+F to find a symbol") );
     logMessage(tr("CTRL+G or F3 to find another match in the current file") );
@@ -1100,6 +1103,23 @@ void CodeNavigator::onSymSearch()
     fillUsedBy(&s, module);
 }
 
+void CodeNavigator::onExportC()
+{
+    const QString dirPath = QFileDialog::getExistingDirectory(this, tr("Save C"), d_pro->getBuildDir(true) );
+
+    if (dirPath.isEmpty())
+        return;
+
+#if 0
+    if( !compile(false,false) ) // otherwise allocated flag is already set after one generator run
+        return;
+#endif
+
+    if( !d_pro->generateC(dirPath) )
+        QMessageBox::critical(this,tr("Save C"),tr("There was an error when generating C; "
+                                                   "see Output window for more information"));
+}
+
 template<class T>
 static QTreeWidgetItem* fillHierProc( T* parent, Declaration* p, Declaration* ref, Project* pro )
 {
@@ -1368,7 +1388,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.5.15");
+    a.setApplicationVersion("0.5.16");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX
