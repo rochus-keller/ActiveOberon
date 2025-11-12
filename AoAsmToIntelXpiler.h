@@ -31,7 +31,7 @@ struct TranspileOptions {
   bool prependIntelSyntax;     // prepend ".intel_syntax noprefix\n\t"
   bool emitGasData;            // map DB/DW/DD/DS to .byte/.word/.long/.asciz (for .S)
   QString labelPrefix;         // prefix for local labels
-  TranspileOptions():outputCString(false),prependIntelSyntax(false),emitGasData(false),labelPrefix(".Loba"){}
+  TranspileOptions():outputCString(true),prependIntelSyntax(false),emitGasData(false),labelPrefix(".Loba"){}
 };
 
 class AsmToIntelXpiler {

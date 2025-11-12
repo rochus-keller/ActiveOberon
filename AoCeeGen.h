@@ -51,15 +51,7 @@ protected:
     void Assembler(Ast::Declaration *proc);
     void ProcDecl(Ast::Declaration*);
     void SysFlag();
-    bool ArrayType(Ast::Type *t);
-    bool RecordType(Ast::Type *t);
-    bool PointerType(Ast::Type *t);
-    bool ObjectType(Ast::Type *t);
-    bool ProcedureType(Ast::Type *t);
-    bool AliasType(Ast::Type *t);
     bool Type_(Ast::Type *t);
-    bool FieldList(Ast::Type *t);
-    void Body(Ast::Statement *s);
     void Attributes();
     void StatBlock(Ast::Statement *);
     void StatSeq(Ast::Statement *s);
@@ -101,17 +93,20 @@ protected:
     QByteArray typeRef(Ast::Type*);
     void pointerTo(QTextStream& out, Ast::Type* ptr);
     void printHelper(Ast::Declaration*);
+    inline QByteArray ws()
+    {
+        return QByteArray(curLevel*4,' ');
+    }
     inline QByteArray ws(int level)
     {
-        curLevel = level;
-        return QByteArray((level+1)*4,' ');
+        return QByteArray(level*4,' ');
     }
     void parameter(QTextStream& out, Ast::Declaration* param)
     {
         out << typeRef(param->type()) << " " << param->name;
     }
     void variable(QTextStream& out, Ast::Declaration* var);
-    void procHeader(QTextStream& out, Ast::Declaration* proc);
+    void procHeader(Ast::Declaration* proc, bool header);
 
 private:
     Ast::Declaration* curMod;
@@ -119,6 +114,7 @@ private:
     QTextStream bout;
     Ast::Declaration* curProc;
     QSet<Ast::Declaration*> done;
+    QList<Ast::Statement*> loopStack;
     int curLevel;
 };
 

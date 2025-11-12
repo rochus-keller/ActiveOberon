@@ -171,7 +171,7 @@ namespace Ast
         QPair<int,int> countAllocRecordMembers(bool recursive = false);
         static bool isSubtype(Type* super, Type* sub);
         bool isSO() const { return kind == Record || kind == Object; }
-        bool isSOA() const { return isSO() || (kind == Array && len); }
+        bool isSOA() const { return isSO() || (kind == Array && expr); }
         bool isPtrToOpenArray() const;
 
         bool isDerefCharArray() const;

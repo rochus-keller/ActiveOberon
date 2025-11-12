@@ -16,6 +16,7 @@
 * http://www.fsf.org/licensing/licenses/info/GPLv2.html and
 * http://www.gnu.org/copyleft/gpl.html.
 */
+#include "AoAsmToIntelXpiler.h"
 #include "AoCeeGen.h"
 #include <QCoreApplication>
 #include <QDateTime>
@@ -82,7 +83,7 @@ void CeeGen::typeDecl(Ast::Declaration *d)
         hout << "typedef struct " << qualident(d) << "$Class$ " << qualident(d) << "$Class$;" << endl;
     }
 
-    if( t->kind == Type::Array && t->len == 0 )
+    if( t->kind == Type::Array && t->expr == 0 )
     {
         hout << "// no typedef for open array " << qualident(d) << " (" << typeRef(t->type()) << "*)";
         return; // we need not typedef for open arrays, instead they are referenced by element_type*
@@ -90,12 +91,14 @@ void CeeGen::typeDecl(Ast::Declaration *d)
 
     hout << "typedef ";
     if( t->kind < Type::MaxBasicType )
-        hout << typeRef(t);
+        hout << typeRef(t); //  << " " << qualident(d);
     else
+    {
         switch( t->kind )
         {
         case Type::Pointer:
             pointerTo(hout, t);
+            // hout << " " << qualident(d);
             break;
         case Type::Procedure:
 #if 0
@@ -131,8 +134,8 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             }
             break;
         case Type::Array:
-            if( t->len != 0 )
-                hout << "struct " << qualident(d) << " { " << typeRef(t->type()) << " _[" << t->len << "];" << " }";
+            if( t->expr != 0 )
+                hout << "struct " << qualident(d) << " { " << typeRef(t->type()) << " _[" << t->len << "];" << " }"; // TODO: calc len
             else
                 Q_ASSERT(false); // hout << typeRef(t->getType()) << "* ";
             break;
@@ -142,7 +145,7 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             foreach( Declaration* field, t->subs )
             {
                 if( field->kind == Declaration::Field )
-                    hout << ws(0) << typeRef(field->type()) << " " << field->name << ";" << endl;
+                    hout << ws(1) << typeRef(field->type()) << " " << field->name << ";" << endl;
             }
             hout << "}";
             break;
@@ -162,22 +165,22 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             hout << typeRef(t->type());
             break;
         }
-    bout << " " << qualident(d);
+    }
+    // typedef what name
+    hout << " " << qualident(d);
 }
 
 static inline void dummy() {}
 
 void CeeGen::Module(Ast::Declaration *module) {
 
-    if( module->name == "Fonts" )
-        dummy();
     Ast::Declaration* d = module->link;
     if( d && d->kind == Ast::Declaration::Import ) {
         d = ImportList(d);
     }
     d = DeclSeq(d);
     if( d && d->body ) {
-        Body(d->body);
+        StatBlock(d->body);
     }
 }
 
@@ -234,6 +237,8 @@ void CeeGen::ConstDecl(Ast::Declaration* d) {
 
 void CeeGen::TypeDecl(Ast::Declaration* d) {
     printHelper(d->helper);
+    if( d->visi > Declaration::Private )
+        hout << "/* public */ ";
     typeDecl(d);
     hout << ";" << endl;
 }
@@ -242,14 +247,18 @@ void CeeGen::VarDecl(Ast::Declaration* d) {
     printHelper(d->helper);
     if( d->outer->kind == Declaration::Module )
     {
+        if( d->visi > Declaration::Private )
+            bout << "/* public */ ";
         variable(bout, d);
         bout << ";" << endl << endl;
+        if( d->visi > Declaration::Private )
+            hout << "/* public */ ";
         hout << "extern ";
         variable(hout, d);
         hout << ";" << endl;
     }else
     {
-        bout << ws(0);
+        bout << ws();
         parameter(bout, d);
         bout << ";" << endl;
         // TODO emitSoapInit(bout, sub->name, sub->getType(), 0 );
@@ -257,28 +266,39 @@ void CeeGen::VarDecl(Ast::Declaration* d) {
 }
 
 void CeeGen::Assembler(Ast::Declaration* proc) {
+#if 1
     bout << "#if 0" << endl;
     bout << proc->data.toString().mid(5); // TODO
     bout << "#endif" << endl;
+    bout << "  printf(\"TODO: calling unimplemented CODE section in " << curMod->name << "." << proc->name << "\\n\");" << endl;
+    // bout << "  assert(0); // not yet implemented" << endl;
+    if( proc->type() && deref(proc->type())->kind != Type::NoType )
+        bout << "  return 0;" << endl;
+#else
+    QString err;
+    TranspileOptions opt;
+    bout << AsmToIntelXpiler::transform(proc->data.toString().mid(5), opt, &err) << endl;
+#endif
 }
 
 void CeeGen::ProcDecl(Ast::Declaration * proc) {
     // SysFlag();
 
-    hout << "extern ";
-    procHeader(hout, proc);
+    procHeader(proc, true);
     hout << ";" << endl;
 
-    procHeader(bout, proc);
+    procHeader(proc, false);
     bout << " {" << endl;
     Ast::Declaration* d = proc->link;
+    curLevel++;
     d = DeclSeq(d);
     if( proc->body ) {
         if( proc->body->kind == Ast::Statement::Assembler )
             Assembler(proc);
         else
-            Body(proc->body);
+            StatBlock(proc->body);
     }
+    curLevel--;
     bout << "}" << endl << endl;
 }
 
@@ -286,104 +306,9 @@ void CeeGen::SysFlag() {
     // TODO
 }
 
-bool CeeGen::ArrayType(Ast::Type* t) {
-    // TODO
-    // SysFlag();
-    if( t->expr )
-        ConstExpr(t->expr);
-    return Type_(t->type());
-}
-
-bool CeeGen::RecordType(Ast::Type* t) {
-    // TODO
-    // SysFlag();
-    if( t->type() )
-        Type_(t->type());  // optional base class
-    return FieldList(t);
-}
-
-bool CeeGen::PointerType(Ast::Type* t) {
-    // TODO
-    // SysFlag();
-    return Type_(t->type());
-}
-
-bool CeeGen::ObjectType(Ast::Type* t) {
-    // TODO
-    // SysFlag();
-    if( t->type() )
-        Type_(t->type());  // optional base class
-
-    foreach( Ast::Declaration* member, t->subs )
-    {
-        switch( member->kind )
-        {
-        case Ast::Declaration::Field:
-            VarDecl(member);
-            break;
-        case Ast::Declaration::Procedure:
-            ProcDecl(member);
-            break;
-        default:
-            invalid("ObjectDeclSeq", t->pos);
-            break;
-        }
-    }
-    return true;
-}
-
-bool CeeGen::ProcedureType(Ast::Type* t) {
-    // TODO
-    // SysFlag();
-    // Attributes();
-    int ok = 1;
-    foreach( Ast::Declaration* param, t->subs )
-    {
-        if( param->kind == Ast::Declaration::ParamDecl )
-            ok &= Type_(param->type());
-    }
-    if( t->type() && t->type()->kind != Ast::Type::NoType )
-        ok &= Type_(t->type());
-    return ok;
-}
-
-bool CeeGen::AliasType(Ast::Type* t) {
-    // TODO Qualident();
-    return true;
-}
-
 bool CeeGen::Type_(Ast::Type* t) {
-    switch( t->kind )
-    {
-    case Ast::Type::NameRef:
-        return AliasType(t);
-    case Ast::Type::Pointer:
-        return PointerType(t);
-    case Ast::Type::Procedure:
-        return ProcedureType(t);
-    case Ast::Type::Array:
-        return ArrayType(t);
-    case Ast::Type::Record:
-        return RecordType(t);
-    case Ast::Type::Object:
-        return ObjectType(t);
-    default:
-        invalid("Type", t->pos);
-    }
+    typeRef(t);
     return true;
-}
-
-bool CeeGen::FieldList(Ast::Type* t) {
-    foreach( Ast::Declaration* f, t->subs )
-    {
-        if( !Type_(f->type()) )
-            return false;
-    }
-    return true;
-}
-
-void CeeGen::Body(Ast::Statement* s) {
-    StatBlock(s);
 }
 
 void CeeGen::Attributes() {
@@ -405,24 +330,36 @@ void CeeGen::StatSeq(Ast::Statement*s) {
 
 void CeeGen::assig(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Assig);
-    // TODO
     Expr(s->lhs);
+    bout << " = ";
     Expr(s->rhs);
+    bout << ";";
 }
 
 Ast::Statement *CeeGen::IfStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::If);
-    // TODO
-    Expr(s->rhs); // if
+    bout << "if( ";
+    Expr(s->rhs);
+    bout << " ) { " << endl;
     StatSeq(s->body);
+    bout << ws() << " }";
     while( s && s->getNext() && s->getNext()->kind == Ast::Statement::Elsif ) {
         s = s->getNext();
+        bout << "else if( ";
         Expr(s->rhs);
+        bout << " ) { " << endl;
+        curLevel++;
         StatSeq(s->body);
+        curLevel--;
+        bout << ws() << " }";
     }
     if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
         s = s->getNext();
+        bout << "else { " << endl;
+        curLevel++;
         StatSeq(s->body);
+        curLevel--;
+        bout << ws() << " }";
     }
     return s;
 }
@@ -431,67 +368,113 @@ Ast::Statement *CeeGen::CaseStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Case);
     // TODO
 
+    bout << "switch( ";
     Expr(s->rhs); // case
-
+    bout << " ) { " << endl;
     while( s && s->getNext() && s->getNext()->kind == Ast::Statement::CaseLabel )
     {
         s = s->getNext();
         Ast::Expression* label = s->rhs;
         while( label )
         {
-            Expr(label);
+            bout << ws() << "case ";
+            Expr(label); // TODO: Range
+            bout << ":" << endl;
             label = label->next;
         }
+        curLevel++;
         StatSeq(s->body);
+        bout << ws() << "break;" << endl;
+        curLevel--;
     }
     if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
         s = s->getNext();
+        bout << ws() << "default:" << endl;
+        curLevel++;
         StatSeq(s->body);
+        bout << ws() << "break;" << endl;
+        curLevel--;
     }
+    bout << ws() << "}";
     return s;
 }
 
 void CeeGen::WhileStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::While);
-    // TODO
+    bout << "while( ";
     Expr(s->rhs);
+    bout << " ) {" << endl;
+    curLevel++;
     StatSeq(s->body);
+    curLevel--;
+    bout << ws() << "}";
 }
 
 void CeeGen::RepeatStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Repeat);
-    // TODO
+    bout << "do {" << endl;
+    curLevel++;
     StatSeq(s->body);
+    curLevel--;
+    bout << ws() << "} while( !";
     Expr(s->rhs);
+    bout << " );";
 }
 
 Ast::Statement *CeeGen::ForStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::ForAssig);
-    // TODO
-    Expr(s->lhs); // i := val
-    Expr(s->rhs); // val
+
+    bout << "for( ";
+    Ast::Statement* i = s;
+    Expr(i->lhs); // i := val
+    bout << " = ";
+    Expr(i->rhs); // val
+    bout << " ; ";
     Ast::Statement* body = s->body;
 
     if( s && s->getNext() && s->getNext()->kind == Ast::Statement::ForToBy )
     {
         s = s->getNext();
+        Expr(i->lhs);
+        bout << " <= ";
         Expr(s->lhs); // to
+        bout << "; ";
         if( s->rhs )
+        {
+            // TODO: i < 0
+            Expr(i->lhs);
+            bout << " += ";
             ConstExpr(s->rhs); // by
+        }else
+        {
+            Expr(i->lhs);
+            bout << "++";
+        }
     }else
         invalid("For Statement", s->pos);
-
+    bout << " ){" << endl;
+    curLevel++;
     StatSeq(body);
+    curLevel--;
+    bout << ws() << "}";
     return s;
 }
 
 void CeeGen::LoopStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Loop);
+    loopStack.push_back(s);
+    bout << "while(1) {" << endl;
+    curLevel++;
     StatSeq(s->body);
+    curLevel--;
+    loopStack.pop_back();
+    bout << ws() << "__" << s->pos.d_row << ":" << endl;
+    bout << ws() << "}";
 }
 
 Ast::Statement *CeeGen::WithStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::With);
+    // TODO
     Expr(s->lhs);
     Expr(s->rhs);
     StatSeq(s->body);
@@ -500,15 +483,19 @@ Ast::Statement *CeeGen::WithStat(Ast::Statement *s) {
 
 void CeeGen::ReturnStat(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Return);
-    // TODO
+    bout << "return";
     if( s->rhs ) {
+        bout << " ";
         Expr(s->rhs);
     }
+    bout << ";";
 }
 
 Ast::Statement* CeeGen::Statement(Ast::Statement* s) {
     if( s == 0 )
         return 0;
+    if( s->kind != Statement::End )
+        bout << ws();
     switch( s->kind )
     {
     case Ast::Statement::Assig:
@@ -536,6 +523,8 @@ Ast::Statement* CeeGen::Statement(Ast::Statement* s) {
         RepeatStat(s);
         break;
     case Ast::Statement::Exit:
+        if( !loopStack.isEmpty() )
+            bout << "goto " << "__" << loopStack.back()->pos.d_row << ";";
         break;
     case Ast::Statement::Return:
         ReturnStat(s);
@@ -551,13 +540,14 @@ Ast::Statement* CeeGen::Statement(Ast::Statement* s) {
     default:
         invalid("Statement", s->pos);
     }
+    if( s->kind != Statement::End )
+        bout << endl;
     if( s )
         s = s->getNext();
     return s;
 }
 
 bool CeeGen::ConstExpr(Ast::Expression* e) {
-    // TODO
     return Expr(e);
 }
 
@@ -837,6 +827,7 @@ QByteArray CeeGen::typeRef(Type * t)
     case Type::INTEGER:
         return "short";
     case Type::LONGINT:
+        return "long"; // using long so it is 32 or 64 bits like the target system, useful for e.g. SYSTEM.GET)
     case Type::SET:
         return "int";
     case Type::HUGEINT:
@@ -860,7 +851,9 @@ QByteArray CeeGen::typeRef(Type * t)
         if( to->isSOA() ) // array types are embedded in a struct
             prefix = "struct ";
         return prefix + typeRef(to) + "*";
-    }else if( t->decl )
+    }else if( t->kind == Type::Array && t->expr == 0 )
+        return typeRef(t->type()) + "*";
+    else if( t->decl )
         return qualident(t->decl);
     else
         return "?TYPE";
@@ -870,7 +863,7 @@ void CeeGen::pointerTo(QTextStream &out, Ast::Type *ptr)
 {
     Type* to = ptr->type();
     Type* to2 = deref(to);
-    if( to2 && to2->kind == Type::Array && to2->len == 0 )
+    if( to2 && to2->kind == Type::Array && to2->expr == 0 )
     {
         // Pointer to array is translated to pointer to array element
         ptr = to2;
@@ -898,12 +891,23 @@ void CeeGen::variable(QTextStream &out, Ast::Declaration *var)
     out << typeRef(var->type()) << " " << qualident(var);
 }
 
-void CeeGen::procHeader(QTextStream &out, Ast::Declaration *proc)
+void CeeGen::procHeader(Ast::Declaration *proc, bool header)
 {
+    DeclList params = proc->getParams();
+
+    QTextStream& out = header ? hout : bout;
+
+    if( header )
+        for( int i = 0; i < params.size(); i++ )
+            printHelper(params[i]->helper);
+
+    if( proc->visi > Declaration::Private )
+        out << "/* public */ ";
+    if( header )
+        out << "extern ";
     out << typeRef(proc->type()) << " ";
     out << qualident(proc);
     out << "(";
-    DeclList params = proc->getParams();
     for( int i = 0; i < params.size(); i++ )
     {
         if( i != 0 )

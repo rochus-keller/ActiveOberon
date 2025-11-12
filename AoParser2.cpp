@@ -1603,10 +1603,13 @@ void Parser2::deanonymizeType(Ast::Declaration * d)
 {
     if( d->type() && d->type()->decl == 0 )
     {
-        if( !d->type()->pos.isValid() )
-            d->type()->pos = d->pos;
-        d->type()->decl = d;
-        d->type()->anonymous = false;
+        if( d->kind == Declaration::TypeDecl )
+        {
+            if( !d->type()->pos.isValid() )
+                d->type()->pos = d->pos;
+            d->type()->decl = d;
+            d->type()->anonymous = false;
+        }
 #if 1
         deanonymizeType(d, d->type());
 #else
@@ -1624,6 +1627,7 @@ void Parser2::deanonymizeType(Ast::Declaration * d, Ast::Type * t)
         helper->name = "_$" + QByteArray::number(count++);
         helper->kind = Declaration::TypeDecl;
         helper->pos = t->pos;
+        helper->setType(t);
         t->decl = helper;
         Declaration* tmp = d->helper;
         d->helper = helper;

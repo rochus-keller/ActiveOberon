@@ -348,7 +348,7 @@ bool Type::isPtrToOpenArray() const
         Type* base = type();
         if( base )
             base = base->deref();
-        return base->kind == Array && base->len == 0;
+        return base->kind == Array && base->expr == 0;
     }else
         return false;
 }
