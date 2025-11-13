@@ -31,7 +31,7 @@ namespace Ao
 class CeeGen
 {
 public:
-    CeeGen() {}
+    CeeGen();
     bool generate(Ast::Declaration* module, QIODevice* header, QIODevice* body);
     struct Error {
         QString msg;
@@ -64,24 +64,23 @@ protected:
     Ast::Statement * WithStat(Ast::Statement *s);
     void ReturnStat(Ast::Statement *s);
     Ast::Statement *Statement(Ast::Statement *s);
-    bool ConstExpr(Ast::Expression *e);
-    bool Expr(Ast::Expression *e);
+    bool ConstExpr(Ast::Expression *e, QTextStream& out);
+    bool Expr(Ast::Expression *e, QTextStream& out);
 
 protected:
-    bool relation(Ast::Expression *e);
-    bool unaryOp(Ast::Expression *e);
-    bool arithOp(Ast::Expression *e);
-    bool logicOp(Ast::Expression *e);
-    bool declRef(Ast::Expression *e);
-    bool select(Ast::Expression *e);
-    bool index(Ast::Expression *e);
-    bool depointer(Ast::Expression *e);
-    bool cast(Ast::Expression *e);
-    bool call(Ast::Expression *e);
-    bool literal(Ast::Expression *e);
-    bool constructor(Ast::Expression *e);
-    bool range(Ast::Expression *e);
-    bool nameRef(Ast::Expression *e);
+    bool relation(Ast::Expression *e, QTextStream& out);
+    bool unaryOp(Ast::Expression *e, QTextStream& out);
+    bool arithOp(Ast::Expression *e, QTextStream& out);
+    bool logicOp(Ast::Expression *e, QTextStream& out);
+    bool declRef(Ast::Expression *e, QTextStream& out);
+    bool select(Ast::Expression *e, QTextStream& out);
+    bool index(Ast::Expression *e, QTextStream& out);
+    bool depointer(Ast::Expression *e, QTextStream& out);
+    bool cast(Ast::Expression *e, QTextStream& out);
+    bool call(Ast::Expression *e, QTextStream& out);
+    bool literal(Ast::Expression *e, QTextStream& out);
+    bool constructor(Ast::Expression *e, QTextStream& out);
+    bool range(Ast::Expression *e, QTextStream& out);
     void assig(Ast::Statement* s);
     void call(Ast::Statement* s);
 
@@ -103,10 +102,12 @@ protected:
     }
     void parameter(QTextStream& out, Ast::Declaration* param)
     {
-        out << typeRef(param->type()) << " " << param->name;
+        out << typeRef(param->type()) << " " << escape(param->name);
     }
     void variable(QTextStream& out, Ast::Declaration* var);
     void procHeader(Ast::Declaration* proc, bool header);
+    QByteArray escape(const QByteArray&);
+    QByteArray qualident(Ast::Declaration* d);
 
 private:
     Ast::Declaration* curMod;
@@ -115,6 +116,7 @@ private:
     Ast::Declaration* curProc;
     QSet<Ast::Declaration*> done;
     QList<Ast::Statement*> loopStack;
+    QSet<const char*> keywords;
     int curLevel;
 };
 

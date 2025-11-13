@@ -18,18 +18,33 @@
 */
 #include "AoAsmToIntelXpiler.h"
 #include "AoCeeGen.h"
+#include "AoToken.h"
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QIODevice>
+#include <QtDebug>
 using namespace Ao;
 using namespace Ast;
 
-static QByteArray qualident(Declaration* d)
+CeeGen::CeeGen()
+{
+    static const char* kw[] = {
+        "auto", "break", "case", "char", "const", "continue", "default", "do", "double",
+        "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long",
+        "register", "restrict", "return", "short", "signed", "sizeof", "static",
+        "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", 0
+    };
+
+    for( int i = 0; kw[i] != 0; i++)
+        keywords.insert(Token::getSymbol(kw[i]).constData());
+}
+
+QByteArray CeeGen::qualident(Declaration* d)
 {
     if( d->outer )
-        return qualident(d->outer) + "$" + d->name;
+        return qualident(d->outer) + "$" + escape(d->name);
     else
-        return d->name;
+        return escape(d->name);
 }
 
 bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *body) {
@@ -135,8 +150,11 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             break;
         case Type::Array:
             if( t->expr != 0 )
-                hout << "struct " << qualident(d) << " { " << typeRef(t->type()) << " _[" << t->len << "];" << " }"; // TODO: calc len
-            else
+            {
+                hout << "struct " << qualident(d) << " { " << typeRef(t->type()) << " _[";
+                Expr(t->expr, bout);
+                hout << t->len << "];" << " }";
+            }else
                 Q_ASSERT(false); // hout << typeRef(t->getType()) << "* ";
             break;
 
@@ -145,7 +163,7 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             foreach( Declaration* field, t->subs )
             {
                 if( field->kind == Declaration::Field )
-                    hout << ws(1) << typeRef(field->type()) << " " << field->name << ";" << endl;
+                    hout << ws(1) << typeRef(field->type()) << " " << escape(field->name) << ";" << endl;
             }
             hout << "}";
             break;
@@ -156,7 +174,7 @@ void CeeGen::typeDecl(Ast::Declaration *d)
                 QList<Declaration*> fields = t->getFieldList(true);
                 foreach( Declaration* field, fields ) // TODO: was t->subs, but this cannot be correct
                 {
-                     hout << ws(0) << typeRef(field->type()) << " " << field->name << ";" << endl;
+                     hout << ws(0) << typeRef(field->type()) << " " << escape(field->name) << ";" << endl;
                 }
                 hout << "}";
             } break;
@@ -230,8 +248,8 @@ Ast::Declaration* CeeGen::DeclSeq(Ast::Declaration* d) {
 }
 
 void CeeGen::ConstDecl(Ast::Declaration* d) {
-    hout << "#define " << qualident(d);
-    ConstExpr(d->expr);
+    hout << "#define " << qualident(d) << " ";
+    ConstExpr(d->expr, hout);
     hout << endl;
 }
 
@@ -268,7 +286,7 @@ void CeeGen::VarDecl(Ast::Declaration* d) {
 void CeeGen::Assembler(Ast::Declaration* proc) {
 #if 1
     bout << "#if 0" << endl;
-    bout << proc->data.toString().mid(5); // TODO
+    bout << proc->data.toString().mid(5);
     bout << "#endif" << endl;
     bout << "  printf(\"TODO: calling unimplemented CODE section in " << curMod->name << "." << proc->name << "\\n\");" << endl;
     // bout << "  assert(0); // not yet implemented" << endl;
@@ -316,7 +334,6 @@ void CeeGen::Attributes() {
 }
 
 void CeeGen::StatBlock(Ast::Statement* s) {
-    // TODO
     // Attributes();
     StatSeq(s->body);
 }
@@ -330,28 +347,30 @@ void CeeGen::StatSeq(Ast::Statement*s) {
 
 void CeeGen::assig(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Assig);
-    Expr(s->lhs);
+    Expr(s->lhs, bout);
     bout << " = ";
-    Expr(s->rhs);
+    Expr(s->rhs, bout);
     bout << ";";
 }
 
 Ast::Statement *CeeGen::IfStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::If);
     bout << "if( ";
-    Expr(s->rhs);
+    Expr(s->rhs, bout);
     bout << " ) { " << endl;
+    curLevel++;
     StatSeq(s->body);
-    bout << ws() << " }";
+    curLevel--;
+    bout << ws() << "}";
     while( s && s->getNext() && s->getNext()->kind == Ast::Statement::Elsif ) {
         s = s->getNext();
         bout << "else if( ";
-        Expr(s->rhs);
+        Expr(s->rhs, bout);
         bout << " ) { " << endl;
         curLevel++;
         StatSeq(s->body);
         curLevel--;
-        bout << ws() << " }";
+        bout << ws() << "}";
     }
     if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
         s = s->getNext();
@@ -359,50 +378,120 @@ Ast::Statement *CeeGen::IfStat(Ast::Statement *s) {
         curLevel++;
         StatSeq(s->body);
         curLevel--;
-        bout << ws() << " }";
+        bout << ws() << "}";
     }
     return s;
 }
 
 Ast::Statement *CeeGen::CaseStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Case);
-    // TODO
 
-    bout << "switch( ";
-    Expr(s->rhs); // case
-    bout << " ) { " << endl;
-    while( s && s->getNext() && s->getNext()->kind == Ast::Statement::CaseLabel )
+    Ast::Statement* c = s->getNext();
+    bool hasRange = false;
+    while( !hasRange && c && c->kind == Ast::Statement::CaseLabel )
     {
-        s = s->getNext();
         Ast::Expression* label = s->rhs;
         while( label )
         {
-            bout << ws() << "case ";
-            Expr(label); // TODO: Range
-            bout << ":" << endl;
+            if( label->kind == Expression::Range )
+            {
+                hasRange = true;
+                break;
+            }
             label = label->next;
         }
-        curLevel++;
-        StatSeq(s->body);
-        bout << ws() << "break;" << endl;
-        curLevel--;
+        c = c->getNext();
     }
-    if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
-        s = s->getNext();
-        bout << ws() << "default:" << endl;
-        curLevel++;
-        StatSeq(s->body);
-        bout << ws() << "break;" << endl;
-        curLevel--;
+
+    if( hasRange )
+    {
+        Expression* e = s->rhs;
+        while( s && s->getNext() && s->getNext()->kind == Ast::Statement::CaseLabel )
+        {
+            s = s->getNext();
+            if( !hasRange )
+                bout << " else ";
+            hasRange = false;
+            bout << "if( ";
+            Ast::Expression* label = s->rhs;
+            while( label )
+            {
+                if( label->kind == Expression::Range )
+                {
+                    bout << "(";
+                    Expr(e, bout);
+                    bout << " >= "; // TODO: is lhs alway <= rhs?
+                    Expr(label->lhs, bout);
+                    bout << " && ";
+                    Expr(e, bout);
+                    bout << " <= ";
+                    Expr(label->rhs, bout);
+                    bout << ")";
+                }else
+                {
+                    bout << "(";
+                    Expr(e, bout);
+                    bout << " == ";
+                    Expr(label, bout);
+                    bout << ")";
+                }
+                if( label->next )
+                    bout << " || ";
+                label = label->next;
+            }
+            bout << " ) {" << endl;
+            curLevel++;
+            StatSeq(s->body);
+            bout << ws() << "}";
+            curLevel--;
+        }
+        if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
+            s = s->getNext();
+            bout << " else {" << endl;
+            curLevel++;
+            StatSeq(s->body);
+            bout << ws() << "}" << endl;
+            curLevel--;
+        }
+    }else
+    {
+        bout << "switch( ";
+        Expr(s->rhs, bout); // case
+        bout << " ) { " << endl;
+        while( s && s->getNext() && s->getNext()->kind == Ast::Statement::CaseLabel )
+        {
+            s = s->getNext();
+            Ast::Expression* label = s->rhs;
+            while( label )
+            {
+                bout << ws() << "case ";
+                Q_ASSERT(label->kind != Expression::Range);
+                Expr(label, bout);
+                bout << ":" << endl;
+                label = label->next;
+            }
+            curLevel++;
+            StatSeq(s->body);
+            bout << ws() << "break;" << endl;
+            curLevel--;
+        }
+        if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
+            s = s->getNext();
+            bout << ws() << "default:" << endl;
+            curLevel++;
+            StatSeq(s->body);
+            bout << ws() << "break;" << endl;
+            curLevel--;
+        }
+        bout << ws() << "}";
     }
-    bout << ws() << "}";
     return s;
 }
 
 void CeeGen::WhileStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::While);
     bout << "while( ";
-    Expr(s->rhs);
+    Expr(s->rhs, bout);
     bout << " ) {" << endl;
     curLevel++;
     StatSeq(s->body);
@@ -417,7 +506,7 @@ void CeeGen::RepeatStat(Ast::Statement *s) {
     StatSeq(s->body);
     curLevel--;
     bout << ws() << "} while( !";
-    Expr(s->rhs);
+    Expr(s->rhs, bout);
     bout << " );";
 }
 
@@ -426,28 +515,28 @@ Ast::Statement *CeeGen::ForStat(Ast::Statement *s) {
 
     bout << "for( ";
     Ast::Statement* i = s;
-    Expr(i->lhs); // i := val
+    Expr(i->lhs, bout); // i := val
     bout << " = ";
-    Expr(i->rhs); // val
+    Expr(i->rhs, bout); // val
     bout << " ; ";
     Ast::Statement* body = s->body;
 
     if( s && s->getNext() && s->getNext()->kind == Ast::Statement::ForToBy )
     {
         s = s->getNext();
-        Expr(i->lhs);
+        Expr(i->lhs, bout);
         bout << " <= ";
-        Expr(s->lhs); // to
+        Expr(s->lhs, bout); // to
         bout << "; ";
         if( s->rhs )
         {
             // TODO: i < 0
-            Expr(i->lhs);
+            Expr(i->lhs, bout);
             bout << " += ";
-            ConstExpr(s->rhs); // by
+            ConstExpr(s->rhs, bout); // by
         }else
         {
-            Expr(i->lhs);
+            Expr(i->lhs, bout);
             bout << "++";
         }
     }else
@@ -475,8 +564,8 @@ void CeeGen::LoopStat(Ast::Statement *s) {
 Ast::Statement *CeeGen::WithStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::With);
     // TODO
-    Expr(s->lhs);
-    Expr(s->rhs);
+    Expr(s->lhs, bout);
+    Expr(s->rhs, bout);
     StatSeq(s->body);
     return s;
 }
@@ -486,7 +575,7 @@ void CeeGen::ReturnStat(Ast::Statement* s) {
     bout << "return";
     if( s->rhs ) {
         bout << " ";
-        Expr(s->rhs);
+        Expr(s->rhs, bout);
     }
     bout << ";";
 }
@@ -547,11 +636,11 @@ Ast::Statement* CeeGen::Statement(Ast::Statement* s) {
     return s;
 }
 
-bool CeeGen::ConstExpr(Ast::Expression* e) {
-    return Expr(e);
+bool CeeGen::ConstExpr(Ast::Expression* e, QTextStream &out) {
+    return Expr(e, out);
 }
 
-bool CeeGen::Expr(Ast::Expression* e) {
+bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
     // Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
@@ -564,13 +653,13 @@ bool CeeGen::Expr(Ast::Expression* e) {
     case Ast::Expression::Eq:
     case Ast::Expression::Gt:
     case Ast::Expression::Is:
-        if( !relation(e) )
+        if( !relation(e, out) )
             return false;
         break;
     case Ast::Expression::Plus:
     case Ast::Expression::Minus:
     case Ast::Expression::Not:
-        if( !unaryOp(e) )
+        if( !unaryOp(e, out) )
             return false;
         break;
     case Ast::Expression::Add:
@@ -579,54 +668,51 @@ bool CeeGen::Expr(Ast::Expression* e) {
     case Ast::Expression::Fdiv:
     case Ast::Expression::Div:
     case Ast::Expression::Mod:
-        if( !arithOp(e) )
+        if( !arithOp(e, out) )
             return false;
         break;
     case Ast::Expression::Or:
     case Ast::Expression::And:
-        if( !logicOp(e) )
+        if( !logicOp(e, out) )
             return false;
         break;
     case Ast::Expression::DeclRef:
-        if( !declRef(e) )
+        if( !declRef(e, out) )
             return false;
         break;
     case Ast::Expression::Select:
-        if( !select(e) )
+        if( !select(e, out) )
             return false;
         break;
     case Ast::Expression::Index:
-        if( !index(e) )
+        if( !index(e, out) )
             return false;
         break;
     case Ast::Expression::Deref:
-        if( !depointer(e) )
+        if( !depointer(e, out) )
             return false;
         break;
     case Ast::Expression::Cast:
-        if( !cast(e) )
+        if( !cast(e, out) )
             return false;
         break;
     case Ast::Expression::Call:
-        if( !call(e) )
+        if( !call(e, out) )
             return false;
         break;
     case Ast::Expression::Literal:
-        if( !literal(e) )
+        if( !literal(e, out) )
             return false;
         break;
     case Ast::Expression::Constructor:
-        if( !constructor(e) )
+        if( !constructor(e, out) )
             return false;
         break;
     case Ast::Expression::Range:
-        if( !range(e) )
+        if( !range(e, out) )
             return false;
         break;
     case Ast::Expression::NameRef:
-        if( !nameRef(e) )
-            return false;
-        break;
     default:
         Q_ASSERT(false);
         break;
@@ -634,121 +720,225 @@ bool CeeGen::Expr(Ast::Expression* e) {
     return true;
 }
 
-bool CeeGen::relation(Ast::Expression *e)
+bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    Expr(e->lhs);
-    Expr(e->rhs);
-    // TODO
+    out << "(";
+    Expr(e->lhs, out);
+    switch(e->kind)
+    {
+    case Ast::Expression::Lt:
+        out << " < ";
+        break;
+    case Ast::Expression::Leq:
+        out << " <= ";
+        break;
+    case Ast::Expression::Geq:
+        out << " >= ";
+        break;
+    case Ast::Expression::Neq:
+        out << " != ";
+        break;
+    case Ast::Expression::Eq:
+        out << " == ";
+        break;
+    case Ast::Expression::Gt:
+        out << " > ";
+        break;
+    case Ast::Expression::In:
+    case Ast::Expression::Is:
+        break; // TODO
+    default:
+        Q_ASSERT(false);
+    }
+    Expr(e->rhs, out);
+    out << ")";
+   return true;
+}
+
+bool CeeGen::unaryOp(Ast::Expression *e, QTextStream &out)
+{
+    if( e == 0 )
+        return false;
+
+    out << "(";
+    switch(e->kind)
+    {
+    case Ast::Expression::Plus:
+        out << "+";
+        break;
+    case Ast::Expression::Minus:
+        out << "-";
+        break;
+    case Ast::Expression::Not:
+        out << "!";
+        break;
+    default:
+        Q_ASSERT(false);
+    }
+    Expr(e->lhs, out);
+    out << ")";
+    return true;
+}
+
+bool CeeGen::arithOp(Ast::Expression *e, QTextStream &out)
+{
+    if( e == 0 )
+        return false;
+    out << "(";
+    Expr(e->lhs, out);
+    switch(e->kind)
+    {
+    case Ast::Expression::Add:
+        out << " + ";
+        break;
+    case Ast::Expression::Sub:
+        out << " - ";
+        break;
+    case Ast::Expression::Mul:
+        out << " * ";
+        break;
+    case Ast::Expression::Fdiv:
+    case Ast::Expression::Div:
+        out << " / ";
+        break;
+    case Ast::Expression::Mod:
+        out << " % ";
+        break;
+    default:
+        Q_ASSERT(false);
+    }
+    Expr(e->rhs, out);
+    out << ")";
+    return true;
+}
+
+bool CeeGen::logicOp(Ast::Expression *e, QTextStream &out)
+{
+    if( e == 0 )
+        return false;
+    out << "(";
+    Expr(e->lhs, out);
+    switch( e->kind )
+    {
+    case Ast::Expression::Or:
+        out << " || ";
+        break;
+    case Ast::Expression::And:
+        out << " && ";
+        break;
+    default:
+        Q_ASSERT(false);
+    }
+    Expr(e->rhs, out);
+    out << ")";
+    return true;
+}
+
+bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
+{
+    if( e == 0 )
+        return false;
+    Declaration* d = e->val.value<Declaration*>();
+    out << qualident(d);
+    return true;
+}
+
+bool CeeGen::select(Ast::Expression *e, QTextStream &out)
+{
+    if( e == 0 )
+        return false;
+    Expr(e->lhs, out);
+    if( deref(e->lhs->type())->kind == Type::Pointer )
+        out << "->";
+    else
+        out << ".";
+    Expr(e->rhs, out);
+    return true;
+}
+
+bool CeeGen::index(Ast::Expression *e, QTextStream &out)
+{
+    if( e == 0 )
+        return false;
+    Expr(e->lhs, out);
+    out << "[";
+    Expr(e->rhs, out);
+    out << "]";
     return false;
 }
 
-bool CeeGen::unaryOp(Ast::Expression *e)
+bool CeeGen::depointer(Ast::Expression *e, QTextStream &out)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    Expr(e->lhs);
-    // TODO
+    out << "(*";
+    Expr(e->lhs, out);
+    out << ")";
     return false;
 }
 
-bool CeeGen::arithOp(Ast::Expression *e)
+bool CeeGen::cast(Ast::Expression *e, QTextStream &out)
 {
-    Q_ASSERT(e); // TEST
-    if( e == 0 )
-        return false;
-    Expr(e->lhs);
-    Expr(e->rhs);
-    // TODO
-    return false;
-}
-
-bool CeeGen::logicOp(Ast::Expression *e)
-{
-    Q_ASSERT(e); // TEST
-    if( e == 0 )
-        return false;
-    Expr(e->lhs);
-    Expr(e->rhs);
-    // TODO
-    return false;
-}
-
-bool CeeGen::declRef(Ast::Expression *e)
-{
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
     // TODO
+    Expr(e->lhs, out);
     return false;
 }
 
-bool CeeGen::select(Ast::Expression *e)
+bool CeeGen::call(Ast::Expression *e, QTextStream &out)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    // TODO
-    Expr(e->lhs);
-    Expr(e->rhs);
-    return false;
+    // TODO: built-ins special treatment
+    Expr(e->lhs, out);
+    out << "(";
+    Expression* arg = e->rhs;
+    while(arg)
+    {
+        Expr(arg, out);
+        if( arg->next )
+            out << ", ";
+        arg = arg->next;
+    }
+    out << ")";
+    return true;
 }
 
-bool CeeGen::index(Ast::Expression *e)
+bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
-    // TODO
-    Expr(e->lhs);
-    Expr(e->rhs);
-    return false;
+    switch( e->val.type() )
+    {
+    case QVariant::Invalid:
+        out << "NULL";
+        break;
+    case QVariant::Bool:
+    case QVariant::Int:
+    case QVariant::UInt:
+    case QVariant::LongLong:
+    case QVariant::ULongLong:
+        out << e->val.toULongLong();
+        break;
+    case QVariant::Double:
+        out << e->val.toDouble();
+        break;
+    case QVariant::ByteArray: {
+        QByteArray str = e->val.toByteArray();
+        str.replace("\"", "\\\"");
+        out << "\"" << str << "\"";
+        } break;
+    default:
+        Q_ASSERT(false);
+    }
+
+    return true;
 }
 
-bool CeeGen::depointer(Ast::Expression *e)
-{
-    Q_ASSERT(e); // TEST
-    if( e == 0 )
-        return false;
-    // TODO
-    Expr(e->lhs);
-    return false;
-}
-
-bool CeeGen::cast(Ast::Expression *e)
-{
-    Q_ASSERT(e); // TEST
-    if( e == 0 )
-        return false;
-    // TODO
-    Expr(e->lhs);
-    return false;
-}
-
-bool CeeGen::call(Ast::Expression *e)
-{
-    Q_ASSERT(e); // TEST
-    if( e == 0 )
-        return false;
-    // TODO
-    Expr(e->lhs);
-    Expr(e->rhs);
-    return false;
-}
-
-bool CeeGen::literal(Ast::Expression *e)
-{
-    Q_ASSERT(e); // TEST
-    if( e == 0 )
-        return false;
-    // TODO
-    return false;
-}
-
-bool CeeGen::constructor(Ast::Expression *e)
+bool CeeGen::constructor(Ast::Expression *e, QTextStream &out)
 {
     Q_ASSERT(e); // TEST
     if( e == 0 )
@@ -756,42 +946,29 @@ bool CeeGen::constructor(Ast::Expression *e)
     Ast::Expression* elem = e->rhs;
     while( elem )
     {
-        Expr(elem);
+        Expr(elem, out);
         elem = elem->next;
     }
     // TODO
     return false;
 }
 
-bool CeeGen::range(Ast::Expression *e)
+bool CeeGen::range(Ast::Expression *e, QTextStream &out)
 {
     if( e->lhs == 0 || e->rhs == 0 )
         return false;
-    Expr(e->lhs);
-    Expr(e->rhs);
+    Expr(e->lhs, out);
+    Expr(e->rhs, out);
     // TODO
     return true;
 }
 
-
-bool CeeGen::nameRef(Ast::Expression *e)
-{
-    Q_ASSERT(e); // TEST
-    if( e == 0 )
-        return false;
-    // TODO
-    return false;
-}
-
 void CeeGen::call(Ast::Statement *s)
 {
-    Q_ASSERT(s); // TEST
     if( s == 0 )
         return;
-    Expr(s->lhs);
-    if( s->rhs )
-        Expr(s->rhs);
-    // TODO
+    Q_ASSERT(s->lhs && s->lhs->kind == Expression::Call);
+    Expr(s->lhs, bout);
 }
 
 QString CeeGen::genDedication()
@@ -915,4 +1092,12 @@ void CeeGen::procHeader(Ast::Declaration *proc, bool header)
         parameter(out, params[i]);
     }
     out << ")";
+}
+
+QByteArray CeeGen::escape(const QByteArray & name)
+{
+    if( keywords.contains(name.constData()) )
+        return name + "_";
+    else
+        return name;
 }
