@@ -117,7 +117,7 @@ private:
     QSet<Ast::Declaration*> done;
     QList<Ast::Statement*> loopStack;
     QSet<const char*> keywords;
-    int curLevel;
+    int curLevel, localId;
 };
 
 }

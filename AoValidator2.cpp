@@ -209,7 +209,7 @@ void Validator2::VarDecl(Ast::Declaration* d) {
 void Validator2::Assembler(Ast::Declaration* proc) {
     //expect(Tok_CODE, false, "Assembler");
     // TODO
-    // qDebug() << module->name << proc->pos.d_row << proc->name << proc->data.toByteArray().mid(5);
+    // qDebug() << "###" << module->name.constData() << proc->pos.d_row << proc->name.constData() << "\n" << proc->data.toByteArray().mid(5).constData();
 #if 0
     // TEST
     QString err;
@@ -296,6 +296,8 @@ bool Validator2::PointerType(Ast::Type* t) {
 }
 
 bool Validator2::ObjectType(Ast::Type* t) {
+
+    // qDebug() << module->name.constData(); // << t->pos.d_row;
 
     // SysFlag();
     if( t->type() && !t->type()->validated ) // optional base class

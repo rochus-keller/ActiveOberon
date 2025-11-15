@@ -943,7 +943,7 @@ Type* Parser2::Type_() {
         res = ProcedureType();
 	} else
 		invalid("Type");
-    if( res->kind != Type::NameRef )
+    if( res && res->kind != Type::NameRef )
         res->anonymous = true;
     return res;
 }
@@ -1022,6 +1022,7 @@ Statement* Parser2::StatBlock() {
         std::bitset<MaxAttr> a = Attributes();
         s->active = a.test(ACTIVE);
         s->exclusive = a.test(EXCLUSIVE);
+        // qDebug() << thisMod->name.constData() << s->active << s->exclusive;
 	}
 	if( FIRST_StatSeq(la.d_type) ) {
         if( s )

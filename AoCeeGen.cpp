@@ -41,7 +41,7 @@ CeeGen::CeeGen()
 
 QByteArray CeeGen::qualident(Declaration* d)
 {
-    if( d->outer )
+    if( d->outer && d->kind != Declaration::LocalDecl && d->kind != Declaration::ParamDecl )
         return qualident(d->outer) + "$" + escape(d->name);
     else
         return escape(d->name);
@@ -52,6 +52,7 @@ bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *bo
 
     curMod = module;
     curLevel = 0;
+    localId = 0;
     hout.setDevice(header);
     QString dummy;
     if( body )
@@ -73,6 +74,7 @@ bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *bo
     bout << "#include \"" << module->name << ".h\"" << endl;
     bout << "#include <stdlib.h>" << endl;
     bout << "#include <string.h>" << endl;
+    bout << "#include <stdint.h>" << endl;
     bout << "#include <math.h>" << endl << endl;
 
     Module(module);
@@ -152,8 +154,8 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             if( t->expr != 0 )
             {
                 hout << "struct " << qualident(d) << " { " << typeRef(t->type()) << " _[";
-                Expr(t->expr, bout);
-                hout << t->len << "];" << " }";
+                Expr(t->expr, hout);
+                hout << "];" << " }";
             }else
                 Q_ASSERT(false); // hout << typeRef(t->getType()) << "* ";
             break;
@@ -220,7 +222,8 @@ Ast::Declaration* CeeGen::ImportList(Ast::Declaration* import) {
 
 Ast::Declaration* CeeGen::DeclSeq(Ast::Declaration* d) {
     while( d && (d->kind == Ast::Declaration::ConstDecl || d->kind == Ast::Declaration::TypeDecl ||
-           d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::Procedure ) ) {
+           d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl ||
+                 d->kind == Ast::Declaration::Procedure ) ) {
         if( d->kind == Ast::Declaration::ConstDecl ) {
             while( d && d->kind == Ast::Declaration::ConstDecl ) {
                 ConstDecl(d);
@@ -231,8 +234,8 @@ Ast::Declaration* CeeGen::DeclSeq(Ast::Declaration* d) {
                 TypeDecl(d);
                 d = d->next;
             }
-        } else if( d->kind == Ast::Declaration::VarDecl ) {
-            while( d && d->kind == Ast::Declaration::VarDecl ) {
+        } else if( d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl ) {
+            while( d && (d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl) ) {
                 VarDecl(d);
                 d = d->next;
             }
@@ -308,6 +311,8 @@ void CeeGen::ProcDecl(Ast::Declaration * proc) {
     procHeader(proc, false);
     bout << " {" << endl;
     Ast::Declaration* d = proc->link;
+    while(d && d->kind == Declaration::ParamDecl )
+        d = d->next;
     curLevel++;
     d = DeclSeq(d);
     if( proc->body ) {
@@ -335,7 +340,7 @@ void CeeGen::Attributes() {
 
 void CeeGen::StatBlock(Ast::Statement* s) {
     // Attributes();
-    StatSeq(s->body);
+    StatSeq(s);
 }
 
 void CeeGen::StatSeq(Ast::Statement*s) {
@@ -364,7 +369,7 @@ Ast::Statement *CeeGen::IfStat(Ast::Statement *s) {
     bout << ws() << "}";
     while( s && s->getNext() && s->getNext()->kind == Ast::Statement::Elsif ) {
         s = s->getNext();
-        bout << "else if( ";
+        bout << " else if( ";
         Expr(s->rhs, bout);
         bout << " ) { " << endl;
         curLevel++;
@@ -374,7 +379,7 @@ Ast::Statement *CeeGen::IfStat(Ast::Statement *s) {
     }
     if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
         s = s->getNext();
-        bout << "else { " << endl;
+        bout << " else { " << endl;
         curLevel++;
         StatSeq(s->body);
         curLevel--;
@@ -390,7 +395,7 @@ Ast::Statement *CeeGen::CaseStat(Ast::Statement *s) {
     bool hasRange = false;
     while( !hasRange && c && c->kind == Ast::Statement::CaseLabel )
     {
-        Ast::Expression* label = s->rhs;
+        Ast::Expression* label = c->rhs;
         while( label )
         {
             if( label->kind == Expression::Range )
@@ -442,16 +447,16 @@ Ast::Statement *CeeGen::CaseStat(Ast::Statement *s) {
             bout << " ) {" << endl;
             curLevel++;
             StatSeq(s->body);
-            bout << ws() << "}";
             curLevel--;
+            bout << ws() << "}";
         }
         if( s && s->getNext() && s->getNext()->kind == Ast::Statement::Else ) {
             s = s->getNext();
             bout << " else {" << endl;
             curLevel++;
             StatSeq(s->body);
-            bout << ws() << "}" << endl;
             curLevel--;
+            bout << ws() << "}" << endl;
         }
     }else
     {
@@ -513,39 +518,68 @@ void CeeGen::RepeatStat(Ast::Statement *s) {
 Ast::Statement *CeeGen::ForStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::ForAssig);
 
-    bout << "for( ";
-    Ast::Statement* i = s;
-    Expr(i->lhs, bout); // i := val
-    bout << " = ";
-    Expr(i->rhs, bout); // val
-    bout << " ; ";
+    Expression* i = s->lhs;
+    Expression* from = s->rhs;
     Ast::Statement* body = s->body;
+    Q_ASSERT( s->getNext() && s->getNext()->kind == Ast::Statement::ForToBy );
+    s = s->getNext();
+    Expression* to = s->lhs;
+    Expression* by = s->rhs;
 
-    if( s && s->getNext() && s->getNext()->kind == Ast::Statement::ForToBy )
+    const QByteArray temp = "_temp" + QByteArray::number(localId++);
+    bout << "int " << temp << " = ";
+    Expr(to, bout);
+    bout << "; ";
+    Expr(i, bout); // i := val
+    bout << " = ";
+    Expr(from, bout); // val
+    bout << "; ";
+
+    if( by == 0 )
     {
-        s = s->getNext();
-        Expr(i->lhs, bout);
-        bout << " <= ";
-        Expr(s->lhs, bout); // to
-        bout << "; ";
-        if( s->rhs )
-        {
-            // TODO: i < 0
-            Expr(i->lhs, bout);
-            bout << " += ";
-            ConstExpr(s->rhs, bout); // by
-        }else
-        {
-            Expr(i->lhs, bout);
-            bout << "++";
-        }
+        bout << endl;
+        bout << ws() << "while( ";
+        Expr(i, bout);
+        bout << " <= " << temp << " ) {" << endl;
+        curLevel++;
+        StatSeq(body);
+        bout << ws();
+        Expr(i, bout);
+        bout << "++;" << endl;
+        curLevel--;
+        bout << ws() << "}";
     }else
-        invalid("For Statement", s->pos);
-    bout << " ){" << endl;
-    curLevel++;
-    StatSeq(body);
-    curLevel--;
-    bout << ws() << "}";
+    {
+        // TODO: by is actually known at compile time, but we have no evaluator yet
+        const QByteArray step = "_step" + QByteArray::number(localId++);
+        bout << "const int " << step << " = ";
+        ConstExpr(by, bout);
+        bout << "; ";
+        bout << endl;
+        bout << ws() << "if( " << step << " > 0 ) {" << endl;
+        // WHILE v <= temp DO statements; v := v + step END
+        bout << ws() << "while( ";
+        Expr(i, bout);
+        bout << " <= " << temp << " ) {" << endl;
+        curLevel++;
+        StatSeq(body);
+        bout << ws();
+        Expr(i, bout);
+        bout << " += " << step << ";" << endl;
+        curLevel--;
+        bout << ws() << "} else {" << endl;
+        // WHILE v >= temp DO statements; v := v + step END
+        bout << ws() << "while( ";
+        Expr(i, bout);
+        bout << " >= " << temp << " ) {" << endl;
+        curLevel++;
+        StatSeq(body);
+        bout << ws();
+        Expr(i, bout);
+        bout << " += " << step << ";" << endl;
+        curLevel--;
+        bout << ws() << "}";
+    }
     return s;
 }
 
@@ -564,6 +598,7 @@ void CeeGen::LoopStat(Ast::Statement *s) {
 Ast::Statement *CeeGen::WithStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::With);
     // TODO
+    // no WITH statements in OP2 and BootLinker
     Expr(s->lhs, bout);
     Expr(s->rhs, bout);
     StatSeq(s->body);
@@ -709,9 +744,6 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
             return false;
         break;
     case Ast::Expression::Range:
-        if( !range(e, out) )
-            return false;
-        break;
     case Ast::Expression::NameRef:
     default:
         Q_ASSERT(false);
@@ -747,8 +779,11 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
         out << " > ";
         break;
     case Ast::Expression::In:
+        out << " IN "; // TODO
+        break;
     case Ast::Expression::Is:
-        break; // TODO
+        out << " IS "; // TODO
+        break;
     default:
         Q_ASSERT(false);
     }
@@ -854,7 +889,10 @@ bool CeeGen::select(Ast::Expression *e, QTextStream &out)
         out << "->";
     else
         out << ".";
-    Expr(e->rhs, out);
+    Q_ASSERT(e->rhs == 0);
+    Declaration* d = e->val.value<Declaration*>();
+    Q_ASSERT(d);
+    out << d->name;
     return true;
 }
 
@@ -940,17 +978,32 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
 
 bool CeeGen::constructor(Ast::Expression *e, QTextStream &out)
 {
-    Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
     Ast::Expression* elem = e->rhs;
+    out << "(0";
     while( elem )
     {
-        Expr(elem, out);
+        out << " | ";
+        if( elem->kind == Expression::Range )
+        {
+            // TODO: assuming lhs <= rhs
+            out << "(uint32_t)((((uint64_t)1 << (";
+            Expr(elem->rhs, out); // high
+            out << " - ";
+            Expr(elem->lhs, out); // low
+            out << " + 1)) - 1) << ";
+            Expr(elem->lhs, out); // low
+            out << ")";
+        }else
+        {
+            out << "1u << ";
+            Expr(elem, out);
+        }
         elem = elem->next;
     }
-    // TODO
-    return false;
+    out << ")";
+    return true;
 }
 
 bool CeeGen::range(Ast::Expression *e, QTextStream &out)

@@ -14,6 +14,7 @@
 ** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
 */
 #include "AoBuilins.h"
+#include <QtDebug>
 using namespace Ao;
 using namespace Ast;
 
@@ -320,7 +321,8 @@ Type *Builins::deref(Ast::Type *t)
         return mdl->getType(Type::NoType);
     if( t->kind == Type::NameRef )
     {
-        Q_ASSERT( t->validated );
+        if( !t->validated )
+            qWarning() << "Builins::deref type not validated";
         return deref(t->type());
     }else
         return t;
