@@ -27,7 +27,7 @@
 #include <QtCore/QVector>
 #include <QtCore/QByteArray>
 
-// Constants from OFSAosFiles.Mod ----
+// Constants from OFSAosFiles.Mod
 
 static const int DEBUG        = 0;
 static const int MinVolSize   = 4;       // volume size in blocks
@@ -318,20 +318,31 @@ static void Search(Volume& vol, const FileName& name, DiskAdr& A) {
     DiskAdr dadr = DirRootAdr;
     DirPage a;
     for (;;) {
-        if (!GetSector(vol, dadr, &a)) { A = 0; return; }
-        if (a.mark != DirMark) { A = 0; return; }
+        if (!GetSector(vol, dadr, &a)) {
+            A = 0;
+            return;
+        }
+        if (a.mark != DirMark) {
+            A = 0;
+            return;
+        }
         int L = 0, R = a.m;
         while (L < R) {
             int i = (L + R) / 2;
-            if (compareName(name, a.e[i].name) <= 0) R = i;
-            else L = i + 1;
+            if (compareName(name, a.e[i].name) <= 0)
+                R = i;
+            else
+                L = i + 1;
         }
         if (R < a.m && compareName(name, a.e[R].name) == 0) {
             A = a.e[R].adr;
             return;
         }
         DiskAdr next = (R == 0) ? a.p0 : a.e[R-1].p;
-        if (next == 0) { A = 0; return; }
+        if (next == 0) {
+            A = 0;
+            return;
+        }
         dadr = next;
     }
 }
@@ -343,33 +354,43 @@ static void Check(const QString& s, FileName& name, int& res) {
         res = -1;
         return;
     }
+
     int i = 0;
     char ch = ba[0];
+    // first character must be a letter
     if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z'))) {
         res = 3;
         return;
     }
+
     while (true) {
-        if (ch >= 'a' && ch <= 'z') ch = ch - 'a' + 'A';
+        // do NOT change case here; preserve original spelling
         name.name[i] = ch;
         ++i;
+
         if (i >= ba.size()) {
+            // zero‑pad the remaining bytes
             while (i < FnLength) name.name[i++] = 0;
             res = 0;
             return;
         }
+
         ch = ba[i];
+
+        // allow letters, digits and '.'
         if (!(((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) ||
               (ch >= '0' && ch <= '9') || ch == '.')) {
             res = 3;
             return;
         }
+
         if (i == FnLength - 1) {
-            res = 4;
+            res = 4;   // too long
             return;
         }
     }
 }
+
 
 static SuperIndex NewSuper() {
     SuperIndex s = new SuperIndexRecord;
@@ -565,6 +586,114 @@ static bool writeHostFileIntoAos(File f, const QString& hostPath) {
     return true;
 }
 
+// Resolve the DiskAdr of page 'pos' (0 = header, 1..aleng = data pages)
+// using the same scheme as OFSAosFiles.ReadBuf. pos>0 only is used here.
+static bool getFilePageSector(Volume& vol,
+                              const FileHeader& h,
+                              qint32 pos,
+                              DiskAdr& secAdr)
+{
+    if (pos < 0) return false;
+    if (pos < STS) {
+        secAdr = h.sec.sec[pos];
+        return secAdr != 0;
+    }
+
+    if (h.ext == 0) return false;
+
+    qint32 xpos = pos - STS;
+    qint32 i = xpos / XS;
+    qint32 k = xpos % XS;
+    if (i < 0 || i >= XS) return false;
+
+    IndexSector superSec;
+    if (!GetSector(vol, h.ext, &superSec)) return false;
+
+    DiskAdr subAdr = superSec.x[i];
+    if (subAdr == 0) return false;
+
+    IndexSector subSec;
+    if (!GetSector(vol, subAdr, &subSec)) return false;
+
+    secAdr = subSec.x[k];
+    return secAdr != 0;
+}
+
+// Export an Aos file identified by FileName 'name' to 'hostPath'.
+// Returns false on not found or any error.
+static bool extractAosFile(FileSystem* fs,
+                           const FileName& name,
+                           const QString& hostPath)
+{
+    Volume& vol = fs->vol;
+
+    // 1) Find header sector by name (directory B-tree Search)
+    DiskAdr headerAdr = 0;
+    Search(vol, name, headerAdr);
+    if (headerAdr == 0) {
+        return false; // not found
+    }
+
+    // 2) Read header
+    FileHeader h;
+    if (!GetSector(vol, headerAdr, &h)) {
+        return false;
+    }
+    if (h.mark != HeaderMark) {
+        return false; // invalid / deleted file
+    }
+
+    // 3) Compute data length (excluding header)
+    qint64 dataLen = (qint64)h.aleng * SS + (qint64)h.bleng - HS;
+    if (dataLen < 0) {
+        return false;
+    }
+
+    // 4) Open host file for writing in current directory
+    QFile host(hostPath);
+    if (!host.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+
+    qint64 remaining = dataLen;
+
+    // 5) First chunk is stored in header.data
+    qint64 first = qMin(remaining, (qint64)(SS - HS));
+    if (first > 0) {
+        if (host.write(h.data, first) != first) {
+            return false;
+        }
+        remaining -= first;
+    }
+
+    if (remaining <= 0) {
+        return true; // everything was in the header
+    }
+
+    // 6) Remaining data sectors: pages 1..h.aleng
+    DataSector ds;
+    for (qint32 pos = 1; pos <= h.aleng && remaining > 0; ++pos) {
+        DiskAdr secAdr = 0;
+        if (!getFilePageSector(vol, h, pos, secAdr)) {
+            return false;
+        }
+        if (!GetSector(vol, secAdr, &ds)) {
+            return false;
+        }
+
+        qint64 toWrite = qMin(remaining, (qint64)SS);
+        if (toWrite > 0) {
+            if (host.write(reinterpret_cast<const char*>(ds.B), toWrite)
+                != toWrite) {
+                return false;
+            }
+            remaining -= toWrite;
+        }
+    }
+
+    return remaining == 0;
+}
+
 static void PurgeOnDisk(FileSystem* fs, DiskAdr hdadr) {
     Volume& vol = fs->vol;
     FileHeader hd;
@@ -714,6 +843,544 @@ static int deleteFile(FileSystem* fs, const FileName& name, DiskAdr& key) {
     return 0;
 }
 
+// Boot / partition layout helpers (from Partitions.Mod)
+
+static const int BS = 512;              // boot / partition block size (Disks.blockSize)
+static const int LoaderSize = 4;        // OBL.Bin size in 512-byte blocks
+static const qint32 FSID_AOS = 0x21534F41; // "AOS!" in little endian
+static const qint32 ConfigType = 8;     // config-string entry type
+static const qint32 FragType = 7;       // bootfile fragment entry type
+
+// Little-endian helpers for a QByteArray representing raw disk bytes (512-byte blocks)
+static inline qint32 get4(const QByteArray& b, int pos)
+{
+    const unsigned char* p =
+        reinterpret_cast<const unsigned char*>(b.constData() + pos);
+    return (qint32)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
+}
+
+static inline qint32 get2(const QByteArray& b, int pos)
+{
+    const unsigned char* p =
+        reinterpret_cast<const unsigned char*>(b.constData() + pos);
+    return (qint32)(p[0] | (p[1] << 8));
+}
+
+static inline void put4(QByteArray& b, int pos, qint32 v)
+{
+    unsigned char* p = reinterpret_cast<unsigned char*>(b.data() + pos);
+    p[0] = (unsigned char)(v & 0xFF);
+    p[1] = (unsigned char)((v >> 8) & 0xFF);
+    p[2] = (unsigned char)((v >> 16) & 0xFF);
+    p[3] = (unsigned char)((v >> 24) & 0xFF);
+}
+
+// Small helper for printing %HH escapes when dumping config values
+static inline char hexDigit(int v)
+{
+    v &= 0xF;
+    return (char)(v < 10 ? ('0' + v) : ('A' + (v - 10)));
+}
+
+// Helpers for decoding %HH when reading config from a text file
+static inline bool isHexChar(QChar ch)
+{
+    ushort c = ch.unicode();
+    return (c >= '0' && c <= '9') ||
+           (c >= 'A' && c <= 'F') ||
+           (c >= 'a' && c <= 'f');
+}
+
+static inline int hexVal(QChar ch)
+{
+    ushort c = ch.unicode();
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    return 0;
+}
+
+// Read OBL variables (tsize, reserved, fsOfs) from the first 512-byte block.
+// Returns false if no valid Oberon boot block is present.
+static bool getBootParams(const QString& imagePath,
+                          int& tsize,
+                          int& reserved,
+                          qint32& fsOfs)
+{
+    QFile f(imagePath);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+
+    QByteArray b = f.read(BS);
+    if (b.size() != BS)
+        return false;
+
+    // Check standard 0x55AA signature
+    if ((unsigned char)b[510] != 0x55 || (unsigned char)b[511] != 0xAA)
+        return false;
+
+    // Check "OBERON" signature at bytes 3..8
+    if (b.mid(3, 6) != QByteArray("OBERON"))
+        return false;
+
+    // Config table size in blocks
+    tsize = (unsigned char)b[0x10];
+    if (tsize <= 0)
+        return false;
+
+    // Reserved blocks (includes loader, config table, boot file area, maybe N2KFS)
+    reserved = get2(b, 0x0E);
+    if (reserved < LoaderSize + tsize)
+        return false;
+
+    // Check for AosFS table ("AOS!") id at 0x1F8
+    qint32 id = get4(b, 0x1F8);
+    if (id == FSID_AOS) {
+        fsOfs = get4(b, 0x1F0);   // fileSystemOfs in 512-byte blocks
+    } else {
+        // Old layout: use reserved for fsOfs
+        fsOfs = reserved;
+    }
+
+    return true;
+}
+
+// Detect where the AosFS volume starts in a raw image.
+// If an Oberon boot block is present, use its fsOfs; otherwise,
+// fall back to treating the image as a bare AosFS volume and
+// look for DirMark in the first 4K sector.
+static bool detectAosFsOffset(const QString& imagePath,
+                              qint64& baseOffsetBytes)
+{
+    int tsize = 0;
+    int reserved = 0;
+    qint32 fsOfs = 0;
+
+    if (getBootParams(imagePath, tsize, reserved, fsOfs)) {
+        baseOffsetBytes = (qint64)fsOfs * BS;
+        return true;
+    }
+
+    // Fallback: bare AosFS volume, root directory sector at offset 0
+    QFile f(imagePath);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+
+    QByteArray first = f.read(SS);
+    if (first.size() != SS)
+        return false;
+
+    qint32 mark = 0;
+    ::memcpy(&mark, first.constData(), sizeof(qint32));
+    if (mark == DirMark) {
+        baseOffsetBytes = 0;
+        return true;
+    }
+
+    return false;
+}
+
+// Read the config table into 'table' and return its size in blocks (tsize).
+// Returns false if there is no valid Oberon boot block.
+static bool readConfigTable(const QString& imagePath,
+                            QByteArray& table,
+                            int& tsize)
+{
+    int reserved = 0;
+    qint32 fsOfs = 0;
+    if (!getBootParams(imagePath, tsize, reserved, fsOfs))
+        return false;
+
+    QFile f(imagePath);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+
+    qint64 offset = (qint64)LoaderSize * BS; // blocks 4..(4+tsize-1)
+    if (!f.seek(offset))
+        return false;
+
+    table.resize(tsize * BS);
+    qint64 n = f.read(table.data(), table.size());
+    return n == table.size();
+}
+
+// Write back the config table (same size tsize*BS).
+static bool writeConfigTable(const QString& imagePath,
+                             const QByteArray& table,
+                             int tsize)
+{
+    QFile f(imagePath);
+    if (!f.open(QIODevice::ReadWrite))
+        return false;
+
+    qint64 offset = (qint64)LoaderSize * BS;
+    if (!f.seek(offset))
+        return false;
+
+    qint64 n = f.write(table.constData(), tsize * BS);
+    return n == (qint64)tsize * BS;
+}
+
+// Find the next entry of the specified type in 'table', starting at byte index 'start'.
+// Returns the byte index of the entry header (where the type field lives), or -1.
+static int findEntryType(const QByteArray& table,
+                         int start,
+                         qint32 type)
+{
+    int pos = start;
+    const int len = table.size();
+
+    while (pos + 8 <= len) {
+        qint32 t = get4(table, pos);
+        qint32 size = get4(table, pos + 4);
+        if (t == type)
+            return pos;
+        if (t == -1)
+            return -1;
+        if (size <= 0 || pos + size > len)
+            return -1;
+        pos += size;
+    }
+    return -1;
+}
+
+// Print configuration strings (type 8 entry) to 'out'.
+static bool printConfigToStream(const QString& imagePath,
+                                QTextStream& out)
+{
+    QByteArray table;
+    int tsize = 0;
+    if (!readConfigTable(imagePath, table, tsize))
+        return false;
+
+    int pos = findEntryType(table, 0, ConfigType);
+    if (pos < 0) {
+        out << "No config (type 8) entry found\n";
+        return true; // table is valid but has no config entry
+    }
+
+    int dataPos = pos + 8;
+    const int endPos = pos + get4(table, pos + 4);
+    if (endPos > table.size())
+        return false;
+
+    out << "Config:\n";
+
+    while (dataPos < endPos && table[dataPos] != 0) {
+        // Read name
+        QByteArray name;
+        while (dataPos < endPos && table[dataPos] != 0) {
+            name.append(table[dataPos]);
+            ++dataPos;
+        }
+        if (dataPos >= endPos)
+            break;
+        ++dataPos; // skip name 0
+
+        // Read value
+        QByteArray value;
+        while (dataPos < endPos && table[dataPos] != 0) {
+            value.append(table[dataPos]);
+            ++dataPos;
+        }
+        if (dataPos >= endPos)
+            break;
+        ++dataPos; // skip value 0
+
+        // Print: name="value"
+        out << " " << name.constData() << "=\"";
+        for (int i = 0; i < value.size(); ++i) {
+            unsigned char ch = (unsigned char)value[i];
+            if (ch >= ' ' && ch < 0x7F && ch != '%') {
+                out << (char)ch;
+            } else {
+                out << "%" << hexDigit(ch >> 4) << hexDigit(ch & 0xF);
+            }
+        }
+        out << "\"\n";
+    }
+
+    return true;
+}
+
+// Parse a text file with lines of the form: NAME="value"
+// and build a config payload (name 0 value 0 ... 0, final 0).
+// Returns false on syntax error.
+static bool buildConfigFromTextFile(const QString& cfgPath,
+                                    QByteArray& payload,
+                                    QTextStream& out)
+{
+    QFile cfg(cfgPath);
+    if (!cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        out << "Cannot open config file " << cfgPath << "\n";
+        return false;
+    }
+
+    QTextStream in(&cfg);
+    in.setCodec("ISO-8859-1");
+
+    payload.clear();
+
+    while (!in.atEnd()) {
+        QString line = in.readLine();
+        QString trimmed = line.trimmed();
+        if (trimmed.isEmpty())
+            continue;
+        if (trimmed.startsWith('#'))
+            continue;
+
+        int eqPos = trimmed.indexOf('=');
+        if (eqPos <= 0) {
+            out << "Syntax error in config line: " << trimmed << "\n";
+            return false;
+        }
+
+        QString nameStr = trimmed.left(eqPos).trimmed();
+        QString rest = trimmed.mid(eqPos + 1).trimmed();
+        if (rest.isEmpty() || !rest.startsWith('"')) {
+            out << "Expected quoted value in line: " << trimmed << "\n";
+            return false;
+        }
+
+        // Find closing quote
+        int endQuote = rest.indexOf('"', 1);
+        if (endQuote < 0) {
+            out << "Unterminated value in line: " << trimmed << "\n";
+            return false;
+        }
+
+        QString valStr = rest.mid(1, endQuote - 1);
+
+        // Encode name as ASCII
+        QByteArray nameBytes = nameStr.toLatin1();
+        if (nameBytes.isEmpty()) {
+            out << "Empty name in line: " << trimmed << "\n";
+            return false;
+        }
+
+        // Decode %HH in value
+        QByteArray valBytes;
+        for (int i = 0; i < valStr.size(); ) {
+            QChar ch = valStr.at(i);
+            if (ch == '%' && i + 2 < valStr.size() &&
+                isHexChar(valStr.at(i+1)) && isHexChar(valStr.at(i+2))) {
+                int v = (hexVal(valStr.at(i+1)) << 4) + hexVal(valStr.at(i+2));
+                if (v == 0) {
+                    out << "Config value contains NUL (not allowed)\n";
+                    return false;
+                }
+                valBytes.append((char)v);
+                i += 3;
+            } else {
+                if (ch.unicode() == 0) {
+                    out << "Config value contains NUL (not allowed)\n";
+                    return false;
+                }
+                valBytes.append((char)ch.toLatin1());
+                ++i;
+            }
+        }
+
+        // Append name 0 value 0
+        payload.append(nameBytes);
+        payload.append('\0');
+        payload.append(valBytes);
+        payload.append('\0');
+    }
+
+    // Final 0 terminator
+    payload.append('\0');
+    return true;
+}
+
+// Replace all type-8 entries with a single new one built from 'payload'.
+static bool writeConfigFromPayload(const QString& imagePath,
+                                   const QByteArray& payload,
+                                   QTextStream& out)
+{
+    QByteArray table;
+    int tsize = 0;
+    if (!readConfigTable(imagePath, table, tsize)) {
+        out << "No valid Oberon boot block / config table\n";
+        return false;
+    }
+
+    const int totalSize = table.size();
+    QByteArray newTable(totalSize, 0);
+
+    // Copy all entries except type 8 into newTable
+    int posOld = 0;
+    int posNew = 0;
+
+    while (posOld + 8 <= totalSize) {
+        qint32 t = get4(table, posOld);
+        qint32 size = get4(table, posOld + 4);
+        if (t == -1 || size <= 0 || posOld + size > totalSize)
+            break;
+
+        if (t != ConfigType) {
+            if (posNew + size + 8 > totalSize) {
+                out << "Config table overflow while copying entries\n";
+                return false;
+            }
+            ::memcpy(newTable.data() + posNew,
+                     table.constData() + posOld,
+                     size);
+            posNew += size;
+        }
+
+        posOld += size;
+    }
+
+    // Add new type-8 entry
+    int dsize = payload.size();
+    int entrySize = ((dsize + 3) / 4) * 4 + 8; // padded to multiple of 4 + header
+    if (posNew + entrySize + 8 > totalSize) {
+        out << "Config payload too large for table\n";
+        return false;
+    }
+
+    put4(newTable, posNew, ConfigType);
+    put4(newTable, posNew + 4, entrySize);
+
+    ::memcpy(newTable.data() + posNew + 8,
+             payload.constData(),
+             dsize);
+
+    // Zero padding
+    int padStart = posNew + 8 + dsize;
+    int padEnd   = posNew + entrySize;
+    for (int i = padStart; i < padEnd; ++i)
+        newTable[i] = 0;
+
+    posNew += entrySize;
+
+    // End marker (type = -1, size = 8)
+    if (posNew + 8 <= totalSize) {
+        put4(newTable, posNew, -1);
+        put4(newTable, posNew + 4, 8);
+        // Remaining bytes stay 0
+    }
+
+    if (!writeConfigTable(imagePath, newTable, tsize)) {
+        out << "Failed to write config table\n";
+        return false;
+    }
+
+    return true;
+}
+
+// Extract Native.Bin (boot file) from the boot area and write it to 'hostPath'.
+static bool extractBootFileToHost(const QString& imagePath,
+                                  const QString& hostPath,
+                                  QTextStream& out)
+{
+    int tsize = 0;
+    int reserved = 0;
+    qint32 fsOfs = 0;
+    if (!getBootParams(imagePath, tsize, reserved, fsOfs)) {
+        out << "No valid Oberon boot block / AosFS info\n";
+        return false;
+    }
+
+    QByteArray table;
+    if (!readConfigTable(imagePath, table, tsize)) {
+        out << "Cannot read config table\n";
+        return false;
+    }
+
+    int pos = findEntryType(table, 0, FragType);
+    if (pos < 0) {
+        out << "No bootfile (type 7) entry found\n";
+        return false;
+    }
+
+    int size = get4(table, pos + 4);
+    int dataPos = pos + 8;
+    if (dataPos + 20 > table.size() || pos + size > table.size()) {
+        out << "Invalid bootfile entry in config table\n";
+        return false;
+    }
+
+    // Layout from InitBootFile:
+    // data[0]  = LoadAdr
+    // data[4]  = Frags + (sum << 16)
+    // data[8]  = StartAdr
+    // data[12] = pos (rel. to start)
+    // data[16] = number of blocks
+    qint32 loadAdr    = get4(table, dataPos + 0);
+    qint32 fragsSum   = get4(table, dataPos + 4);
+    qint32 startAdr   = get4(table, dataPos + 8);
+    qint32 relPos     = get4(table, dataPos + 12);
+    qint32 numBlocks  = get4(table, dataPos + 16);
+
+    Q_UNUSED(loadAdr);
+    Q_UNUSED(startAdr);
+    Q_UNUSED(relPos);
+
+    int frags = fragsSum & 0xFFFF;
+    if (frags != 1) {
+        out << "Unsupported number of fragments: " << frags << "\n";
+        return false;
+    }
+    if (numBlocks <= 0) {
+        out << "Bootfile has zero size\n";
+        return false;
+    }
+
+    qint32 startBlock = LoaderSize + tsize;
+    qint64 bootOffset = (qint64)startBlock * BS;
+    qint64 bootBytes  = (qint64)numBlocks * BS;
+    qint64 fsOffset   = (qint64)fsOfs * BS;
+
+    // Sanity: bootfile must lie completely before the filesystem start
+    if (bootOffset + bootBytes > fsOffset) {
+        out << "Bootfile overlaps filesystem area\n";
+        return false;
+    }
+
+    QFile img(imagePath);
+    if (!img.open(QIODevice::ReadOnly)) {
+        out << "Cannot open image " << imagePath << "\n";
+        return false;
+    }
+    if (!img.seek(bootOffset)) {
+        out << "Seek failed in image\n";
+        return false;
+    }
+
+    QFile host(hostPath);
+    if (!host.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        out << "Cannot open output file " << hostPath << "\n";
+        return false;
+    }
+
+    const qint64 chunk = 64 * 1024;
+    qint64 remaining = bootBytes;
+    QByteArray buf;
+    buf.resize((int)qMin(chunk, remaining));
+
+    while (remaining > 0) {
+        qint64 toRead = qMin(chunk, remaining);
+        if (buf.size() < toRead)
+            buf.resize((int)toRead);
+        qint64 n = img.read(buf.data(), (int)toRead);
+        if (n != toRead) {
+            out << "Short read while copying bootfile\n";
+            return false;
+        }
+        if (host.write(buf.constData(), (int)toRead) != toRead) {
+            out << "Write error while copying bootfile\n";
+            return false;
+        }
+        remaining -= toRead;
+    }
+
+    out << "Extracted bootfile (" << numBlocks
+        << " blocks) to " << hostPath << "\n";
+    return true;
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -725,7 +1392,11 @@ int main(int argc, char** argv)
         out << "  " << args[0] << " mkfs <image> <blocks>\n";
         out << "  " << args[0] << " ls   <image>\n";
         out << "  " << args[0] << " add  <image> <hostPath> <oberonName>\n";
+        out << "  " << args[0] << " get <image> <oberonName>\n";
         out << "  " << args[0] << " rm   <image> <oberonName>\n";
+        out << "  " << args[0] << " getboot <image> [hostPath]\n";
+        out << "  " << args[0] << " getconf <image>\n";
+        out << "  " << args[0] << " setconf <image> <configTextFile>\n";
         return 1;
     }
 
@@ -758,9 +1429,15 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    // default FSRes = 512 * 1024;
-    const qint64 fsResBytes = 512 * 1024;
-    if (!fs.vol.openExisting(image, fsResBytes)) {
+    // For all other commands, auto-detect AosFS offset (boot area vs bare volume)
+    // default baseOffsetBytes = 512 * 1024;
+    qint64 baseOffsetBytes = 0;
+    if (!detectAosFsOffset(image, baseOffsetBytes)) {
+        out << "Cannot detect AosFS in image " << image << "\n";
+        return 1;
+    }
+
+    if (!fs.vol.openExisting(image, baseOffsetBytes)) {
         out << "Cannot open image " << image << "\n";
         return 1;
     }
@@ -804,6 +1481,67 @@ int main(int argc, char** argv)
 
         out << "Added " << obName << "\n";
         return 0;
+    } else if (cmd == "get") {
+        if (args.size() != 4) {
+            out << "get requires <oberonName>\n";
+            return 1;
+        }
+
+        QString obName = args[3];
+
+        FileName fname;
+        int res;
+        Check(obName, fname, res);
+        if (res != 0 && res != -1) {
+            out << "Invalid Oberon name\n";
+            return 1;
+        }
+
+        // Write to a file with the same name in the current directory.
+        // You could also map to a different host filename if desired.
+        QString hostPath = obName;
+
+        if (!extractAosFile(&fs, fname, hostPath)) {
+            out << "Not found or failed to extract\n";
+            return 1;
+        }
+
+        out << "Extracted " << obName << " -> " << hostPath << "\n";
+        return 0;
+
+    } else if (cmd == "getboot") {
+        // Usage: aosfs getboot <image> [hostPath]
+        QString hostPath;
+        if (args.size() >= 4)
+            hostPath = args[3];
+        else
+            hostPath = "Native.bin";
+
+        if (!extractBootFileToHost(image, hostPath, out))
+            return 1;
+        return 0;
+
+    } else if (cmd == "getconf") {
+        // Usage: aosfs getconf <image>
+        if (!printConfigToStream(image, out))
+            return 1;
+        return 0;
+
+    } else if (cmd == "setconf") {
+        // Usage: aosfs setconf <image> <configTextFile>
+        if (args.size() != 4) {
+            out << "setconf requires <image> <configTextFile>\n";
+            return 1;
+        }
+        QString cfgPath = args[3];
+        QByteArray payload;
+        if (!buildConfigFromTextFile(cfgPath, payload, out))
+            return 1;
+        if (!writeConfigFromPayload(image, payload, out))
+            return 1;
+        out << "Config written\n";
+        return 0;
+
     } else if (cmd == "rm") {
         if (args.size() != 4) {
             out << "rm requires <oberonName>\n";
