@@ -377,7 +377,7 @@ bool Type::isDerefByteArray() const
 
 Type*Type::deref() const
 {
-    if( kind == NameRef )
+    if( kind == NameRef || kind == Reference )
     {
         if( type() == 0 )
             return const_cast<Type*>(this);

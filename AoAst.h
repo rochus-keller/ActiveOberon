@@ -138,6 +138,7 @@ namespace Ast
             ANYOBJ,
             MaxBasicType,
             Pointer,
+            Reference, // the type of a VAR param within a procedure
             Procedure,
             Array,
             Record,

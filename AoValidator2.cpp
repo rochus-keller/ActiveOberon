@@ -402,6 +402,9 @@ bool Validator2::Type_(Ast::Type* t) {
     case Ast::Type::Pointer:
         res = PointerType(t);
         break;
+    case Ast::Type::Reference:
+        res = Type_(t->type());
+        break;
     case Ast::Type::Procedure:
         res = ProcedureType(t);
         break;
@@ -1641,7 +1644,7 @@ Type *Validator2::deref(Ast::Type *t)
     // never returns zero
     if( t == 0 )
         return mdl->getType(Type::NoType);
-    if( t->kind == Type::NameRef )
+    if( t->kind == Type::NameRef || t->kind == Type::Reference )
     {
         if( !t->validated )
         {

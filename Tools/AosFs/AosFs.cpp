@@ -1431,11 +1431,14 @@ int main(int argc, char** argv)
 
     // For all other commands, auto-detect AosFS offset (boot area vs bare volume)
     // default baseOffsetBytes = 512 * 1024;
-    qint64 baseOffsetBytes = 0;
+    qint64 baseOffsetBytes = 512 * 1024;
+#if 0
+    // TODO: doesn't work yet
     if (!detectAosFsOffset(image, baseOffsetBytes)) {
         out << "Cannot detect AosFS in image " << image << "\n";
         return 1;
     }
+#endif
 
     if (!fs.vol.openExisting(image, baseOffsetBytes)) {
         out << "Cannot open image " << image << "\n";

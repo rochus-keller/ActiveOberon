@@ -765,6 +765,14 @@ void Parser2::FPSection() {
     }
 	expect(Tok_Colon, false, "FPSection");
     Type* t = Type_();
+    if( varParam )
+    {
+        Type* ref = new Type();
+        ref->kind = Type::Reference;
+        ref->setType(t);
+        ref->pos = t->pos;
+        t = ref;
+    }
     for(int i = 0; i < l.size(); i++ )
     {
         Declaration* d = addDecl(l[i], 0, Declaration::ParamDecl);
