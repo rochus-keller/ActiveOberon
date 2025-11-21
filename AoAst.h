@@ -67,7 +67,7 @@ namespace Ast
 
         uint validated : 1;
         uint inList : 1; // private
-        uint forward : 1; // Type and Expression NameRefs
+        uint forward : 1; // Type and Expression NameRefs, external procs
         uint nonlocal : 1; // namerefs, proc decls
 
         // Type:

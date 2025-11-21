@@ -68,7 +68,7 @@ namespace Ao {
 		void TypeDecl();
         void VarDecl(bool inObjectType = false);
         QByteArray Assembler();
-        void ProcDecl();
+        bool ProcDecl();
         Ast::Declaration* ProcHead(bool forwardDecl);
         bool SysFlag();
         Ast::Type* FormalPars();

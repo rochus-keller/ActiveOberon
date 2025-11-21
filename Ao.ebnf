@@ -29,7 +29,7 @@ Assembler ::= CODE
 ProcDecl ::= PROCEDURE ( 
                             ProcHead ';' DeclSeq [Body|Assembler] END ident
                             | '^' ProcHead ) // forward declarations appear many times in Bluebottle source tree
-ProcHead ::= [SysFlag] ['*' | '&' | '-'] IdentDef [FormalPars]
+ProcHead ::= [SysFlag] ['*' | '&' | '-' | '~'] IdentDef [FormalPars] // ~ added by RK for external procs
 SysFlag ::= '[' ident ']' // NOTE: only used in IdentDef and only for 'UNTRACED' in AOS/Bluebottle source code
 FormalPars ::= '(' [FPSection {';' FPSection}] ')' [':' Qualident]
 FPSection ::= [VAR] ident {',' ident} ':' Type

@@ -54,7 +54,7 @@ static inline bool FIRST_ProcDecl(int tt) {
 }
 
 static inline bool FIRST_ProcHead(int tt) {
-	return tt == Tok_Amp || tt == Tok_Minus || tt == Tok_Star || tt == Tok_Lbrack || tt == Tok_ident;
+    return tt == Tok_Amp || tt == Tok_Minus || tt == Tok_Star || tt == Tok_Lbrack || tt == Tok_ident || tt == Tok_Tilde;
 }
 
 static inline bool FIRST_SysFlag(int tt) {
@@ -585,8 +585,8 @@ void Parser2::DeclSeq(bool inObjectType) {
 			}
 		} else if( FIRST_ProcDecl(la.d_type) || la.d_type == Tok_END || la.d_type == Tok_CONST || la.d_type == Tok_END || la.d_type == Tok_VAR || la.d_type == Tok_TYPE || la.d_type == Tok_CODE || la.d_type == Tok_BEGIN || la.d_type == Tok_PROCEDURE || la.d_type == Tok_END ) {
 			while( FIRST_ProcDecl(la.d_type) ) {
-				ProcDecl();
-				expect(Tok_Semi, false, "DeclSeq");
+                if( !ProcDecl() )
+                    expect(Tok_Semi, false, "DeclSeq");
 			}
 		} else
             invalid("DeclSeq", true);
@@ -646,30 +646,35 @@ QByteArray Parser2::Assembler() {
     return cur.d_val;
 }
 
-void Parser2::ProcDecl() {
+bool Parser2::ProcDecl() {
 	expect(Tok_PROCEDURE, false, "ProcDecl");
 	if( FIRST_ProcHead(la.d_type) ) {
         Declaration* procDecl = ProcHead(false);
 		expect(Tok_Semi, false, "ProcDecl");
-        mdl->openScope(procDecl);
-        DeclSeq();
-		if( FIRST_Body(la.d_type) || FIRST_Assembler(la.d_type) ) {
-			if( FIRST_Body(la.d_type) ) {
-                procDecl->body = Body();
-			} else if( FIRST_Assembler(la.d_type) ) {
-                procDecl->data = Assembler();
-                procDecl->body = new Ast::Statement(Ast::Statement::Assembler);
-			} else
-				invalid("ProcDecl");
-		}
-		expect(Tok_END, false, "ProcDecl");
-		expect(Tok_ident, false, "ProcDecl");
-        mdl->closeScope();
+        if( !procDecl->forward )
+        {
+            mdl->openScope(procDecl);
+            DeclSeq();
+            if( FIRST_Body(la.d_type) || FIRST_Assembler(la.d_type) ) {
+                if( FIRST_Body(la.d_type) ) {
+                    procDecl->body = Body();
+                } else if( FIRST_Assembler(la.d_type) ) {
+                    procDecl->data = Assembler();
+                    procDecl->body = new Ast::Statement(Ast::Statement::Assembler);
+                } else
+                    invalid("ProcDecl");
+            }
+            expect(Tok_END, false, "ProcDecl");
+            expect(Tok_ident, false, "ProcDecl");
+            mdl->closeScope();
+        } else
+            return true; // external proc
     } else if( la.d_type == Tok_Hat ) {
 		expect(Tok_Hat, false, "ProcDecl");
         ProcHead(true);
     } else
 		invalid("ProcDecl");
+    return false;
 }
 
 Declaration* Parser2::ProcHead(bool forwardDecl) {
@@ -677,14 +682,18 @@ Declaration* Parser2::ProcHead(bool forwardDecl) {
         SysFlag(); // ignore
 	}
     bool isConstr = false;
-	if( la.d_type == Tok_Star || la.d_type == Tok_Amp || la.d_type == Tok_Minus ) {
+    bool isExtern = false;
+    if( la.d_type == Tok_Star || la.d_type == Tok_Amp || la.d_type == Tok_Minus || la.d_type == Tok_Tilde ) {
 		if( la.d_type == Tok_Star ) {
-			expect(Tok_Star, false, "ProcHead");
+            expect(Tok_Star, false, "ProcHead"); // interrupt handler
 		} else if( la.d_type == Tok_Amp ) {
-			expect(Tok_Amp, false, "ProcHead");
+            expect(Tok_Amp, false, "ProcHead"); // constructor
             isConstr = true;
 		} else if( la.d_type == Tok_Minus ) {
-			expect(Tok_Minus, false, "ProcHead");
+            expect(Tok_Minus, false, "ProcHead"); // inline
+        } else if( la.d_type == Tok_Tilde ) {
+            expect(Tok_Tilde, false, "ProcHead"); // extern
+            isExtern = true;
 		} else
 			invalid("ProcHead");
 	}
@@ -707,6 +716,7 @@ Declaration* Parser2::ProcHead(bool forwardDecl) {
         return 0;
 
     procDecl->constructor = isConstr;
+    procDecl->forward = isExtern;
 
     procDecl->outer = mdl->getTopScope();
     mdl->openScope(procDecl);
