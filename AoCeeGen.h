@@ -21,6 +21,7 @@
 */
 
 #include <ActiveOberon/AoAst.h>
+#include <ActiveOberon/AoClosureLifter.h>
 #include <QTextStream>
 #include <QSet>
 
@@ -44,7 +45,7 @@ protected:
     void Module(Ast::Declaration* module);
     void ImportDecl(Ast::Declaration *import);
     Ast::Declaration *ImportList(Ast::Declaration *import);
-    Ast::Declaration *DeclSeq(Ast::Declaration *d);
+    Ast::Declaration *DeclSeq(Ast::Declaration *d, bool doProcs, bool doOthers);
     void ConstDecl(Ast::Declaration *);
     void TypeDecl(Ast::Declaration *);
     void VarDecl(Ast::Declaration *);
@@ -118,6 +119,8 @@ private:
     QList<Ast::Statement*> loopStack;
     QSet<const char*> keywords;
     int curLevel, localId;
+    Ast::ClosureLifter cl;
+    const Ast::ClosureLifter::ProcPlan* curPlan;
 };
 
 }

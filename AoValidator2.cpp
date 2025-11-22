@@ -1365,6 +1365,7 @@ bool Validator2::nameRef(Ast::Expression * nameRef)
             Q_ASSERT(r.second->outer->kind == Declaration::Procedure);
             r.second->outer->nonlocal = true;
             // accessing parameter or local variable of outer procedures
+            // qDebug() << "non-local access" << module->name << nameRef->pos.d_col << nameRef->pos.d_row;
         }
     }
     return true;

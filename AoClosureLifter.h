@@ -52,6 +52,7 @@ public:
         QSet<Declaration*>    directFree;     // direct free variables used in body
         QList<Declaration*>   outerProcs;     // lexical ancestors (outermost first)
         QList<Declaration*>   callees;        // direct nested-proc callees (by DeclRef)
+        const LiftParam* findFromSourceDecl(Declaration* sourceDecl) const;
     };
 
 
@@ -66,6 +67,7 @@ public:
     // return plans for all nested procedures that need to accept
     // and/or forward extra VAR parameters (including intermediates).
     const QVector<ProcPlan>& plans() const { return plans_; }
+    const ProcPlan* plan(Declaration*) const;
 
 private:
     // Internal per-procedure state during analysis.

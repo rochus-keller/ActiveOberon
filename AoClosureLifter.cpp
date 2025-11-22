@@ -183,6 +183,16 @@ void ClosureLifter::printPlans(QTextStream& out) const
     }
 }
 
+const ClosureLifter::ProcPlan* ClosureLifter::plan(Declaration * module) const
+{
+    for(int i = 0; i < plans_.size(); i++ )
+    {
+        if( plans_[i].proc == module )
+            return &plans_[i];
+    }
+    return 0;
+}
+
 void ClosureLifter::indexProcedure(Declaration* proc)
 {
     if (!proc || proc->kind != Declaration::Procedure) return;
@@ -381,3 +391,11 @@ int ClosureLifter::depthOfOwner(Declaration* d) const
     return depth;
 }
 
+
+const ClosureLifter::LiftParam *ClosureLifter::ProcPlan::findFromSourceDecl(Declaration *sourceDecl) const
+{
+    foreach( const LiftParam& p, addedParams )
+        if( p.sourceDecl == sourceDecl )
+            return &p;
+    return 0;
+}

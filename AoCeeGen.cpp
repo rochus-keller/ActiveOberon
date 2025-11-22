@@ -44,7 +44,20 @@ QByteArray CeeGen::qualident(Declaration* d)
     if( d->outer && d->kind != Declaration::LocalDecl && d->kind != Declaration::ParamDecl )
         return qualident(d->outer) + "$" + escape(d->name);
     else
-        return escape(d->name);
+    {
+        const bool nonlocal = d->outer != curProc && ( d->kind == Declaration::LocalDecl || d->kind == Declaration::ParamDecl );
+        if(nonlocal)
+        {
+            QByteArray res = "(*";
+            res += escape(d->name);
+            res += ")";
+            return res;
+        }else
+        {
+
+            return escape(d->name);
+        }
+    }
 }
 
 bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *body) {
@@ -53,6 +66,8 @@ bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *bo
     curMod = module;
     curLevel = 0;
     localId = 0;
+    curPlan = 0;
+    curProc = 0;
     hout.setDevice(header);
     QString dummy;
     if( body )
@@ -194,11 +209,13 @@ static inline void dummy() {}
 
 void CeeGen::Module(Ast::Declaration *module) {
 
+    cl.analyze(module);
+
     Ast::Declaration* d = module->link;
     if( d && d->kind == Ast::Declaration::Import ) {
         d = ImportList(d);
     }
-    d = DeclSeq(d);
+    d = DeclSeq(d, true, true);
     if( d && d->body ) {
         StatBlock(d->body);
     }
@@ -220,32 +237,32 @@ Ast::Declaration* CeeGen::ImportList(Ast::Declaration* import) {
     return import;
 }
 
-Ast::Declaration* CeeGen::DeclSeq(Ast::Declaration* d) {
+Ast::Declaration* CeeGen::DeclSeq(Ast::Declaration* d, bool doProcs, bool doOthers) {
     while( d && (d->kind == Ast::Declaration::ConstDecl || d->kind == Ast::Declaration::TypeDecl ||
            d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl ||
                  d->kind == Ast::Declaration::Procedure ) ) {
-        if( d->kind == Ast::Declaration::ConstDecl ) {
+        if( doOthers && d->kind == Ast::Declaration::ConstDecl ) {
             while( d && d->kind == Ast::Declaration::ConstDecl ) {
                 ConstDecl(d);
                 d = d->next;
             }
-        } else if( d->kind == Ast::Declaration::TypeDecl ) {
+        } else if( doOthers && d->kind == Ast::Declaration::TypeDecl ) {
             while( d && d->kind == Ast::Declaration::TypeDecl ) {
                 TypeDecl(d);
                 d = d->next;
             }
-        } else if( d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl ) {
+        } else if( doOthers && (d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl) ) {
             while( d && (d->kind == Ast::Declaration::VarDecl || d->kind == Ast::Declaration::LocalDecl) ) {
                 VarDecl(d);
                 d = d->next;
             }
-        } else if( d->kind == Ast::Declaration::Procedure ) {
+        } else if( doProcs && d->kind == Ast::Declaration::Procedure ) {
             while( d && d->kind == Ast::Declaration::Procedure ) {
                 ProcDecl(d);
                 d = d->next;
             }
         } else
-            invalid("DeclSeq", d->pos);
+            d = d->next;
     }
     return d;
 }
@@ -305,24 +322,53 @@ void CeeGen::Assembler(Ast::Declaration* proc) {
 void CeeGen::ProcDecl(Ast::Declaration * proc) {
     // SysFlag();
 
-    procHeader(proc, true);
-    hout << ";" << endl;
-
-    procHeader(proc, false);
-    bout << " {" << endl;
     Ast::Declaration* d = proc->link;
     while(d && d->kind == Declaration::ParamDecl )
         d = d->next;
-    curLevel++;
-    d = DeclSeq(d);
-    if( proc->body ) {
-        if( proc->body->kind == Ast::Statement::Assembler )
-            Assembler(proc);
-        else
-            StatBlock(proc->body);
+    DeclSeq(d, true, false);
+
+    Q_ASSERT(curPlan == 0);
+    curPlan = cl.plan(proc);
+
+    Q_ASSERT(curProc == 0);
+    curProc = proc;
+
+    procHeader(proc, true);
+    hout << ";" << endl;
+
+    if( !proc->forward )
+    {
+        procHeader(proc, false);
+        bout << " {" << endl;
+
+        if( curPlan )
+        {
+            bout << "    // added params: ";
+            foreach( const ClosureLifter::LiftParam& p, curPlan->addedParams )
+            {
+                bout << p.name;
+                if( p.renamed )
+                    bout << " (" << p.originalName << ")";
+                bout << " ";
+            }
+            bout << endl;
+        }
+        d = proc->link;
+        while(d && d->kind == Declaration::ParamDecl )
+            d = d->next;
+        curLevel++;
+        d = DeclSeq(d, false, true);
+        if( proc->body ) {
+            if( proc->body->kind == Ast::Statement::Assembler )
+                Assembler(proc);
+            else
+                StatBlock(proc->body);
+        }
+        curLevel--;
+        bout << "}" << endl << endl;
     }
-    curLevel--;
-    bout << "}" << endl << endl;
+    curPlan = 0;
+    curProc = 0;
 }
 
 void CeeGen::SysFlag() {
@@ -876,7 +922,11 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
     if( e == 0 )
         return false;
     Declaration* d = e->val.value<Declaration*>();
+    if( d && d->kind == Declaration::ParamDecl && d->varParam )
+        out << "(*";
     out << qualident(d);
+    if( d && d->kind == Declaration::ParamDecl && d->varParam )
+        out << ")";
     return true;
 }
 
@@ -930,16 +980,56 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
+
+    Expression* lhs = e->lhs;
+    if( lhs && lhs->kind == Expression::Super )
+        lhs = lhs->lhs;
+
     // TODO: built-ins special treatment
     Expr(e->lhs, out);
+
+    Declaration* proc = lhs->val.value<Declaration*>();
+    if( proc && proc->kind != Declaration::Procedure && proc->kind != Declaration::Builtin )
+        proc = 0;
+    Ast::Type* procType = deref(lhs->type());
+    if( procType && procType->kind != Type::Procedure )
+        procType = 0;
+    const DeclList formals = proc ? proc->getParams(true) : procType ? procType->subs : DeclList();
+
     out << "(";
     Expression* arg = e->rhs;
+    int i = 0;
     while(arg)
     {
-        Expr(arg, out);
-        if( arg->next )
+        if( i != 0 )
             out << ", ";
+        if( i < formals.size() && formals[i]->varParam )
+            out << "&";
+        Expr(arg, out);
+        i++;
         arg = arg->next;
+    }
+    if( proc && proc->kind == Declaration::Procedure )
+    {
+        const ClosureLifter::ProcPlan* plan = cl.plan(proc);
+        if( plan && !plan->addedParams.isEmpty() )
+        {
+            foreach( const ClosureLifter::LiftParam& p, plan->addedParams )
+            {
+                if( i != 0 )
+                    out << ", ";
+                i++;
+                if( p.sourceDecl->outer == curProc )
+                    bout << "&" << escape(p.sourceDecl->name);
+                else
+                {
+                    Q_ASSERT(curPlan);
+                    const ClosureLifter::LiftParam* pp = curPlan->findFromSourceDecl(p.sourceDecl);
+                    Q_ASSERT(pp);
+                    bout << escape(pp->name);
+                }
+            }
+        }
     }
     out << ")";
     return true;
@@ -1138,11 +1228,23 @@ void CeeGen::procHeader(Ast::Declaration *proc, bool header)
     out << typeRef(proc->type()) << " ";
     out << qualident(proc);
     out << "(";
+    bool hasPars = false;
     for( int i = 0; i < params.size(); i++ )
     {
-        if( i != 0 )
+        if( hasPars )
             out << ", ";
+        hasPars = true;
         parameter(out, params[i]);
+    }
+    if( curPlan )
+    {
+        foreach( const ClosureLifter::LiftParam& ap, curPlan->addedParams )
+        {
+            if( hasPars )
+                out << ", ";
+            hasPars = true;
+            out << typeRef(ap.sourceDecl->type()) << "* " << escape(ap.name);
+        }
     }
     out << ")";
 }
