@@ -185,6 +185,8 @@ namespace Ast
 
         static QVariant getMax(quint8 form);
         static QVariant getMin(quint8 form);
+        static bool isA(Type* super, Type* sub);
+        static Type* deref(Type*);
 
         Type():expr(0),quali(0),decl(0){meta = T; kind = Undefined;}
         ~Type();

@@ -70,6 +70,8 @@ protected:
 
 protected:
     bool relation(Ast::Expression *e, QTextStream& out);
+    bool inOp(Ast::Expression *e, QTextStream &out);
+    bool isOp(Ast::Expression *e, QTextStream &out);
     bool unaryOp(Ast::Expression *e, QTextStream& out);
     bool arithOp(Ast::Expression *e, QTextStream& out);
     bool logicOp(Ast::Expression *e, QTextStream& out);
@@ -81,9 +83,9 @@ protected:
     bool call(Ast::Expression *e, QTextStream& out);
     bool literal(Ast::Expression *e, QTextStream& out);
     bool constructor(Ast::Expression *e, QTextStream& out);
-    bool range(Ast::Expression *e, QTextStream& out);
     void assig(Ast::Statement* s);
     void call(Ast::Statement* s);
+    void metaDecl(Ast::Declaration *d);
 
 protected:
     void invalid(const char* what, const RowCol&);

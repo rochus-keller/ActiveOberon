@@ -176,26 +176,17 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             break;
 
         case Type::Record:
+        case Type::Object: {
             hout << "struct " << qualident(d) << " {" << endl;
-            foreach( Declaration* field, t->subs )
+            hout << ws(1) << "struct " << qualident(d) << "$Class$* class$;" << endl;
+            QList<Declaration*> fields = t->fieldList();
+            foreach( Declaration* field, fields )
             {
                 if( field->kind == Declaration::Field )
                     hout << ws(1) << typeRef(field->type()) << " " << escape(field->name) << ";" << endl;
             }
             hout << "}";
-            break;
-#if 0
-        case Type::Object: {
-                hout << "struct " << qualident(d) << " {" << endl;
-                hout << ws(0) << qualident(d) << "$Class$* class$;" << endl;
-                QList<Declaration*> fields = t->getFieldList(true);
-                foreach( Declaration* field, fields ) // TODO: was t->subs, but this cannot be correct
-                {
-                     hout << ws(0) << typeRef(field->type()) << " " << escape(field->name) << ";" << endl;
-                }
-                hout << "}";
             } break;
-#endif
         case Type::NameRef:
             hout << typeRef(t->type());
             break;
@@ -215,6 +206,17 @@ void CeeGen::Module(Ast::Declaration *module) {
     if( d && d->kind == Ast::Declaration::Import ) {
         d = ImportList(d);
     }
+
+    bout << endl;
+    bout << "typedef struct $Class { struct $Class* super; } $Class;" << endl;
+    bout << "static int $isinst(void* super, void* sub) {" << endl;
+    bout << "    $Class* cls = ($Class*)sub;" << endl;
+    bout << "    while(cls) {" << endl;
+    bout << "        if( cls == super ) return 1;" << endl;
+    bout << "        cls = cls->super;" << endl;
+    bout << "    }" << endl;
+    bout << "}" << endl << endl;
+
     d = DeclSeq(d, true, true);
     if( d && d->body ) {
         StatBlock(d->body);
@@ -279,6 +281,12 @@ void CeeGen::TypeDecl(Ast::Declaration* d) {
         hout << "/* public */ ";
     typeDecl(d);
     hout << ";" << endl;
+    metaDecl(d);
+    foreach( Declaration* p, d->type()->subs )
+    {
+        if( p->kind == Declaration::Procedure )
+            ProcDecl(p);
+    }
 }
 
 void CeeGen::VarDecl(Ast::Declaration* d) {
@@ -729,12 +737,18 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
     case Ast::Expression::Lt:
     case Ast::Expression::Leq:
     case Ast::Expression::Geq:
-    case Ast::Expression::In:
     case Ast::Expression::Neq:
     case Ast::Expression::Eq:
     case Ast::Expression::Gt:
-    case Ast::Expression::Is:
         if( !relation(e, out) )
+            return false;
+        break;
+    case Ast::Expression::Is:
+        if( !isOp(e, out) )
+            return false;
+        break;
+    case Ast::Expression::In:
+        if( !inOp(e, out) )
             return false;
         break;
     case Ast::Expression::Plus:
@@ -824,18 +838,40 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
     case Ast::Expression::Gt:
         out << " > ";
         break;
-    case Ast::Expression::In:
-        out << " IN "; // TODO
-        break;
     case Ast::Expression::Is:
-        out << " IS "; // TODO
-        break;
+    case Ast::Expression::In:
     default:
         Q_ASSERT(false);
     }
     Expr(e->rhs, out);
     out << ")";
-   return true;
+    return true;
+}
+
+bool CeeGen::inOp(Ast::Expression *e, QTextStream &out)
+{
+    out << "((1 << ";
+    Expr(e->lhs, out);
+    out << ") & ";
+    Expr(e->rhs,out);
+    out << ")";
+    return true;
+}
+
+bool CeeGen::isOp(Ast::Expression *e, QTextStream &out)
+{
+    if( !Type::isA(e->lhs->type(), e->rhs->type()) )
+        out << "0";
+    else
+    {
+        out << "$isinst(&" << typeRef(e->rhs->type()) << "$class$, ";
+        Expr(e->lhs, out );
+        Type* t = deref(e->lhs->type());
+        Q_ASSERT(t->kind == Type::Pointer || t->kind == Type::Reference);
+        // we pass the pointer to the instance, not the class pointer, because the former can be NULL
+        out << ")";
+    }
+    return true;
 }
 
 bool CeeGen::unaryOp(Ast::Expression *e, QTextStream &out)
@@ -1096,22 +1132,52 @@ bool CeeGen::constructor(Ast::Expression *e, QTextStream &out)
     return true;
 }
 
-bool CeeGen::range(Ast::Expression *e, QTextStream &out)
-{
-    if( e->lhs == 0 || e->rhs == 0 )
-        return false;
-    Expr(e->lhs, out);
-    Expr(e->rhs, out);
-    // TODO
-    return true;
-}
-
 void CeeGen::call(Ast::Statement *s)
 {
     if( s == 0 )
         return;
     Q_ASSERT(s->lhs && s->lhs->kind == Expression::Call);
     Expr(s->lhs, bout);
+}
+
+void CeeGen::metaDecl(Ast::Declaration *d)
+{
+    Type* t = deref(d->type());
+    const QByteArray className = qualident(d);
+    hout << "struct " << className << "$Class$ {" << endl;
+    bout << "struct " << className << "$Class$ " << className << "$class$ = { " << endl;
+
+    if( t->type() )
+    {
+        hout << ws(1) << typeRef(t->type()) << "$Class$* super$;" << endl;
+        bout << ws(1) << "&" << typeRef(t->type()) << "$class$," << endl;
+    }else
+    {
+        hout << ws(1) << "void* super$;" << endl;
+        bout << ws(1) << "0," << endl;
+    }
+
+    DeclList methods = t->methodList(true);
+    foreach( Declaration* p, methods )
+    {
+        Q_ASSERT( p->kind == Declaration::Procedure && !p->forward );
+        bout << ws(1) << qualident(p) << ", " << endl;
+
+        hout << ws(1) << typeRef(p->type()) << " (*" << p->name << ")";
+        hout << "(";
+        DeclList params = p->getParams();
+        for( int i = 0; i < params.size(); i++ )
+        {
+            if( i != 0 )
+                hout << ", ";
+            parameter(hout, params[i]);
+        }
+        hout << ");" << endl;
+    }
+
+    bout << "};" << endl << endl;
+    hout << "};" << endl;
+    hout << "extern struct " << className << "$Class$ " << className << "$class$;" << endl;
 }
 
 QString CeeGen::genDedication()
@@ -1204,6 +1270,12 @@ void CeeGen::printHelper(Ast::Declaration * d)
     Q_ASSERT(d->helper == 0);
     typeDecl(d);
     hout << ";" << endl;
+    metaDecl(d);
+    foreach( Declaration* p, d->type()->subs )
+    {
+        if( p->kind == Declaration::Procedure )
+            ProcDecl(p);
+    }
 }
 
 void CeeGen::variable(QTextStream &out, Ast::Declaration *var)

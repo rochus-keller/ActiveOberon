@@ -407,8 +407,11 @@ Declaration*Type::find(const QByteArray& name, bool recursive) const
 QList<Declaration*> Type::fieldList() const
 {
     QList<Declaration*> res;
-    if( (kind == Record || kind == Object) && type())
-        res = type()->deref()->fieldList();
+    const Type* super = deref(type());
+    if( super && super->kind == Type::Pointer )
+        super = deref(super->type());
+    if( super && (super->kind == Record || super->kind == Object))
+        res = super->fieldList();
     foreach( Declaration* d, subs)
     {
         if( d->kind == Declaration::Field )
@@ -421,8 +424,11 @@ QList<Declaration*> Type::fieldList() const
 QList<Declaration*> Type::methodList(bool recursive) const
 {
     QList<Declaration*> res;
-    if( recursive && (kind == Record || kind == Object) && type())
-        res = type()->deref()->methodList();
+    const Type* t = deref(const_cast<Type*>(this));
+    if( t && t->kind == Type::Pointer )
+        t = deref(t->type());
+    if( recursive && t && (t->kind == Record || t->kind == Object) )
+        res = t->methodList();
     foreach( Declaration* d, subs)
     {
         if( d->kind == Declaration::Procedure )
@@ -478,6 +484,34 @@ QVariant Type::getMin(quint8 form)
         return std::numeric_limits<double>::min();
     }
     return QVariant();
+}
+
+bool Type::isA(Type *super, Type *sub)
+{
+    super = deref(super);
+    if( super && super->kind == Type::Pointer )
+        super = deref(super->type());
+    if( super == 0 )
+        return false;
+
+    while( sub )
+    {
+        sub = deref(sub);
+        if( sub && sub->kind == Type::Pointer )
+            sub = deref(sub->type());
+        if( sub == super )
+            return true;
+        sub = sub->type();
+    }
+    return false;
+}
+
+Type *Type::deref(Type * t)
+{
+    if( t )
+        return t->deref();
+    else
+        return 0;
 }
 
 Declaration::~Declaration()
