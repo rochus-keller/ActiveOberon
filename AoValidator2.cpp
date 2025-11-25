@@ -229,6 +229,8 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
     {
         markDecl(d);
         d->validated = true;
+        //if( !d->varParam && d->type()->kind == Type::Array && d->type()->expr == 0 )
+        //    qDebug() << "non-var open array param at" << module->name << d->pos.d_row;
         if( !d->receiver )
             Type_(d->type());
         d = d->next;

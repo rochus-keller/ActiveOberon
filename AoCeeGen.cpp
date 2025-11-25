@@ -102,12 +102,15 @@ void CeeGen::invalid(const char* what, const RowCol& pos) {
 
 void CeeGen::typeDecl(Ast::Declaration *d)
 {
-    Ast::Type* t = deref(d->type());
+    Ast::Type* t = d->type();
     if( t == 0 )
     {
         hout << "// undeclared type " << d->name;
         return;
     }
+
+    if( t->kind == Type::NameRef )
+        return; // don't create name aliasses
 
     if( t->kind == Type::Object )
     {
@@ -207,7 +210,8 @@ void CeeGen::Module(Ast::Declaration *module) {
         d = ImportList(d);
     }
 
-    bout << endl;
+    hout << endl;
+
     bout << "typedef struct $Class { struct $Class* super; } $Class;" << endl;
     bout << "static int $isinst(void* super, void* sub) {" << endl;
     bout << "    $Class* cls = ($Class*)sub;" << endl;
@@ -226,7 +230,7 @@ void CeeGen::Module(Ast::Declaration *module) {
 void CeeGen::ImportDecl(Ast::Declaration* i) {
     Import import = i->data.value<Import>();
     if( import.moduleName != "SYSTEM" )
-        bout << "#include \"" << import.moduleName << ".h\"" << endl;
+        hout << "#include \"" << import.moduleName << ".h\"" << endl;
 }
 
 Ast::Declaration* CeeGen::ImportList(Ast::Declaration* import) {
@@ -1142,7 +1146,10 @@ void CeeGen::call(Ast::Statement *s)
 
 void CeeGen::metaDecl(Ast::Declaration *d)
 {
-    Type* t = deref(d->type());
+    Type* t = d->type();
+    if( t && t->kind != Type::Object && t->kind != Type::Record )
+        return;
+    t = deref(t);
     const QByteArray className = qualident(d);
     hout << "struct " << className << "$Class$ {" << endl;
     bout << "struct " << className << "$Class$ " << className << "$class$ = { " << endl;

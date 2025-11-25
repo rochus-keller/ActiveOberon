@@ -1647,6 +1647,7 @@ void Parser2::deanonymizeType(Ast::Declaration * d, Ast::Type * t)
         helper->kind = Declaration::TypeDecl;
         helper->pos = t->pos;
         helper->setType(t);
+        helper->outer = thisMod;
         t->decl = helper;
         Declaration* tmp = d->helper;
         d->helper = helper;

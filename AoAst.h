@@ -140,7 +140,7 @@ namespace Ast
             Pointer,
             Reference, // the type of a VAR param within a procedure
             Procedure,
-            Array,
+            Array, // fixed size: expr!=0; dynamic: ptr to expr==0; open var param: ref to expr==0; open val param: expr==0
             Record,
             Object,
             NameRef
