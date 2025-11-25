@@ -54,10 +54,24 @@ QByteArray CeeGen::qualident(Declaration* d)
             return res;
         }else
         {
-
             return escape(d->name);
         }
     }
+}
+
+CeeGen::ArrayType CeeGen::arrayType(Ast::Type * t)
+{
+    Q_ASSERT( t && t->kind == Type::Array );
+    ArrayType a;
+    a.first++;
+    t = deref(t->type());
+    while( t && t->kind == Type::Array )
+    {
+        a.first++;
+        t = deref(t->type());
+    }
+    a.second = t;
+    return a;
 }
 
 bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *body) {
@@ -871,7 +885,7 @@ bool CeeGen::isOp(Ast::Expression *e, QTextStream &out)
         out << "$isinst(&" << typeRef(e->rhs->type()) << "$class$, ";
         Expr(e->lhs, out );
         Type* t = deref(e->lhs->type());
-        Q_ASSERT(t->kind == Type::Pointer || t->kind == Type::Reference);
+        Q_ASSERT(t->kind == Type::Pointer || e->lhs->type()->kind == Type::Reference);
         // we pass the pointer to the instance, not the class pointer, because the former can be NULL
         out << ")";
     }
@@ -1195,7 +1209,7 @@ QString CeeGen::genDedication()
 
 Type *CeeGen::deref(Ast::Type * t)
 {
-    if( t && t->kind == Type::NameRef )
+    if( t && (t->kind == Type::NameRef || t->kind == Type::Reference) )
         return deref(t->type());
     return t;
 }
@@ -1237,7 +1251,7 @@ QByteArray CeeGen::typeRef(Type * t)
     {
 
         Type* to = deref(t->type());
-        if( t->isPtrToOpenArray())
+        if( to->kind == Type::Array && to->expr == 0 )
             // pointer to open arrays have no extra typedef, instead we use element_type*
             to = to->type();
         QByteArray prefix;
@@ -1245,8 +1259,9 @@ QByteArray CeeGen::typeRef(Type * t)
             prefix = "struct ";
         return prefix + typeRef(to) + "*";
     }else if( t->kind == Type::Array && t->expr == 0 )
+    {
         return typeRef(t->type()) + "*";
-    else if( t->decl )
+    }else if( t->decl )
         return qualident(t->decl);
     else
         return "?TYPE";
@@ -1283,6 +1298,19 @@ void CeeGen::printHelper(Ast::Declaration * d)
         if( p->kind == Declaration::Procedure )
             ProcDecl(p);
     }
+}
+
+void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
+{
+    Type* t = deref(param->type());
+    if( t && t->kind == Type::Array && t->expr == 0 )
+    {
+        ArrayType a = arrayType(t);
+        out << typeRef(a.second) << "* " << escape(param->name) << "$a";
+        for( int i = 0; i < a.first; i++ )
+            out << ", uint32_t " << escape(param->name) << "$" << i;
+    }else
+        out << typeRef(param->type()) << " " << escape(param->name);
 }
 
 void CeeGen::variable(QTextStream &out, Ast::Declaration *var)

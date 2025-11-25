@@ -103,14 +103,13 @@ protected:
     {
         return QByteArray(level*4,' ');
     }
-    void parameter(QTextStream& out, Ast::Declaration* param)
-    {
-        out << typeRef(param->type()) << " " << escape(param->name);
-    }
+    void parameter(QTextStream& out, Ast::Declaration* param);
     void variable(QTextStream& out, Ast::Declaration* var);
     void procHeader(Ast::Declaration* proc, bool header);
     QByteArray escape(const QByteArray&);
     QByteArray qualident(Ast::Declaration* d);
+    typedef QPair<int,Ast::Type*> ArrayType;
+    ArrayType arrayType(Ast::Type*);
 
 private:
     Ast::Declaration* curMod;
