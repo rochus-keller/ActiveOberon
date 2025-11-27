@@ -236,7 +236,12 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
         d = d->next;
     }
     if( proc->type() )
+    {
         Type_(proc->type());
+        Type* t = deref(proc->type());
+        if( t->kind == Type::Array || t->kind == Type::Record )
+            error(proc->pos, "return type cannot be an array nor a record");
+    }
     d = DeclSeq(d);
     if( proc->body ) {
         if( proc->body->kind == Ast::Statement::Assembler )
@@ -293,6 +298,8 @@ bool Validator2::PointerType(Ast::Type* t) {
         Type* to = deref(t->type());
         if( to->kind != Type::Record && to->kind != Type::Array )
             return error(t->pos, "pointer base type must be ARRAY or RECORD");
+        if( to->kind == Type::Array )
+            to->dynamic = true; // applies to both fixed and open dynamic arrays
     }else
         return false;
 }

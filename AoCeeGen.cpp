@@ -65,6 +65,7 @@ CeeGen::ArrayType CeeGen::arrayType(Ast::Type * t)
     ArrayType a;
     a.first++;
     t = deref(t->type());
+    Q_ASSERT(t->kind != Type::Reference);
     while( t && t->kind == Type::Array )
     {
         a.first++;
@@ -185,8 +186,15 @@ void CeeGen::typeDecl(Ast::Declaration *d)
         case Type::Array:
             if( t->expr != 0 )
             {
-                hout << "struct " << qualident(d) << " { " << typeRef(t->type()) << " _[";
+                ArrayType at = arrayType(t);
+                hout << "struct " << qualident(d) << " { " << typeRef(at.second) << " _[";
                 Expr(t->expr, hout);
+                for( int i = 1; i < at.first; i++ )
+                {
+                    t = deref(t->type());
+                    hout << " * ";
+                    Expr(t->expr, hout);
+                }
                 hout << "];" << " }";
             }else
                 Q_ASSERT(false); // hout << typeRef(t->getType()) << "* ";
@@ -669,11 +677,17 @@ void CeeGen::LoopStat(Ast::Statement *s) {
 
 Ast::Statement *CeeGen::WithStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::With);
-    // TODO
-    // no WITH statements in OP2 and BootLinker
+    bout << ws() << "if( ";
+    bout << "$isinst(&" << typeRef(s->rhs->type()) << "$class$, ";
+    Type* t = deref(s->lhs->type());
+    Q_ASSERT(t->kind == Type::Pointer || t->kind == Type::PTR || s->lhs->type()->kind == Type::Reference);
     Expr(s->lhs, bout);
-    Expr(s->rhs, bout);
+    bout << ") ) {" << endl;
+    // TODO: cast
+    curLevel++;
     StatSeq(s->body);
+    curLevel--;
+    bout << ws() << "}";
     return s;
 }
 
@@ -976,11 +990,17 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
     if( e == 0 )
         return false;
     Declaration* d = e->val.value<Declaration*>();
-    if( d && d->kind == Declaration::ParamDecl && d->varParam )
+    Type* t = deref(d->type());
+    bool depointer = d && d->kind == Declaration::ParamDecl && d->varParam;
+    if( t && t->kind == Type::Array && t->expr == 0 )
+        depointer = false;
+    if( depointer )
         out << "(*";
     out << qualident(d);
-    if( d && d->kind == Declaration::ParamDecl && d->varParam )
+    if( depointer )
         out << ")";
+    if( t && t->kind == Type::Array && t->expr == 0 )
+        out << "$";
     return true;
 }
 
@@ -989,7 +1009,8 @@ bool CeeGen::select(Ast::Expression *e, QTextStream &out)
     if( e == 0 )
         return false;
     Expr(e->lhs, out);
-    if( deref(e->lhs->type())->kind == Type::Pointer )
+    Type* t = deref(e->lhs->type());
+    if( t->kind == Type::Pointer || t->kind == Type::Reference )
         out << "->";
     else
         out << ".";
@@ -1004,9 +1025,50 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
-    Expr(e->lhs, out);
+    QList<Expression*> indices;
+    indices.push_front(e);
+    Expression* i = e->lhs;
+    while( i && i->kind == Expression::Index )
+    {
+        indices.push_front(i);
+        i = i->lhs;
+    }
+    Q_ASSERT( !indices.isEmpty() );
+
+    Expr(indices[0]->lhs, out);
+
+    Type* at = deref(indices[0]->lhs->type());
+
+    if( at->expr != 0 )
+        out << "._";
+
     out << "[";
-    Expr(e->rhs, out);
+    if( indices.size() > 1 )
+        out << QByteArray(indices.size()-1,'(');
+    Expr(indices[0]->rhs, out);
+    for( int n = 1; n < indices.size(); n++ )
+    {
+        out << " * ";
+        at = deref(indices[n]->lhs->type());
+        Q_ASSERT(at->kind == Type::Array);
+        if( at->expr )
+            Expr(at->expr, out);
+        else if( at->dynamic )
+        {
+            // pointer
+            out << "*(((uint32_t*)";
+            Expr(indices[0]->lhs->lhs, out);
+            out << ") - 4*" << n << ")";
+        }else
+        {
+            // open array param
+            Expr(indices[0]->lhs, out);
+            out << n;
+        }
+        out << " + ";
+        Expr(indices[n]->rhs, out);
+        out << ")";
+    }
     out << "]";
     return false;
 }
@@ -1218,7 +1280,7 @@ QByteArray CeeGen::typeRef(Type * t)
 {
     if( t == 0 || t->kind == Type::NoType )
         return "void";
-    t = t->deref();
+    t = deref(t);
     switch(t->kind)
     {
     case Type::StrLit:
@@ -1247,20 +1309,29 @@ QByteArray CeeGen::typeRef(Type * t)
         return "void*";
     }
 
+    // Arrays:
+    // fixed size: struct { a[1*2*3..]}
+    // dynamic open: [..sizes ] <ptr> [1*2*3..]
+    // param open: ptr, d1, d2, ...
+
     if( t->kind == Type::Pointer )
     {
 
         Type* to = deref(t->type());
-        if( to->kind == Type::Array && to->expr == 0 )
+        if( to->kind == Type::Array )
+        {
             // pointer to open arrays have no extra typedef, instead we use element_type*
-            to = to->type();
+            ArrayType at = arrayType(to);
+            to = at.second;
+        }
         QByteArray prefix;
-        if( to->isSOA() ) // array types are embedded in a struct
+        if( to->isSO() )
             prefix = "struct ";
         return prefix + typeRef(to) + "*";
     }else if( t->kind == Type::Array && t->expr == 0 )
     {
-        return typeRef(t->type()) + "*";
+        ArrayType at = arrayType(t);
+        return typeRef(at.second) + "*";
     }else if( t->decl )
         return qualident(t->decl);
     else
@@ -1305,11 +1376,14 @@ void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
     Type* t = deref(param->type());
     if( t && t->kind == Type::Array && t->expr == 0 )
     {
+        // an open Array is just a pointer to the memory, even in n-dim or var param case
         ArrayType a = arrayType(t);
-        out << typeRef(a.second) << "* " << escape(param->name) << "$a";
+        out << typeRef(a.second) << "* " << escape(param->name) << "$";
         for( int i = 0; i < a.first; i++ )
             out << ", uint32_t " << escape(param->name) << "$" << i;
-    }else
+    }else if( param->varParam )
+        out << typeRef(param->type()) << "* " << escape(param->name);
+    else
         out << typeRef(param->type()) << " " << escape(param->name);
 }
 
