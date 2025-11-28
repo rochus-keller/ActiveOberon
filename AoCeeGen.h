@@ -86,6 +86,8 @@ protected:
     void assig(Ast::Statement* s);
     void call(Ast::Statement* s);
     void metaDecl(Ast::Declaration *d);
+    bool builtin(int bi, Ast::Expression * args, QTextStream &out);
+
 
 protected:
     void invalid(const char* what, const RowCol&);

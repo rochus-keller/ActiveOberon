@@ -26,6 +26,8 @@
 using namespace Ao;
 using namespace Ast;
 
+static inline void dummy() {}
+
 CeeGen::CeeGen()
 {
     static const char* kw[] = {
@@ -104,10 +106,16 @@ bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *bo
     bout << "#include \"" << module->name << ".h\"" << endl;
     bout << "#include <stdlib.h>" << endl;
     bout << "#include <string.h>" << endl;
-    bout << "#include <stdint.h>" << endl;
+    bout << "#include <assert.h>" << endl;
     bout << "#include <math.h>" << endl << endl;
 
+    hout << "#include <stdint.h>" << endl;
+
     Module(module);
+
+    hout << endl;
+    hout << "#endif // " << guard;
+
     return errors.isEmpty();
 }
 
@@ -130,7 +138,7 @@ void CeeGen::typeDecl(Ast::Declaration *d)
     if( t->kind == Type::Object )
     {
         // forward declaration for class objects
-        hout << "typedef struct " << qualident(d) << "$Class$ " << qualident(d) << "$Class$;" << endl;
+        hout << "struct " << qualident(d) << "$Class$ " << qualident(d) << "$Class$;" << endl;
     }
 
     if( t->kind == Type::Array && t->expr == 0 )
@@ -139,16 +147,15 @@ void CeeGen::typeDecl(Ast::Declaration *d)
         return; // we need not typedef for open arrays, instead they are referenced by element_type*
     }
 
-    hout << "typedef ";
     if( t->kind < Type::MaxBasicType )
-        hout << typeRef(t); //  << " " << qualident(d);
+        hout << "typedef " << typeRef(t); //  << " " << qualident(d);
     else
     {
         switch( t->kind )
         {
         case Type::Pointer:
+            hout << "typedef ";
             pointerTo(hout, t);
-            // hout << " " << qualident(d);
             break;
         case Type::Procedure:
 #if 0
@@ -169,6 +176,7 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             }else
 #endif
             {
+                hout << "typedef ";
                 hout << typeRef(t->type()) << " (*";
                 hout << qualident(d);
                 hout << ")(";
@@ -187,6 +195,7 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             if( t->expr != 0 )
             {
                 ArrayType at = arrayType(t);
+                hout << "typedef ";
                 hout << "struct " << qualident(d) << " { " << typeRef(at.second) << " _[";
                 Expr(t->expr, hout);
                 for( int i = 1; i < at.first; i++ )
@@ -202,9 +211,15 @@ void CeeGen::typeDecl(Ast::Declaration *d)
 
         case Type::Record:
         case Type::Object: {
+            QList<Declaration*> fields = t->fieldList();
+            foreach( Declaration* field, fields )
+            {
+                if( field->kind == Declaration::Field )
+                    printHelper(field->helper);
+            }
+            hout << "typedef ";
             hout << "struct " << qualident(d) << " {" << endl;
             hout << ws(1) << "struct " << qualident(d) << "$Class$* class$;" << endl;
-            QList<Declaration*> fields = t->fieldList();
             foreach( Declaration* field, fields )
             {
                 if( field->kind == Declaration::Field )
@@ -213,6 +228,7 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             hout << "}";
             } break;
         case Type::NameRef:
+            hout << "typedef ";
             hout << typeRef(t->type());
             break;
         }
@@ -220,8 +236,6 @@ void CeeGen::typeDecl(Ast::Declaration *d)
     // typedef what name
     hout << " " << qualident(d);
 }
-
-static inline void dummy() {}
 
 void CeeGen::Module(Ast::Declaration *module) {
 
@@ -990,6 +1004,14 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
     if( e == 0 )
         return false;
     Declaration* d = e->val.value<Declaration*>();
+    if( d && d->kind == Declaration::ConstDecl && d->outer == 0 && (d->name == "FALSE" || d->name == "TRUE") )
+    {
+        if( d->name == "TRUE" )
+            out << "1";
+        else
+            out << "0";
+        return true;
+    }
     Type* t = deref(d->type());
     bool depointer = d && d->kind == Declaration::ParamDecl && d->varParam;
     if( t && t->kind == Type::Array && t->expr == 0 )
@@ -1101,9 +1123,6 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
     if( lhs && lhs->kind == Expression::Super )
         lhs = lhs->lhs;
 
-    // TODO: built-ins special treatment
-    Expr(e->lhs, out);
-
     Declaration* proc = lhs->val.value<Declaration*>();
     if( proc && proc->kind != Declaration::Procedure && proc->kind != Declaration::Builtin )
         proc = 0;
@@ -1111,6 +1130,11 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
     if( procType && procType->kind != Type::Procedure )
         procType = 0;
     const DeclList formals = proc ? proc->getParams(true) : procType ? procType->subs : DeclList();
+
+    if( proc && proc->kind == Declaration::Builtin && builtin(proc->id, e->rhs, out) )
+        return true;
+
+    Expr(e->lhs, out);
 
     out << "(";
     Expression* arg = e->rhs;
@@ -1218,6 +1242,7 @@ void CeeGen::call(Ast::Statement *s)
         return;
     Q_ASSERT(s->lhs && s->lhs->kind == Expression::Call);
     Expr(s->lhs, bout);
+    bout << ";";
 }
 
 void CeeGen::metaDecl(Ast::Declaration *d)
@@ -1263,6 +1288,58 @@ void CeeGen::metaDecl(Ast::Declaration *d)
     hout << "extern struct " << className << "$Class$ " << className << "$class$;" << endl;
 }
 
+bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
+{
+    ExpList a = Expression::getList(args);
+
+    switch( bi )
+    {
+    case Builtin::SYSTEM_VAL:
+        if( a.size() != 2 )
+            return false;
+        out << "((" << typeRef(a[0]->type()) << ")";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::ASSERT:
+        if( a.size() != 1 )
+            return false;
+        out << "assert(";
+        Expr(a[0], out);
+        out << ")";
+        return true;
+    case Builtin::INC:
+        if( a.size() == 1 )
+        {
+            Expr(a[0], out);
+            out << "++";
+            return true;
+        }else if( a.size() == 2 )
+        {
+            Expr(a[0], out);
+            out << " += ";
+            Expr(a[1], out);
+            return true;
+        }else
+            return false;
+    case Builtin::DEC:
+        if( a.size() == 1 )
+        {
+            Expr(a[0], out);
+            out << "--";
+            return true;
+        }else if( a.size() == 2 )
+        {
+            Expr(a[0], out);
+            out << " -= ";
+            Expr(a[1], out);
+            return true;
+        }else
+            return false;
+    }
+    return false;
+}
+
 QString CeeGen::genDedication()
 {
     return "// this file was generated by " + QCoreApplication::applicationName() + " "
@@ -1291,6 +1368,8 @@ QByteArray CeeGen::typeRef(Type * t)
         return "unsigned char";
     case Type::CHAR:
         return "char";
+    case Type::BYTE:
+        return "unsigned char";
     case Type::SHORTINT:
         return "char";
     case Type::INTEGER:
@@ -1324,17 +1403,18 @@ QByteArray CeeGen::typeRef(Type * t)
             ArrayType at = arrayType(to);
             to = at.second;
         }
-        QByteArray prefix;
-        if( to->isSO() )
-            prefix = "struct ";
-        return prefix + typeRef(to) + "*";
+        return typeRef(to) + "*";
     }else if( t->kind == Type::Array && t->expr == 0 )
     {
         ArrayType at = arrayType(t);
         return typeRef(at.second) + "*";
     }else if( t->decl )
-        return qualident(t->decl);
-    else
+    {
+        if( t->isSOA() )
+            return "struct " + qualident(t->decl);
+        else
+            return qualident(t->decl);
+    }else
         return "?TYPE";
 }
 
@@ -1349,8 +1429,6 @@ void CeeGen::pointerTo(QTextStream &out, Ast::Type *ptr)
         to = ptr->type();
         to2 = deref(to);
     }
-    if( to2 && to2->isSOA() )
-            out << "struct ";
     out << typeRef(ptr->type()) << "*";
 
 }
@@ -1359,7 +1437,6 @@ void CeeGen::printHelper(Ast::Declaration * d)
 {
     if( d == 0 )
         return;
-    printHelper(d->next);
     Q_ASSERT(d->helper == 0);
     typeDecl(d);
     hout << ";" << endl;
@@ -1369,6 +1446,7 @@ void CeeGen::printHelper(Ast::Declaration * d)
         if( p->kind == Declaration::Procedure )
             ProcDecl(p);
     }
+    printHelper(d->next);
 }
 
 void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
