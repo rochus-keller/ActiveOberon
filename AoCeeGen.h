@@ -110,7 +110,7 @@ protected:
     void procHeader(Ast::Declaration* proc, bool header);
     QByteArray escape(const QByteArray&);
     QByteArray qualident(Ast::Declaration* d);
-    typedef QPair<int,Ast::Type*> ArrayType;
+    typedef QPair<Ast::ExpList,Ast::Type*> ArrayType;
     ArrayType arrayType(Ast::Type*);
 
 private:

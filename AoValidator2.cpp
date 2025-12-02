@@ -204,6 +204,23 @@ void Validator2::TypeDecl(Ast::Declaration* d) {
 
 void Validator2::VarDecl(Ast::Declaration* d) {
     Type_(d->type());
+    char what = ' ';
+    switch(d->kind)
+    {
+    case Declaration::VarDecl:
+        what = 'm';
+        break;
+    case Declaration::LocalDecl:
+        what = 'l';
+        break;
+    case Declaration::Field:
+        what = 'f';
+        break;
+    default:
+        Q_ASSERT(false);
+    }
+
+    arrayStats(d->type(), d->pos, what);
 }
 
 void Validator2::Assembler(Ast::Declaration* proc) {
@@ -233,6 +250,7 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
         //    qDebug() << "non-var open array param at" << module->name << d->pos.d_row;
         if( !d->receiver )
             Type_(d->type());
+        arrayStats(d->type(), d->pos, d->varParam ? 'v' : 'p');
         d = d->next;
     }
     if( proc->type() )
@@ -241,6 +259,7 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
         Type* t = deref(proc->type());
         if( t->kind == Type::Array || t->kind == Type::Record )
             error(proc->pos, "return type cannot be an array nor a record");
+        arrayStats(proc->type(), proc->pos, 'r');
     }
     d = DeclSeq(d);
     if( proc->body ) {
@@ -384,10 +403,16 @@ bool Validator2::ProcedureType(Ast::Type* t) {
     foreach( Ast::Declaration* param, t->subs )
     {
         if( param->kind == Ast::Declaration::ParamDecl )
+        {
             ok &= Type_(param->type());
+            arrayStats(param->type(), param->pos, param->varParam ? 'v' : 'p');
+        }
     }
     if( t->type() && t->type()->kind != Ast::Type::NoType )
+    {
         ok &= Type_(t->type());
+        arrayStats(t->type(), t->decl ? t->decl->pos : RowCol(), 'r');
+    }
     return ok;
 }
 
@@ -465,6 +490,7 @@ bool Validator2::FieldList(Ast::Type* t) {
         f->validated = true;
         markDecl(f);
         Type_(f->type());
+        arrayStats(f->type(), f->pos, 'f');
     }
     return true;
 }
@@ -1268,6 +1294,15 @@ bool Validator2::call(Ast::Expression *e)
         if( proc && proc->kind == Declaration::Builtin )
         {
             Builins bi(mdl);
+#if 0
+            if( proc->id == Builtin::LEN && actuals.size() > 1 )
+                qDebug() << "LEN(" << actuals.size()-1 << ")" << module->name.constData() << e->pos.d_row; // never happens in OS v2.3.7
+#endif
+#if 0
+            if( proc->id == Builtin::LEN && actuals.size() == 1 && actuals[0]->kind == Expression::Index )
+                qDebug() << "LEN(subarray)" << module->name.constData() << e->pos.d_row;
+#endif
+
             if( bi.checkArgs(proc->id, actuals, &ret, e->pos) )
             {
                 // NOTE: no eval done here
@@ -1585,6 +1620,40 @@ bool Validator2::equals(Ast::Type * lhs, Ast::Type * rhs)
     if( lhs->kind == Type::Procedure && rhs->kind == Type::Procedure )
         return paramListsMatch(lhs->subs, lhs->type(), rhs->subs, rhs->type() );
     return false;
+}
+
+void Validator2::arrayStats(Ast::Type * t, const RowCol & rc, char what)
+{
+#if 0
+    if( t == 0 )
+        return;
+    t = deref(t);
+    bool ptr = false;
+    if( t->kind == Type::Pointer )
+    {
+        t = deref(t->type());
+        ptr = true;
+    }
+    if( t->kind == Type::Array )
+    {
+        int dim = 0;
+        int open = 0;
+        while( t && t->kind == Type::Array )
+        {
+            dim++;
+            if( t->expr == 0 )
+                open++;
+            t = deref(t->type());
+        }
+#if 0
+        qDebug() << dim << module->name.constData() << rc.d_row << what;
+#else
+        //if( dim == 2 && (what == 'p' || what == 'v'))
+        if( dim >= 2 )
+            qDebug() << dim << ptr << module->name.constData() << rc.d_row << what << "open" << open;
+#endif
+    }
+#endif
 }
 
 Xref Validator2::takeXref()

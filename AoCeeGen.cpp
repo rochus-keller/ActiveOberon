@@ -43,6 +43,8 @@ CeeGen::CeeGen()
 
 QByteArray CeeGen::qualident(Declaration* d)
 {
+    if( d == 0 )
+        return "???";
     if( d->outer && d->kind != Declaration::LocalDecl && d->kind != Declaration::ParamDecl )
         return qualident(d->outer) + "$" + escape(d->name);
     else
@@ -65,12 +67,12 @@ CeeGen::ArrayType CeeGen::arrayType(Ast::Type * t)
 {
     Q_ASSERT( t && t->kind == Type::Array );
     ArrayType a;
-    a.first++;
+    a.first << t->expr;
     t = deref(t->type());
     Q_ASSERT(t->kind != Type::Reference);
     while( t && t->kind == Type::Array )
     {
-        a.first++;
+        a.first << t->expr;
         t = deref(t->type());
     }
     a.second = t;
@@ -196,9 +198,9 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             {
                 ArrayType at = arrayType(t);
                 hout << "typedef ";
-                hout << "struct " << qualident(d) << " { " << typeRef(at.second) << " _[";
+                hout << "struct " << qualident(d) << " { " << typeRef(at.second) << " $[";
                 Expr(t->expr, hout);
-                for( int i = 1; i < at.first; i++ )
+                for( int i = 1; i < at.first.size(); i++ )
                 {
                     t = deref(t->type());
                     hout << " * ";
@@ -248,6 +250,13 @@ void CeeGen::Module(Ast::Declaration *module) {
 
     hout << endl;
 
+    hout << "#define ASH(x, n) (((n) >= 0) ? ((x) << ((n) >= 0 ? (n) : 0)) : ((x) >> ((n) < 0  ? -(n) : 0)))" << endl;
+    hout << "#ifndef __MIC_DEFINE__" << endl << "#define __MIC_DEFINE__" << endl;
+    // static analysis revealed that in ETH Oberon System v2.3.7 only the first dim of all n-dim arrays is open
+    hout << "typedef struct MIC$AP { uint32_t $1; void* $; } MIC$AP;" << endl; // n-dim open array parameter (var or val)
+    hout << "typedef struct MIC$DA { uint32_t $1; void* $[]; } MIC$DA;" << endl; // n-dim dynamic array, pointer points to $, not $1 (for compat with SYSTEM calls)
+    hout << "#endif" << endl;
+
     bout << "typedef struct $Class { struct $Class* super; } $Class;" << endl;
     bout << "static int $isinst(void* super, void* sub) {" << endl;
     bout << "    $Class* cls = ($Class*)sub;" << endl;
@@ -255,6 +264,9 @@ void CeeGen::Module(Ast::Declaration *module) {
     bout << "        if( cls == super ) return 1;" << endl;
     bout << "        cls = cls->super;" << endl;
     bout << "    }" << endl;
+    bout << "}" << endl << endl;
+    bout << "static MIC$DA* $toda(void** ptr) {" << endl;
+    bout << "    return (MIC$DA*)((char*)ptr - offsetof(MIC$DA, $));" << endl;
     bout << "}" << endl << endl;
 
     d = DeclSeq(d, true, true);
@@ -1021,8 +1033,10 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
     out << qualident(d);
     if( depointer )
         out << ")";
+#if 0
     if( t && t->kind == Type::Array && t->expr == 0 )
         out << "$";
+#endif
     return true;
 }
 
@@ -1062,7 +1076,7 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
     Type* at = deref(indices[0]->lhs->type());
 
     if( at->expr != 0 )
-        out << "._";
+        out << ".$";
 
     out << "[";
     if( indices.size() > 1 )
@@ -1080,12 +1094,12 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
             // pointer
             out << "*(((uint32_t*)";
             Expr(indices[0]->lhs->lhs, out);
-            out << ") - 4*" << n << ")";
+            out << ") - 4*" << n << ")"; // TODO
         }else
         {
             // open array param
             Expr(indices[0]->lhs, out);
-            out << n;
+            out << n; // TODO
         }
         out << " + ";
         Expr(indices[n]->rhs, out);
@@ -1143,9 +1157,47 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
     {
         if( i != 0 )
             out << ", ";
-        if( i < formals.size() && formals[i]->varParam )
+#if 0
+        // TODO
+        Type* formT = deref( i < formals.size() ? formals[i]->type() : 0);
+        if( formT && formT->kind == Type::Array )
+        {
+            Type* actT = deref(arg->type());
+            Q_ASSERT( actT && (actT->kind == Type::Array || actT->kind == Type::StrLit || actT->kind == Type::Reference));
+
+            // this is a formal array parameter; it can be fix size or open by var or by val
+            // the actual arg must also be an array; it can be fix, a derefed pointer to arr, an open array, or a string lit
+
+            // TODO: implement all possible combinations (~30)
+            ArrayType arrT = arrayType(formT);
+            Expr(arg, out);
+            if( formT->dynamic )
+            {
+                // pointer
+                for(int i = 0; i < arrT.first.size() && arrT.first[i] == 0; i++)
+                {
+                    out << ", ";
+                    out << "*(((uint32_t*)";
+                    Expr(arg, out);
+                    out << ") - 4*" << i << ")";
+                }
+            }else
+            {
+                // open array param
+                for(int i = 0; i < arrT.first.size() && arrT.first[i] == 0; i++)
+                {
+                    out << ", ";
+                    Expr(arg, out);
+                    out << i;
+                }
+            }
+        }else if( i < formals.size() && formals[i]->varParam )
+        {
             out << "&";
-        Expr(arg, out);
+            Expr(arg, out);
+        }else
+#endif
+            Expr(arg, out);
         i++;
         arg = arg->next;
     }
@@ -1257,8 +1309,11 @@ void CeeGen::metaDecl(Ast::Declaration *d)
 
     if( t->type() )
     {
-        hout << ws(1) << typeRef(t->type()) << "$Class$* super$;" << endl;
-        bout << ws(1) << "&" << typeRef(t->type()) << "$class$," << endl;
+        Type* super = deref(t->type());
+        if( super->kind == Type::Pointer )
+            super = deref(super->type());
+        hout << ws(1) << "struct " << qualident(super->decl) << "$Class$* super$;" << endl;
+        bout << ws(1) << "&" << qualident(super->decl) << "$class$," << endl;
     }else
     {
         hout << ws(1) << "void* super$;" << endl;
@@ -1336,6 +1391,8 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             return true;
         }else
             return false;
+    case Builtin::ASH:
+        break; // implemented by macro
     }
     return false;
 }
@@ -1454,11 +1511,19 @@ void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
     Type* t = deref(param->type());
     if( t && t->kind == Type::Array && t->expr == 0 )
     {
-        // an open Array is just a pointer to the memory, even in n-dim or var param case
         ArrayType a = arrayType(t);
+#if 0
+        // an open Array is just a pointer to the memory, even in n-dim or var param case
         out << typeRef(a.second) << "* " << escape(param->name) << "$";
-        for( int i = 0; i < a.first; i++ )
+        for( int i = 0; i < a.first.size(); i++ )
+        {
+            if(a.first[i] != 0)
+                break; // from this dim size is fix
             out << ", uint32_t " << escape(param->name) << "$" << i;
+        }
+#else
+        out << "MIC$AP " << escape(param->name);
+#endif
     }else if( param->varParam )
         out << typeRef(param->type()) << "* " << escape(param->name);
     else

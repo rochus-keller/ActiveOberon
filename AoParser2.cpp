@@ -1638,6 +1638,18 @@ void Parser2::deanonymizeType(Ast::Declaration * d)
     }
 }
 
+static inline bool declared(Declaration* d, Type* a)
+{
+    Type* t = d->type();
+    while( t && t->kind == Type::Array )
+    {
+        if( t == a )
+            return true;
+        t = t->type();
+    }
+    return false;
+}
+
 void Parser2::deanonymizeType(Ast::Declaration * d, Ast::Type * t)
 {
     if( t && t->anonymous && t->decl == 0 )
@@ -1652,6 +1664,11 @@ void Parser2::deanonymizeType(Ast::Declaration * d, Ast::Type * t)
         Declaration* tmp = d->helper;
         d->helper = helper;
         d->helper->next = tmp;
+#if 0
+        if( t->kind == Type::Array && t->type() && t->type()->kind == Type::Array && !declared(d, t) )
+            qDebug() << "2d array helper" << thisMod->name << d->pos.d_row;
+#endif
+
     }
     if( t )
     {

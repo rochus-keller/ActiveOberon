@@ -115,6 +115,7 @@ namespace Ao {
         bool lhsIsBaseOfRhs(Ast::Type* lhs, Ast::Type* rhs);
         bool paramListsMatch( const Ast::DeclList&, Ast::Type*, const Ast::DeclList&, Ast::Type*);
         bool equals(Ast::Type*, Ast::Type*);
+        void arrayStats(Ast::Type*, const RowCol&, char what);
 
     private:
         Ast::Declaration* module;
