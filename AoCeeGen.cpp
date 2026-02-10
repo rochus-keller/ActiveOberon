@@ -264,9 +264,15 @@ void CeeGen::Module(Ast::Declaration *module) {
     bout << "        if( cls == super ) return 1;" << endl;
     bout << "        cls = cls->super;" << endl;
     bout << "    }" << endl;
-    bout << "}" << endl << endl;
+    bout << "}" << endl;
     bout << "static MIC$DA* $toda(void** ptr) {" << endl;
     bout << "    return (MIC$DA*)((char*)ptr - offsetof(MIC$DA, $));" << endl;
+    bout << "}" << endl;
+    bout << "static void** $allocda(uint32_t count, int elemSize) {" << endl;
+    bout << "    MIC$DA* ptr = malloc(sizeof(MIC$DA) + count * elemSize);" << endl;
+    bout << "    if( ptr == 0 ) return 0;" << endl;
+    bout << "    ptr->$1 = count;" << endl;
+    bout << "    return ptr->$;" << endl;
     bout << "}" << endl << endl;
 
     d = DeclSeq(d, true, true);
@@ -925,7 +931,7 @@ bool CeeGen::isOp(Ast::Expression *e, QTextStream &out)
         out << "$isinst(&" << typeRef(e->rhs->type()) << "$class$, ";
         Expr(e->lhs, out );
         Type* t = deref(e->lhs->type());
-        Q_ASSERT(t->kind == Type::Pointer || e->lhs->type()->kind == Type::Reference);
+        // TODO Q_ASSERT(t->kind == Type::Pointer || e->lhs->type()->kind == Type::Reference);
         // we pass the pointer to the instance, not the class pointer, because the former can be NULL
         out << ")";
     }

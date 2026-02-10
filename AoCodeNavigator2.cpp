@@ -1023,6 +1023,12 @@ void CodeNavigator::onRunReload()
     }
     fillMods();
     QApplication::restoreOverrideCursor();
+#if 0
+    DeclList deps = d_pro->getDependencyOrder();
+    qDebug() << "*** Dependency order:";
+    for( int i = 0; i < deps.size(); i++ )
+        qDebug() << deps[i]->name.constData();
+#endif
     qDebug() << "parsed" << d_pro->getSloc() << "SLOC in" << t.elapsed() << "[ms]";
     qDebug() << "with" << errCount << "errors";
 }
