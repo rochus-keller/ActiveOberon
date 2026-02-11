@@ -419,7 +419,6 @@ Parser2::Parser2(AstModel* m, Scanner2* s):scanner(s),mdl(m),thisMod(0)
     predefSymbols[EXCLUSIVE] = Token::getSymbol("EXCLUSIVE");
     predefSymbols[PRIORITY] = Token::getSymbol("PRIORITY");
     predefSymbols[SAFE] = Token::getSymbol("SAFE");
-    predefSymbols[FFI] = Token::getSymbol("C");
     BEGIN = Token::getSymbol("BEGIN");
 }
 
@@ -501,6 +500,8 @@ void Parser2::Module() {
     expect(Tok_MODULE, false, "Module");
 	expect(Tok_ident, false, "Module");
     m->name = cur.d_val;
+    if( m->name == "Out" )
+        dummy();
     m->pos = cur.toRowCol();
     ModuleData md;
     md.sourcePath = scanner->source();
@@ -651,7 +652,7 @@ bool Parser2::ProcDecl() {
 	if( FIRST_ProcHead(la.d_type) ) {
         Declaration* procDecl = ProcHead(false);
 		expect(Tok_Semi, false, "ProcDecl");
-        if( !procDecl->forward )
+        if( !procDecl->extern_ )
         {
             mdl->openScope(procDecl);
             DeclSeq();
@@ -678,9 +679,9 @@ bool Parser2::ProcDecl() {
 }
 
 Declaration* Parser2::ProcHead(bool forwardDecl) {
-	if( FIRST_SysFlag(la.d_type) ) {
-        SysFlag(); // ignore
-	}
+    if( FIRST_SysFlag(la.d_type) ) {
+        SysFlag();
+    }
     bool isConstr = false;
     bool isExtern = false;
     if( la.d_type == Tok_Star || la.d_type == Tok_Amp || la.d_type == Tok_Minus || la.d_type == Tok_Tilde ) {
@@ -716,7 +717,7 @@ Declaration* Parser2::ProcHead(bool forwardDecl) {
         return 0;
 
     procDecl->constructor = isConstr;
-    procDecl->forward = isExtern;
+    procDecl->extern_ = isExtern;
 
     procDecl->outer = mdl->getTopScope();
     mdl->openScope(procDecl);
@@ -728,12 +729,14 @@ Declaration* Parser2::ProcHead(bool forwardDecl) {
     return procDecl;
 }
 
-bool Parser2::SysFlag() {
+Parser2::SysFlags Parser2::SysFlag() {
 	expect(Tok_Lbrack, false, "SysFlag");
 	expect(Tok_ident, false, "SysFlag");
-    const bool res = cur.d_val.constData() == predefSymbols[UNTRACED].constData() ||
-            cur.d_val.constData() == predefSymbols[FFI].constData();
-    if( !res )
+    SysFlags res;
+
+    if( cur.d_val.constData() == predefSymbols[UNTRACED].constData() )
+        res.set(UNTRACED);
+    else
         error(cur, QString("unknown system flag '%1'").arg(cur.d_val.constData()));
     expect(Tok_Rbrack, false, "SysFlag");
     return res;
@@ -926,7 +929,7 @@ Type* Parser2::ProcedureType() {
     p->pos = cur.toRowCol();
     if( FIRST_SysFlag(la.d_type) ) {
 		SysFlag();
-	}
+    }
 	if( FIRST_Attributes(la.d_type) ) {
         std::bitset<MaxAttr> a = Attributes();
         if( a.test(DELEGATE) )
@@ -1818,7 +1821,8 @@ Parser2::ID Parser2::IdentDef() {
 			invalid("IdentDef");
 	}
 	if( FIRST_SysFlag(la.d_type) ) {
-        res.untraced = SysFlag();
+        SysFlags f = SysFlag();
+        res.untraced = f.test(UNTRACED);
 	}
     return res;
 }

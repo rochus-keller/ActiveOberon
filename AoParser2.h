@@ -58,7 +58,7 @@ namespace Ao {
             ID():visi(Private),untraced(false){}
             bool isValid() const { return name.d_type == Tok_ident; }
         };
-        enum Attrs { UNTRACED, ACTIVE, DELEGATE, EXCLUSIVE, PRIORITY, SAFE, FFI, MaxAttr };
+        enum Attrs { UNTRACED = 0, ACTIVE, DELEGATE, EXCLUSIVE, PRIORITY, SAFE, MaxAttr };
 
         void Module();
 		void ImportDecl();
@@ -70,7 +70,8 @@ namespace Ao {
         QByteArray Assembler();
         bool ProcDecl();
         Ast::Declaration* ProcHead(bool forwardDecl);
-        bool SysFlag();
+        typedef std::bitset<MaxAttr> SysFlags;
+        SysFlags SysFlag();
         Ast::Type* FormalPars();
 		void FPSection();
         Ast::Type* ArrayType();
