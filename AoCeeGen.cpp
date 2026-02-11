@@ -79,7 +79,7 @@ CeeGen::ArrayType CeeGen::arrayType(Ast::Type * t)
     return a;
 }
 
-bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *body) {
+bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *body, bool generateMain) {
     errors.clear();
 
     curMod = module;
@@ -106,14 +106,27 @@ bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *bo
     bout << dedication << endl << endl;
 
     bout << "#include \"" << module->name << ".h\"" << endl;
+    bout << "#include <gc.h>" << endl;
     bout << "#include <stdlib.h>" << endl;
+    bout << "#include <stdio.h>" << endl;
     bout << "#include <string.h>" << endl;
     bout << "#include <assert.h>" << endl;
-    bout << "#include <math.h>" << endl << endl;
+    bout << "#include <math.h>" << endl;
+    bout << "#include <ctype.h>" << endl;
+    bout << "#include <stddef.h>" << endl << endl;
 
     hout << "#include <stdint.h>" << endl;
 
     Module(module);
+
+    if( generateMain )
+    {
+        bout << "int main(int argc, char* argv[]) {" << endl;
+        bout << "    GC_INIT();" << endl;
+        bout << "    " << module->name << "$init$();" << endl;
+        bout << "    return 0;" << endl;
+        bout << "}" << endl;
+    }
 
     hout << endl;
     hout << "#endif // " << guard;
@@ -264,21 +277,47 @@ void CeeGen::Module(Ast::Declaration *module) {
     bout << "        if( cls == super ) return 1;" << endl;
     bout << "        cls = cls->super;" << endl;
     bout << "    }" << endl;
+    bout << "    return 0;" << endl;
     bout << "}" << endl;
     bout << "static MIC$DA* $toda(void** ptr) {" << endl;
     bout << "    return (MIC$DA*)((char*)ptr - offsetof(MIC$DA, $));" << endl;
     bout << "}" << endl;
     bout << "static void** $allocda(uint32_t count, int elemSize) {" << endl;
-    bout << "    MIC$DA* ptr = malloc(sizeof(MIC$DA) + count * elemSize);" << endl;
+    bout << "    MIC$DA* ptr = (MIC$DA*)GC_MALLOC(sizeof(MIC$DA) + count * elemSize);" << endl;
     bout << "    if( ptr == 0 ) return 0;" << endl;
     bout << "    ptr->$1 = count;" << endl;
     bout << "    return ptr->$;" << endl;
     bout << "}" << endl << endl;
 
     d = DeclSeq(d, true, true);
-    if( d && d->body ) {
-        StatBlock(d->body);
+
+    hout << "extern void " << module->name << "$init$(void);" << endl;
+    bout << "static int " << module->name << "$initialized = 0;" << endl;
+    bout << "void " << module->name << "$init$(void) {" << endl;
+    bout << "    if( " << module->name << "$initialized ) return;" << endl;
+    bout << "    " << module->name << "$initialized = 1;" << endl;
+
+    Ast::Declaration* imp = module->link;
+    while( imp && imp->kind == Ast::Declaration::Import )
+    {
+        Import import = imp->data.value<Import>();
+        if( import.moduleName != "SYSTEM" )
+            bout << "    " << import.moduleName << "$init$();" << endl;
+        imp = imp->next;
     }
+
+    d = module->link;
+    while(d)
+    {
+        if( d->kind == Declaration::Procedure && d->begin )
+        {
+            bout << "    " << module->name << "$BEGIN$();" << endl;
+            break;
+        }
+        d = d->next;
+    }
+
+    bout << "}" << endl << endl;
 }
 
 void CeeGen::ImportDecl(Ast::Declaration* i) {
@@ -402,7 +441,7 @@ void CeeGen::ProcDecl(Ast::Declaration * proc) {
     procHeader(proc, true);
     hout << ";" << endl;
 
-    if( !proc->forward )
+    if( !proc->extern_ )
     {
         procHeader(proc, false);
         bout << " {" << endl;
@@ -464,10 +503,46 @@ void CeeGen::StatSeq(Ast::Statement*s) {
 
 void CeeGen::assig(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Assig);
-    Expr(s->lhs, bout);
-    bout << " = ";
-    Expr(s->rhs, bout);
-    bout << ";";
+    Type* lt = deref(s->lhs->type());
+    Type* rt = deref(s->rhs->type());
+    if( lt && (lt->kind == Type::Record || lt->kind == Type::Object) )
+    {
+        bout << "memcpy(&";
+        Expr(s->lhs, bout);
+        bout << ", &";
+        Expr(s->rhs, bout);
+        bout << ", sizeof(" << typeRef(lt) << "));";
+    }else if( lt && lt->kind == Type::Array && lt->expr != 0 )
+    {
+        Type* elemT = deref(lt->type());
+        if( elemT && elemT->kind == Type::CHAR && rt && rt->kind == Type::StrLit )
+        {
+            bout << "strncpy((char*)";
+            Expr(s->lhs, bout);
+            if( lt->isSOA() )
+                bout << ".$";
+            bout << ", ";
+            Expr(s->rhs, bout);
+            bout << ", ";
+            Expr(lt->expr, bout);
+            bout << ");";
+        }else
+        {
+            bout << "memcpy(&";
+            Expr(s->lhs, bout);
+            bout << ", &";
+            Expr(s->rhs, bout);
+            bout << ", sizeof(" << typeRef(lt) << "));";
+        }
+    }else
+    {
+        Expr(s->lhs, bout);
+        bout << " = ";
+        if( lt && rt && lt->kind == Type::Pointer && rt->kind == Type::Pointer && lt != rt )
+            bout << "(" << typeRef(lt) << ")";
+        Expr(s->rhs, bout);
+        bout << ";";
+    }
 }
 
 Ast::Statement *CeeGen::IfStat(Ast::Statement *s) {
@@ -679,6 +754,7 @@ Ast::Statement *CeeGen::ForStat(Ast::Statement *s) {
         Expr(i, bout);
         bout << " += " << step << ";" << endl;
         curLevel--;
+        bout << ws() << "}" << endl;
         bout << ws() << "} else {" << endl;
         // WHILE v >= temp DO statements; v := v + step END
         bout << ws() << "while( ";
@@ -690,6 +766,7 @@ Ast::Statement *CeeGen::ForStat(Ast::Statement *s) {
         Expr(i, bout);
         bout << " += " << step << ";" << endl;
         curLevel--;
+        bout << ws() << "}" << endl;
         bout << ws() << "}";
     }
     return s;
@@ -703,21 +780,44 @@ void CeeGen::LoopStat(Ast::Statement *s) {
     StatSeq(s->body);
     curLevel--;
     loopStack.pop_back();
-    bout << ws() << "__" << s->pos.d_row << ":" << endl;
     bout << ws() << "}";
+    bout << ws() << "__" << s->pos.d_row << ":" << endl;
 }
 
 Ast::Statement *CeeGen::WithStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::With);
-    bout << ws() << "if( ";
-    bout << "$isinst(&" << typeRef(s->rhs->type()) << "$class$, ";
-    Type* t = deref(s->lhs->type());
-    Q_ASSERT(t->kind == Type::Pointer || t->kind == Type::PTR || s->lhs->type()->kind == Type::Reference);
-    Expr(s->lhs, bout);
-    bout << ") ) {" << endl;
-    // TODO: cast
+    Type* guardType = deref(s->rhs->type());
+    Type* guardBase = guardType;
+    if( guardBase->kind == Type::Pointer )
+        guardBase = deref(guardBase->type());
+    Type* lhsType = deref(s->lhs->type());
+    bout << "{ " << endl;
     curLevel++;
+    bout << ws() << "if( ";
+    if( lhsType->kind == Type::Pointer || lhsType->kind == Type::PTR )
+    {
+        bout << "(";
+        Expr(s->lhs, bout);
+        bout << " ? $isinst(&" << qualident(guardBase->decl) << "$class$, (void*)";
+        Expr(s->lhs, bout);
+        bout << "->class$) : 0)";
+    }else
+    {
+        bout << "$isinst(&" << qualident(guardBase->decl) << "$class$, (void*)";
+        Expr(s->lhs, bout);
+        bout << ".class$)";
+    }
+    bout << " ) {" << endl;
+    curLevel++;
+    Declaration* d = s->lhs->val.value<Declaration*>();
+    bout << ws() << "void* _with_tmp = (void*)";
+    Expr(s->lhs, bout);
+    bout << ";" << endl;
+    bout << ws() << typeRef(guardBase) << "* " << escape(d->name) << " = ("
+         << typeRef(guardBase) << "*)_with_tmp;" << endl;
     StatSeq(s->body);
+    curLevel--;
+    bout << ws() << "}" << endl;
     curLevel--;
     bout << ws() << "}";
     return s;
@@ -880,35 +980,67 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
-    out << "(";
-    Expr(e->lhs, out);
-    switch(e->kind)
+    Type* lt = deref(e->lhs->type());
+    Type* rt = deref(e->rhs->type());
+    bool isChar = (lt && lt->kind == Type::CHAR) || (rt && rt->kind == Type::CHAR);
+    bool isStr = !isChar &&
+                 ((lt && (lt->kind == Type::StrLit || (lt->kind == Type::Array && deref(lt->type()) &&
+                   deref(lt->type())->kind == Type::CHAR))) ||
+                  (rt && (rt->kind == Type::StrLit || (rt->kind == Type::Array && deref(rt->type()) &&
+                   deref(rt->type())->kind == Type::CHAR))));
+    if( isStr )
     {
-    case Ast::Expression::Lt:
-        out << " < ";
-        break;
-    case Ast::Expression::Leq:
-        out << " <= ";
-        break;
-    case Ast::Expression::Geq:
-        out << " >= ";
-        break;
-    case Ast::Expression::Neq:
-        out << " != ";
-        break;
-    case Ast::Expression::Eq:
-        out << " == ";
-        break;
-    case Ast::Expression::Gt:
-        out << " > ";
-        break;
-    case Ast::Expression::Is:
-    case Ast::Expression::In:
-    default:
-        Q_ASSERT(false);
+        out << "(strcmp((const char*)";
+        Expr(e->lhs, out);
+        if( lt && lt->kind == Type::Array && lt->isSOA() )
+            out << ".$";
+        out << ", (const char*)";
+        Expr(e->rhs, out);
+        if( rt && rt->kind == Type::Array && rt->isSOA() )
+            out << ".$";
+        out << ")";
+        switch(e->kind)
+        {
+        case Ast::Expression::Lt: out << " < 0)"; break;
+        case Ast::Expression::Leq: out << " <= 0)"; break;
+        case Ast::Expression::Geq: out << " >= 0)"; break;
+        case Ast::Expression::Neq: out << " != 0)"; break;
+        case Ast::Expression::Eq: out << " == 0)"; break;
+        case Ast::Expression::Gt: out << " > 0)"; break;
+        default: Q_ASSERT(false);
+        }
+    }else
+    {
+        out << "(";
+        Expr(e->lhs, out);
+        switch(e->kind)
+        {
+        case Ast::Expression::Lt:
+            out << " < ";
+            break;
+        case Ast::Expression::Leq:
+            out << " <= ";
+            break;
+        case Ast::Expression::Geq:
+            out << " >= ";
+            break;
+        case Ast::Expression::Neq:
+            out << " != ";
+            break;
+        case Ast::Expression::Eq:
+            out << " == ";
+            break;
+        case Ast::Expression::Gt:
+            out << " > ";
+            break;
+        case Ast::Expression::Is:
+        case Ast::Expression::In:
+        default:
+            Q_ASSERT(false);
+        }
+        Expr(e->rhs, out);
+        out << ")";
     }
-    Expr(e->rhs, out);
-    out << ")";
     return true;
 }
 
@@ -928,12 +1060,23 @@ bool CeeGen::isOp(Ast::Expression *e, QTextStream &out)
         out << "0";
     else
     {
-        out << "$isinst(&" << typeRef(e->rhs->type()) << "$class$, ";
-        Expr(e->lhs, out );
-        Type* t = deref(e->lhs->type());
-        // TODO Q_ASSERT(t->kind == Type::Pointer || e->lhs->type()->kind == Type::Reference);
-        // we pass the pointer to the instance, not the class pointer, because the former can be NULL
-        out << ")";
+        Type* guardType = deref(e->rhs->type());
+        if( guardType->kind == Type::Pointer )
+            guardType = deref(guardType->type());
+        Type* lhsType = deref(e->lhs->type());
+        if( lhsType->kind == Type::Pointer || lhsType->kind == Type::PTR )
+        {
+            out << "(";
+            Expr(e->lhs, out);
+            out << " ? $isinst(&" << qualident(guardType->decl) << "$class$, (void*)";
+            Expr(e->lhs, out);
+            out << "->class$) : 0)";
+        }else
+        {
+            out << "$isinst(&" << qualident(guardType->decl) << "$class$, (void*)";
+            Expr(e->lhs, out);
+            out << ".class$)";
+        }
     }
     return true;
 }
@@ -942,6 +1085,8 @@ bool CeeGen::unaryOp(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
+    Type* t = deref(e->lhs->type());
+    bool isSet = t && t->kind == Type::SET;
 
     out << "(";
     switch(e->kind)
@@ -950,7 +1095,7 @@ bool CeeGen::unaryOp(Ast::Expression *e, QTextStream &out)
         out << "+";
         break;
     case Ast::Expression::Minus:
-        out << "-";
+        out << (isSet ? "~" : "-");
         break;
     case Ast::Expression::Not:
         out << "!";
@@ -967,20 +1112,35 @@ bool CeeGen::arithOp(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
+    Type* lt = deref(e->lhs->type());
+    bool isSet = lt && lt->kind == Type::SET;
+
+    if( isSet && e->kind == Ast::Expression::Sub )
+    {
+        out << "(";
+        Expr(e->lhs, out);
+        out << " & ~(";
+        Expr(e->rhs, out);
+        out << "))";
+        return true;
+    }
+
     out << "(";
     Expr(e->lhs, out);
     switch(e->kind)
     {
     case Ast::Expression::Add:
-        out << " + ";
+        out << (isSet ? " | " : " + ");
         break;
     case Ast::Expression::Sub:
         out << " - ";
         break;
     case Ast::Expression::Mul:
-        out << " * ";
+        out << (isSet ? " & " : " * ");
         break;
     case Ast::Expression::Fdiv:
+        out << (isSet ? " ^ " : " / ");
+        break;
     case Ast::Expression::Div:
         out << " / ";
         break;
@@ -1077,12 +1237,21 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
     }
     Q_ASSERT( !indices.isEmpty() );
 
-    Expr(indices[0]->lhs, out);
-
     Type* at = deref(indices[0]->lhs->type());
+    bool isOpenParam = (at->kind == Type::Array && at->expr == 0 && !at->dynamic);
 
-    if( at->expr != 0 )
-        out << ".$";
+    if( isOpenParam )
+    {
+        ArrayType art = arrayType(at);
+        out << "((" << typeRef(art.second) << "*)";
+        Expr(indices[0]->lhs, out);
+        out << ".$)";
+    }else
+    {
+        Expr(indices[0]->lhs, out);
+        if( at->kind == Type::Array && at->expr != 0 )
+            out << ".$";
+    }
 
     out << "[";
     if( indices.size() > 1 )
@@ -1097,15 +1266,12 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
             Expr(at->expr, out);
         else if( at->dynamic )
         {
-            // pointer
-            out << "*(((uint32_t*)";
-            Expr(indices[0]->lhs->lhs, out);
-            out << ") - 4*" << n << ")"; // TODO
+            invalid("multi-dimensional open/dynamic array indexing not yet supported", e->pos);
+            out << "0 /* unsupported multi-dim open array */";
         }else
         {
-            // open array param
-            Expr(indices[0]->lhs, out);
-            out << n; // TODO
+            invalid("multi-dimensional open array param indexing not yet supported", e->pos);
+            out << "0 /* unsupported multi-dim open array */";
         }
         out << " + ";
         Expr(indices[n]->rhs, out);
@@ -1129,9 +1295,15 @@ bool CeeGen::cast(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
-    // TODO
-    Expr(e->lhs, out);
-    return false;
+    Type* t = deref(e->type());
+    if( t )
+    {
+        out << "((" << typeRef(t) << ")";
+        Expr(e->lhs, out);
+        out << ")";
+    }else
+        Expr(e->lhs, out);
+    return true;
 }
 
 bool CeeGen::call(Ast::Expression *e, QTextStream &out)
@@ -1163,47 +1335,69 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
     {
         if( i != 0 )
             out << ", ";
-#if 0
-        // TODO
         Type* formT = deref( i < formals.size() ? formals[i]->type() : 0);
-        if( formT && formT->kind == Type::Array )
+        if( formT && formT->kind == Type::Array && formT->expr == 0 )
         {
+            ArrayType formArr = arrayType(formT);
+            int openDims = 0;
+            for( int j = 0; j < formArr.first.size(); j++ )
+                if( formArr.first[j] == 0 ) openDims++;
+            if( openDims > 1 )
+                invalid("multi-dimensional open array argument not yet supported", arg->pos);
             Type* actT = deref(arg->type());
-            Q_ASSERT( actT && (actT->kind == Type::Array || actT->kind == Type::StrLit || actT->kind == Type::Reference));
-
-            // this is a formal array parameter; it can be fix size or open by var or by val
-            // the actual arg must also be an array; it can be fix, a derefed pointer to arr, an open array, or a string lit
-
-            // TODO: implement all possible combinations (~30)
-            ArrayType arrT = arrayType(formT);
-            Expr(arg, out);
-            if( formT->dynamic )
+            if( actT && actT->kind == Type::StrLit )
             {
-                // pointer
-                for(int i = 0; i < arrT.first.size() && arrT.first[i] == 0; i++)
+                out << "(MIC$AP){strlen(";
+                Expr(arg, out);
+                out << ") + 1, (void*)";
+                Expr(arg, out);
+                out << "}";
+            }else if( actT && actT->kind == Type::Array && actT->expr != 0 )
+            {
+                out << "(MIC$AP){";
+                Expr(actT->expr, out);
+                out << ", (void*)";
+                Expr(arg, out);
+                if( actT->isSOA() )
+                    out << ".$";
+                out << "}";
+            }else if( actT && actT->kind == Type::Array && actT->expr == 0 )
+            {
+                Expr(arg, out);
+            }else if( actT && actT->kind == Type::Pointer )
+            {
+                Type* base = deref(actT->type());
+                if( base && base->kind == Type::Array && base->expr == 0 )
                 {
-                    out << ", ";
-                    out << "*(((uint32_t*)";
+                    out << "(MIC$AP){$toda((void**)";
                     Expr(arg, out);
-                    out << ") - 4*" << i << ")";
-                }
+                    out << ")->$1, (void*)";
+                    Expr(arg, out);
+                    out << "}";
+                }else
+                    Expr(arg, out);
+            }else if( actT && actT->kind == Type::Reference )
+            {
+                Expr(arg, out);
             }else
-            {
-                // open array param
-                for(int i = 0; i < arrT.first.size() && arrT.first[i] == 0; i++)
-                {
-                    out << ", ";
-                    Expr(arg, out);
-                    out << i;
-                }
-            }
+                Expr(arg, out);
         }else if( i < formals.size() && formals[i]->varParam )
         {
-            out << "&";
-            Expr(arg, out);
+            Type* actT = deref(arg->type());
+            if( actT && actT->kind == Type::Array && actT->expr == 0 )
+                Expr(arg, out);
+            else
+            {
+                out << "&";
+                Expr(arg, out);
+            }
         }else
-#endif
+        {
+            Type* actT = deref(arg->type());
+            if( formT && actT && formT->kind == Type::Pointer && actT->kind == Type::Pointer && formT != actT )
+                out << "(" << typeRef(formT) << ")";
             Expr(arg, out);
+        }
         i++;
         arg = arg->next;
     }
@@ -1254,8 +1448,22 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
         break;
     case QVariant::ByteArray: {
         QByteArray str = e->val.toByteArray();
-        str.replace("\"", "\\\"");
-        out << "\"" << str << "\"";
+        if( str.size() == 1 )
+        {
+            char c = str[0];
+            if( c == '\'' )
+                out << "'\\\''";
+            else if( c == '\\' )
+                out << "'\\\\'"; 
+            else if( c >= 32 && c < 127 )
+                out << "'" << str << "'";
+            else
+                out << "(char)" << (int)(unsigned char)c;
+        }else
+        {
+            str.replace("\"", "\\\"");
+            out << "\"" << str << "\"";
+        }
         } break;
     default:
         Q_ASSERT(false);
@@ -1329,7 +1537,7 @@ void CeeGen::metaDecl(Ast::Declaration *d)
     DeclList methods = t->methodList(true);
     foreach( Declaration* p, methods )
     {
-        Q_ASSERT( p->kind == Declaration::Procedure && !p->forward );
+        Q_ASSERT( p->kind == Declaration::Procedure && !p->extern_ );
         bout << ws(1) << qualident(p) << ", " << endl;
 
         hout << ws(1) << typeRef(p->type()) << " (*" << p->name << ")";
@@ -1355,50 +1563,585 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
 
     switch( bi )
     {
-    case Builtin::SYSTEM_VAL:
+    case Builtin::ABS:
+        if( a.size() != 1 )
+            return false;
+        {
+            Type* t = deref(a[0]->type());
+            if( t && t->isReal() )
+                out << "fabs(";
+            else
+                out << "abs(";
+            Expr(a[0], out);
+            out << ")";
+        }
+        return true;
+    case Builtin::ODD:
+        if( a.size() != 1 )
+            return false;
+        out << "((";
+        Expr(a[0], out);
+        out << ") & 1)";
+        return true;
+    case Builtin::CAP:
+        if( a.size() != 1 )
+            return false;
+        out << "(char)toupper((unsigned char)";
+        Expr(a[0], out);
+        out << ")";
+        return true;
+    case Builtin::ASH:
         if( a.size() != 2 )
             return false;
-        out << "((" << typeRef(a[0]->type()) << ")";
+        out << "ASH(";
+        Expr(a[0], out);
+        out << ", ";
         Expr(a[1], out);
         out << ")";
         return true;
-    case Builtin::ASSERT:
+    case Builtin::LEN:
+        if( a.size() < 1 || a.size() > 2 )
+            return false;
+        {
+            Type* t = deref(a[0]->type());
+            if( t && t->kind == Type::StrLit )
+            {
+                out << "(strlen(";
+                Expr(a[0], out);
+                out << ") + 1)";
+            }else if( t && t->kind == Type::Array )
+            {
+                if( t->expr )
+                {
+                    Expr(t->expr, out);
+                }else if( t->dynamic )
+                {
+                    out << "$toda((void**)";
+                    Expr(a[0], out);
+                    out << ")->$1";
+                }else
+                {
+                    Expr(a[0], out);
+                    out << ".$1";
+                }
+            }else if( t && t->kind == Type::Pointer )
+            {
+                Type* base = deref(t->type());
+                if( base && base->kind == Type::Array && base->expr == 0 )
+                {
+                    out << "$toda((void**)";
+                    Expr(a[0], out);
+                    out << ")->$1";
+                }else
+                {
+                    out << "0";
+                }
+            }else
+                out << "0";
+        }
+        return true;
+    case Builtin::MAX:
+        if( a.size() == 1 )
+        {
+            Type* t = deref(a[0]->type());
+            if( t && t->kind == Type::SET )
+            {
+                out << "31";
+            }else if( t )
+            {
+                switch( t->kind )
+                {
+                case Type::SHORTINT: out << "127"; break;
+                case Type::INTEGER: out << "32767"; break;
+                case Type::LONGINT: out << "2147483647L"; break;
+                case Type::HUGEINT: out << "9223372036854775807LL"; break;
+                case Type::REAL: out << "3.40282347e+38f"; break;
+                case Type::LONGREAL: out << "1.7976931348623157e+308"; break;
+                case Type::CHAR: out << "255"; break;
+                case Type::BOOLEAN: out << "1"; break;
+                case Type::SET: out << "31"; break;
+                default: out << "0"; break;
+                }
+            }else
+                out << "0";
+            return true;
+        }else if( a.size() == 2 )
+        {
+            out << "((";
+            Expr(a[0], out);
+            out << ") > (";
+            Expr(a[1], out);
+            out << ") ? (";
+            Expr(a[0], out);
+            out << ") : (";
+            Expr(a[1], out);
+            out << "))";
+            return true;
+        }
+        return false;
+    case Builtin::MIN:
+        if( a.size() == 1 )
+        {
+            Type* t = deref(a[0]->type());
+            if( t && t->kind == Type::SET )
+            {
+                out << "0";
+            }else if( t )
+            {
+                switch( t->kind )
+                {
+                case Type::SHORTINT: out << "-128"; break;
+                case Type::INTEGER: out << "-32768"; break;
+                case Type::LONGINT: out << "(-2147483647L - 1)"; break;
+                case Type::HUGEINT: out << "(-9223372036854775807LL - 1)"; break;
+                case Type::REAL: out << "1.17549435e-38f"; break;
+                case Type::LONGREAL: out << "2.2250738585072014e-308"; break;
+                case Type::CHAR: out << "0"; break;
+                case Type::BOOLEAN: out << "0"; break;
+                case Type::SET: out << "0"; break;
+                default: out << "0"; break;
+                }
+            }else
+                out << "0";
+            return true;
+        }else if( a.size() == 2 )
+        {
+            out << "((";
+            Expr(a[0], out);
+            out << ") < (";
+            Expr(a[1], out);
+            out << ") ? (";
+            Expr(a[0], out);
+            out << ") : (";
+            Expr(a[1], out);
+            out << "))";
+            return true;
+        }
+        return false;
+    case Builtin::SIZE:
         if( a.size() != 1 )
             return false;
-        out << "assert(";
+        out << "sizeof(" << typeRef(a[0]->type()) << ")";
+        return true;
+    case Builtin::ORD:
+        if( a.size() != 1 )
+            return false;
+        out << "(long)(unsigned char)(";
+        Expr(a[0], out);
+        out << ")";
+        return true;
+    case Builtin::CHR:
+        if( a.size() != 1 )
+            return false;
+        out << "(char)(";
+        Expr(a[0], out);
+        out << ")";
+        return true;
+    case Builtin::SHORT:
+        if( a.size() != 1 )
+            return false;
+        {
+            Type* t = deref(a[0]->type());
+            if( t )
+            {
+                switch( t->kind )
+                {
+                case Type::HUGEINT: out << "(long)("; break;
+                case Type::LONGINT: out << "(short)("; break;
+                case Type::INTEGER: out << "(char)("; break;
+                case Type::LONGREAL: out << "(float)("; break;
+                default: out << "("; break;
+                }
+            }else
+                out << "(";
+            Expr(a[0], out);
+            out << ")";
+        }
+        return true;
+    case Builtin::LONG:
+        if( a.size() != 1 )
+            return false;
+        {
+            Type* t = deref(a[0]->type());
+            if( t )
+            {
+                switch( t->kind )
+                {
+                case Type::LONGINT: out << "(long long)("; break;
+                case Type::INTEGER: out << "(long)("; break;
+                case Type::SHORTINT:
+                case Type::CHAR: out << "(short)("; break;
+                case Type::REAL: out << "(double)("; break;
+                default: out << "("; break;
+                }
+            }else
+                out << "(";
+            Expr(a[0], out);
+            out << ")";
+        }
+        return true;
+    case Builtin::ENTIER:
+        if( a.size() != 1 )
+            return false;
+        out << "(long)floor((double)";
         Expr(a[0], out);
         out << ")";
         return true;
     case Builtin::INC:
+        if( a.size() < 1 || a.size() > 2 )
+            return false;
         if( a.size() == 1 )
         {
             Expr(a[0], out);
             out << "++";
-            return true;
-        }else if( a.size() == 2 )
+        }else
         {
             Expr(a[0], out);
             out << " += ";
             Expr(a[1], out);
-            return true;
-        }else
-            return false;
+        }
+        return true;
     case Builtin::DEC:
+        if( a.size() < 1 || a.size() > 2 )
+            return false;
         if( a.size() == 1 )
         {
             Expr(a[0], out);
             out << "--";
-            return true;
-        }else if( a.size() == 2 )
+        }else
         {
             Expr(a[0], out);
             out << " -= ";
             Expr(a[1], out);
-            return true;
-        }else
+        }
+        return true;
+    case Builtin::INCL:
+        if( a.size() != 2 )
             return false;
-    case Builtin::ASH:
-        break; // implemented by macro
+        Expr(a[0], out);
+        out << " |= (1u << ";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::EXCL:
+        if( a.size() != 2 )
+            return false;
+        Expr(a[0], out);
+        out << " &= ~(1u << ";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::COPY:
+        if( a.size() != 2 )
+            return false;
+        {
+            Type* srcT = deref(a[0]->type());
+            Type* dstT = deref(a[1]->type());
+            if( dstT && dstT->kind == Type::Array && dstT->expr )
+            {
+                out << "strncpy((char*)";
+                Expr(a[1], out);
+                if( dstT->isSOA() )
+                    out << ".$";
+                out << ", (const char*)";
+                Expr(a[0], out);
+                if( srcT && srcT->isSOA() )
+                    out << ".$";
+                out << ", ";
+                Expr(dstT->expr, out);
+                out << ")";
+            }else
+            {
+                out << "strcpy((char*)";
+                Expr(a[1], out);
+                if( dstT && dstT->isSOA() )
+                    out << ".$";
+                out << ", (const char*)";
+                Expr(a[0], out);
+                if( srcT && srcT->isSOA() )
+                    out << ".$";
+                out << ")";
+            }
+        }
+        return true;
+    case Builtin::NEW:
+        if( a.size() < 1 )
+            return false;
+        {
+            Type* ptrType = deref(a[0]->type());
+            if( ptrType && ptrType->kind == Type::Pointer )
+            {
+                Type* base = deref(ptrType->type());
+                if( base && (base->kind == Type::Record || base->kind == Type::Object) )
+                {
+                    Expr(a[0], out);
+                    out << " = (" << typeRef(base) << "*)GC_MALLOC(sizeof(" << typeRef(base) << "))";
+                    if( base->decl )
+                    {
+                        out << "; ";
+                        Expr(a[0], out);
+                        out << "->class$ = &" << qualident(base->decl) << "$class$";
+                    }
+                }else if( base && base->kind == Type::Array && base->expr == 0 )
+                {
+                    ArrayType at = arrayType(base);
+                    Expr(a[0], out);
+                    out << " = (" << typeRef(at.second) << "*)$allocda(";
+                    if( a.size() > 1 )
+                        Expr(a[1], out);
+                    else
+                        out << "0";
+                    out << ", sizeof(" << typeRef(at.second) << "))";
+                }else
+                {
+                    Expr(a[0], out);
+                    out << " = (" << typeRef(ptrType) << ")GC_MALLOC(sizeof(" << typeRef(base) << "))";
+                }
+            }else
+            {
+                Expr(a[0], out);
+                out << " = GC_MALLOC(sizeof(*";
+                Expr(a[0], out);
+                out << "))";
+            }
+        }
+        return true;
+    case Builtin::HALT:
+        if( a.size() != 1 )
+            return false;
+        out << "exit(";
+        Expr(a[0], out);
+        out << ")";
+        return true;
+    case Builtin::AWAIT:
+        if( a.size() != 1 )
+            return false;
+        out << "/* AWAIT("; // stub for concurrency
+        Expr(a[0], out);
+        out << ") */";
+        return true;
+    case Builtin::ASSERT:
+        if( a.size() < 1 || a.size() > 2 )
+            return false;
+#if _DEBUG
+        out << "if(!";
+        Expr(a[0], out);
+        out << "){fprintf(stderr,\"assertion FAILED in %s:%d\\n\", __FILE__, __LINE__);fflush(stderr);}";
+#else
+        out << "assert(";
+        Expr(a[0], out);
+        out << ")";
+#endif
+        return true;
+    case Builtin::SYSTEM_ADR:
+        if( a.size() != 1 )
+            return false;
+        out << "(void*)&(";
+        Expr(a[0], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_VAL:
+        if( a.size() != 2 )
+            return false;
+        out << "*(" << typeRef(a[0]->type()) << "*)&(";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_BIT:
+        if( a.size() != 2 )
+            return false;
+        out << "((*(long*)(";
+        Expr(a[0], out);
+        out << ") >> (";
+        Expr(a[1], out);
+        out << ")) & 1)";
+        return true;
+    case Builtin::SYSTEM_CC:
+        if( a.size() != 1 )
+            return false;
+        out << "0 /* SYSTEM.CC not supported in C */";
+        return true;
+    case Builtin::SYSTEM_LSH:
+        if( a.size() != 2 )
+            return false;
+        out << "ASH(";
+        Expr(a[0], out);
+        out << ", ";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_ROT:
+        if( a.size() != 2 )
+            return false;
+        out << "((";
+        Expr(a[0], out);
+        out << ") << ((";
+        Expr(a[1], out);
+        out << ") & 31) | (unsigned long)(";
+        Expr(a[0], out);
+        out << ") >> (32 - ((";
+        Expr(a[1], out);
+        out << ") & 31)))";
+        return true;
+    case Builtin::SYSTEM_TYPECODE:
+        if( a.size() != 1 )
+            return false;
+        out << "(long)(";
+        Expr(a[0], out);
+        out << ")->class$";
+        return true;
+    case Builtin::SYSTEM_GET:
+        if( a.size() != 2 )
+            return false;
+        Expr(a[1], out);
+        out << " = *((" << typeRef(a[1]->type()) << "*)(";
+        Expr(a[0], out);
+        out << "))";
+        return true;
+    case Builtin::SYSTEM_GET8:
+        if( a.size() != 1 )
+            return false;
+        out << "(*(char*)(";
+        Expr(a[0], out);
+        out << "))";
+        return true;
+    case Builtin::SYSTEM_GET16:
+        if( a.size() != 1 )
+            return false;
+        out << "(*(short*)(";
+        Expr(a[0], out);
+        out << "))";
+        return true;
+    case Builtin::SYSTEM_GET32:
+        if( a.size() != 1 )
+            return false;
+        out << "(*(long*)(";
+        Expr(a[0], out);
+        out << "))";
+        return true;
+    case Builtin::SYSTEM_GET64:
+        if( a.size() != 1 )
+            return false;
+        out << "(*(long long*)(";
+        Expr(a[0], out);
+        out << "))";
+        return true;
+    case Builtin::SYSTEM_PUT:
+        if( a.size() != 2 )
+            return false;
+        out << "*((" << typeRef(a[1]->type()) << "*)(";
+        Expr(a[0], out);
+        out << ")) = ";
+        Expr(a[1], out);
+        return true;
+    case Builtin::SYSTEM_PUT8:
+        if( a.size() != 2 )
+            return false;
+        out << "(*(char*)(";
+        Expr(a[0], out);
+        out << ")) = (char)(";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_PUT16:
+        if( a.size() != 2 )
+            return false;
+        out << "(*(short*)(";
+        Expr(a[0], out);
+        out << ")) = (short)(";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_PUT32:
+        if( a.size() != 2 )
+            return false;
+        out << "(*(long*)(";
+        Expr(a[0], out);
+        out << ")) = (long)(";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_PUT64:
+        if( a.size() != 2 )
+            return false;
+        out << "(*(long long*)(";
+        Expr(a[0], out);
+        out << ")) = (long long)(";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_MOVE:
+        if( a.size() != 3 )
+            return false;
+        out << "memcpy((void*)(";
+        Expr(a[1], out);
+        out << "), (void*)(";
+        Expr(a[0], out);
+        out << "), ";
+        Expr(a[2], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_NEW:
+        if( a.size() < 2 )
+            return false;
+        Expr(a[0], out);
+        out << " = (";
+        out << typeRef(a[0]->type());
+        out << ")GC_MALLOC(";
+        Expr(a[1], out);
+        out << ")";
+        return true;
+    case Builtin::SYSTEM_GETREG:
+        if( a.size() != 2 )
+            return false;
+        out << "/* SYSTEM.GETREG(";
+        Expr(a[0], out);
+        out << ", ";
+        Expr(a[1], out);
+        out << ") not supported in C */";
+        return true;
+    case Builtin::SYSTEM_PUTREG:
+        if( a.size() != 2 )
+            return false;
+        out << "/* SYSTEM.PUTREG(";
+        Expr(a[0], out);
+        out << ", ";
+        Expr(a[1], out);
+        out << ") not supported in C */";
+        return true;
+    case Builtin::SYSTEM_PORTIN:
+        if( a.size() != 2 )
+            return false;
+        out << "/* SYSTEM.PORTIN(";
+        Expr(a[0], out);
+        out << ", ";
+        Expr(a[1], out);
+        out << ") not supported in C */";
+        return true;
+    case Builtin::SYSTEM_PORTOUT:
+        if( a.size() != 2 )
+            return false;
+        out << "/* SYSTEM.PORTOUT(";
+        Expr(a[0], out);
+        out << ", ";
+        Expr(a[1], out);
+        out << ") not supported in C */";
+        return true;
+    case Builtin::SYSTEM_CLI:
+        out << "/* SYSTEM.CLI() not supported in C */";
+        return true;
+    case Builtin::SYSTEM_STI:
+        out << "/* SYSTEM.STI() not supported in C */";
+        return true;
+    case Builtin::SYSTEM_ENABLEINTERRUPTS:
+        out << "/* SYSTEM.ENABLEINTERRUPTS() not supported in C */";
+        return true;
+    case Builtin::SYSTEM_DISABLEINTERRUPTS:
+        out << "/* SYSTEM.DISABLEINTERRUPTS() not supported in C */";
+        return true;
+    case Builtin::SYSTEM_RESTOREINTERRUPTS:
+        out << "/* SYSTEM.RESTOREINTERRUPTS() not supported in C */";
+        return true;
     }
     return false;
 }
@@ -1518,18 +2261,12 @@ void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
     if( t && t->kind == Type::Array && t->expr == 0 )
     {
         ArrayType a = arrayType(t);
-#if 0
-        // an open Array is just a pointer to the memory, even in n-dim or var param case
-        out << typeRef(a.second) << "* " << escape(param->name) << "$";
+        int openDims = 0;
         for( int i = 0; i < a.first.size(); i++ )
-        {
-            if(a.first[i] != 0)
-                break; // from this dim size is fix
-            out << ", uint32_t " << escape(param->name) << "$" << i;
-        }
-#else
+            if( a.first[i] == 0 ) openDims++;
+        if( openDims > 1 )
+            invalid("multi-dimensional open array parameter not yet supported", param->pos);
         out << "MIC$AP " << escape(param->name);
-#endif
     }else if( param->varParam )
         out << typeRef(param->type()) << "* " << escape(param->name);
     else

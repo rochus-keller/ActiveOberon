@@ -419,7 +419,7 @@ Parser2::Parser2(AstModel* m, Scanner2* s):scanner(s),mdl(m),thisMod(0)
     predefSymbols[EXCLUSIVE] = Token::getSymbol("EXCLUSIVE");
     predefSymbols[PRIORITY] = Token::getSymbol("PRIORITY");
     predefSymbols[SAFE] = Token::getSymbol("SAFE");
-    BEGIN = Token::getSymbol("BEGIN");
+    BEGIN = Token::getSymbol("BEGIN$");
 }
 
 Parser2::~Parser2()
@@ -500,8 +500,6 @@ void Parser2::Module() {
     expect(Tok_MODULE, false, "Module");
 	expect(Tok_ident, false, "Module");
     m->name = cur.d_val;
-    if( m->name == "Out" )
-        dummy();
     m->pos = cur.toRowCol();
     ModuleData md;
     md.sourcePath = scanner->source();
@@ -1845,8 +1843,13 @@ Expression* Parser2::number() {
 		expect(Tok_integer, false, "number");
         quint64 i = 0;
         if( cur.d_val.endsWith('h') || cur.d_val.endsWith('H') )
-            i = cur.d_val.left(cur.d_val.size()-2).toULongLong();
-        else
+        {
+            QByteArray hex = cur.d_val.left(cur.d_val.size()-1);
+            bool ok;
+            i = hex.toULongLong(&ok, 16);
+            if( !ok )
+                error(cur.toRowCol(), "invalid hex number");
+        }else
             i = cur.d_val.toULongLong();
         res->setType(smallestIntType(i));
         res->val = i;

@@ -33,7 +33,7 @@ class CeeGen
 {
 public:
     CeeGen();
-    bool generate(Ast::Declaration* module, QIODevice* header, QIODevice* body);
+    bool generate(Ast::Declaration* module, QIODevice* header, QIODevice* body, bool generateMain = false);
     struct Error {
         QString msg;
         RowCol pos;

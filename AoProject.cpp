@@ -738,7 +738,7 @@ bool Project::generateC(const QString &outDir)
         QFile body( dir.absoluteFilePath(module.decl->name + ".c"));
         body.open(QFile::WriteOnly);
 
-        cg.generate(module.decl, &header, &body);
+        cg.generate(module.decl, &header, &body, true);
     }
     return true;
 }
