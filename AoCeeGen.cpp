@@ -291,33 +291,36 @@ void CeeGen::Module(Ast::Declaration *module) {
 
     d = DeclSeq(d, true, true);
 
-    hout << "extern void " << module->name << "$init$(void);" << endl;
-    bout << "static int " << module->name << "$initialized = 0;" << endl;
-    bout << "void " << module->name << "$init$(void) {" << endl;
-    bout << "    if( " << module->name << "$initialized ) return;" << endl;
-    bout << "    " << module->name << "$initialized = 1;" << endl;
-
-    Ast::Declaration* imp = module->link;
-    while( imp && imp->kind == Ast::Declaration::Import )
+    if( !module->extern_ )
     {
-        Import import = imp->data.value<Import>();
-        if( import.moduleName != "SYSTEM" )
-            bout << "    " << import.moduleName << "$init$();" << endl;
-        imp = imp->next;
-    }
+        hout << "extern void " << module->name << "$init$(void);" << endl;
+        bout << "static int " << module->name << "$initialized = 0;" << endl;
+        bout << "void " << module->name << "$init$(void) {" << endl;
+        bout << "    if( " << module->name << "$initialized ) return;" << endl;
+        bout << "    " << module->name << "$initialized = 1;" << endl;
 
-    d = module->link;
-    while(d)
-    {
-        if( d->kind == Declaration::Procedure && d->begin )
+        Ast::Declaration* imp = module->link;
+        while( imp && imp->kind == Ast::Declaration::Import )
         {
-            bout << "    " << module->name << "$BEGIN$();" << endl;
-            break;
+            Import import = imp->data.value<Import>();
+            if( import.moduleName != "SYSTEM" && import.resolved && !import.resolved->extern_ )
+                bout << "    " << import.moduleName << "$init$();" << endl;
+            imp = imp->next;
         }
-        d = d->next;
-    }
 
-    bout << "}" << endl << endl;
+        d = module->link;
+        while(d)
+        {
+            if( d->kind == Declaration::Procedure && d->begin )
+            {
+                bout << "    " << module->name << "$BEGIN$();" << endl;
+                break;
+            }
+            d = d->next;
+        }
+
+        bout << "}" << endl << endl;
+    }
 }
 
 void CeeGen::ImportDecl(Ast::Declaration* i) {
@@ -828,6 +831,13 @@ void CeeGen::ReturnStat(Ast::Statement* s) {
     bout << "return";
     if( s->rhs ) {
         bout << " ";
+        if( curProc )
+        {
+            Type* retT = deref(curProc->type());
+            Type* exprT = deref(s->rhs->type());
+            if( retT && exprT && retT->kind == Type::Pointer && exprT->kind == Type::Pointer && retT != exprT )
+                bout << "(" << typeRef(retT) << ")";
+        }
         Expr(s->rhs, bout);
     }
     bout << ";";
@@ -992,11 +1002,11 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
     {
         out << "(strcmp((const char*)";
         Expr(e->lhs, out);
-        if( lt && lt->kind == Type::Array && lt->isSOA() )
+        if( lt && lt->kind == Type::Array && (lt->isSOA() || (lt->expr == 0 && !lt->dynamic)) )
             out << ".$";
         out << ", (const char*)";
         Expr(e->rhs, out);
-        if( rt && rt->kind == Type::Array && rt->isSOA() )
+        if( rt && rt->kind == Type::Array && (rt->isSOA() || (rt->expr == 0 && !rt->dynamic)) )
             out << ".$";
         out << ")";
         switch(e->kind)
@@ -1285,6 +1295,16 @@ bool CeeGen::depointer(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
+    Type* pt = deref(e->lhs->type());
+    if( pt && pt->kind == Type::Pointer )
+    {
+        Type* base = deref(pt->type());
+        if( base && base->kind == Type::Array && base->expr == 0 )
+        {
+            Expr(e->lhs, out);
+            return false;
+        }
+    }
     out << "(*";
     Expr(e->lhs, out);
     out << ")";
@@ -1841,11 +1861,11 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             {
                 out << "strncpy((char*)";
                 Expr(a[1], out);
-                if( dstT->isSOA() )
+                if( dstT->isSOA() || (dstT->kind == Type::Array && dstT->expr == 0 && !dstT->dynamic) )
                     out << ".$";
                 out << ", (const char*)";
                 Expr(a[0], out);
-                if( srcT && srcT->isSOA() )
+                if( srcT && (srcT->isSOA() || (srcT->kind == Type::Array && srcT->expr == 0 && !srcT->dynamic)) )
                     out << ".$";
                 out << ", ";
                 Expr(dstT->expr, out);
@@ -1854,11 +1874,11 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             {
                 out << "strcpy((char*)";
                 Expr(a[1], out);
-                if( dstT && dstT->isSOA() )
+                if( dstT && (dstT->isSOA() || (dstT->kind == Type::Array && dstT->expr == 0 && !dstT->dynamic)) )
                     out << ".$";
                 out << ", (const char*)";
                 Expr(a[0], out);
-                if( srcT && srcT->isSOA() )
+                if( srcT && (srcT->isSOA() || (srcT->kind == Type::Array && srcT->expr == 0 && !srcT->dynamic)) )
                     out << ".$";
                 out << ")";
             }
@@ -1943,9 +1963,9 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
     case Builtin::SYSTEM_VAL:
         if( a.size() != 2 )
             return false;
-        out << "*(" << typeRef(a[0]->type()) << "*)&(";
+        out << "((" << typeRef(a[0]->type()) << ")(";
         Expr(a[1], out);
-        out << ")";
+        out << "))";
         return true;
     case Builtin::SYSTEM_BIT:
         if( a.size() != 2 )

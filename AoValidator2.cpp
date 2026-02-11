@@ -161,6 +161,7 @@ void Validator2::ImportDecl(Ast::Declaration* import) {
         mod->hasSubs = true; // the module is used by at least this one
         import->link = mod->link;
         i.resolved = mod;
+        mod->imported = true;
         import->data = QVariant::fromValue(i);
         markRef(mod, i.importedAt);
     }else

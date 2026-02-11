@@ -431,6 +431,8 @@ Parser2::~Parser2()
 void Parser2::RunParser() {
 	errors.clear();
     count = 0;
+    hasProcedures = false;
+    hasAnyBody = false;
 	next();
 	Module();
 }
@@ -527,6 +529,8 @@ void Parser2::Module() {
     if( la.d_type != Tok_Dot )
         // don't use expect here thus avoiding calling next() which might render an error in case of text after modules
         errors << Error("expecting a dot at the end of a module",la.toRowCol(), la.d_sourcePath);
+    if( hasProcedures && !hasAnyBody )
+        m->extern_ = true; // all procs in the module are external, no body required
 }
 
 void Parser2::ImportDecl() {
@@ -650,6 +654,7 @@ bool Parser2::ProcDecl() {
 	if( FIRST_ProcHead(la.d_type) ) {
         Declaration* procDecl = ProcHead(false);
 		expect(Tok_Semi, false, "ProcDecl");
+        hasProcedures = true;
         if( !procDecl->extern_ )
         {
             mdl->openScope(procDecl);
@@ -993,6 +998,7 @@ void Parser2::FieldList() {
 }
 
 Statement* Parser2::Body() {
+    hasAnyBody = true;
     return StatBlock();
 }
 

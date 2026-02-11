@@ -34,6 +34,7 @@ class CeeGen
 public:
     CeeGen();
     bool generate(Ast::Declaration* module, QIODevice* header, QIODevice* body, bool generateMain = false);
+    static QString genDedication();
     struct Error {
         QString msg;
         RowCol pos;
@@ -92,7 +93,6 @@ protected:
 protected:
     void invalid(const char* what, const RowCol&);
     void typeDecl(Ast::Declaration* type);
-    static QString genDedication();
     Ast::Type* deref(Ast::Type*);
     QByteArray typeRef(Ast::Type*);
     void pointerTo(QTextStream& out, Ast::Type* ptr);

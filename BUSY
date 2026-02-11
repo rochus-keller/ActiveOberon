@@ -2,6 +2,8 @@
 # License: GPL
 # https://github.com/rochus-keller/BUSY/blob/main/README.md on how to use this file
 
+# NOTE: This is still for the old AoNavigator. The newer BUSY build is pending.
+
 if busy_version < "2023-01-15" {
     error("this version of BUSY is not compatible with this build")
 }

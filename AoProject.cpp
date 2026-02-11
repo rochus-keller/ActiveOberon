@@ -713,33 +713,52 @@ bool Project::parse()
 
 bool Project::generateC(const QString &outDir)
 {
-    QSet<Ast::Declaration*> used;
     QDir dir(outDir);
     // TODO: check if files can be created and written
+    QList<Declaration*> tops;
     foreach( const ModuleSlot& module, modules )
     {
         if( module.decl == 0 || !module.decl->validated )
             continue;
-#if 0
-        Ast::Declaration* sub = module.decl->link;
-        while(sub)
-        {
-            if( sub->kind == Ast::Declaration::Import )
-            {
-                Ast::Declaration* imported = sub->imported;
-                used.insert(imported);
-            }
-            sub = sub->next;
-        }
-#endif
         CeeGen cg;
         QFile header( dir.absoluteFilePath(module.decl->name + ".h"));
         header.open(QFile::WriteOnly);
         QFile body( dir.absoluteFilePath(module.decl->name + ".c"));
-        body.open(QFile::WriteOnly);
+        if( !module.decl->extern_ )
+            body.open(QFile::WriteOnly);
 
-        cg.generate(module.decl, &header, &body, true);
+        // only generate bodies if there are implementations, generate main which calls the top levels
+        cg.generate(module.decl, &header, module.decl->extern_ ? 0 : &body, false);
+
+        if( !module.decl->imported )
+            tops << module.decl;
     }
+
+    QFile main(dir.absoluteFilePath("main+.c"));
+    main.open(QFile::WriteOnly);
+    QTextStream out(&main);
+    out << "// main+.c" << endl;
+    out << CeeGen::genDedication() << endl << endl;
+
+    foreach( Declaration* module, tops )
+    {
+        // if a module is not in "used", it is never imported and thus a root module
+        if( !module->extern_ )
+            out << "#include \"" <<  module->name << ".h\"" << endl;
+    }
+
+    out << endl;
+
+    out << "int main(int argc, char** argv) {" << endl;
+
+    foreach( Declaration* module, tops )
+    {
+        // if a module is not in "used", it is never imported and thus a root module
+        if( !module->extern_  )
+            out << "    " <<  module->name << "$init$();" << endl;
+    }
+    out << "    return 0;" << endl;
+    out << "}" << endl;
     return true;
 }
 

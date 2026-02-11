@@ -140,6 +140,8 @@ namespace Ao {
 		bool expect(int tt, bool pkw, const char* where);
         QVector<QByteArray> predefSymbols; // MaxAttrs
         QByteArray BEGIN;
+        bool hasAnyBody;
+        bool hasProcedures;
     };
 }
 #endif // include
