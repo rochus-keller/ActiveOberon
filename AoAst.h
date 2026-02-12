@@ -79,7 +79,6 @@ namespace Ast
         uint dynamic : 1; // array expr==0: dynamic==1->new(pointer), dynamic==0->parameter
 
         // Declaration:
-        uint varParam : 1; // var param
         uint constructor : 1;
         uint begin : 1;
         uint ownstype : 1;
@@ -93,7 +92,7 @@ namespace Ast
         uint byVal : 1; // option for LocalVar, Param, ModuleVar, Select, Index
         uint needsLval : 1;
 
-        // 30 bits
+        // 29 bits
 
         RowCol pos;
 
@@ -106,7 +105,7 @@ namespace Ast
             kind(0),
     #endif
             validated(0),deferred(0),delegate(0),allocated(0),receiver(0),
-            varParam(0),constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),imported(0),
+            constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),imported(0),
             byVal(0),needsLval(0),nonlocal(0),_ty(0),owned(0),anonymous(0),forward(0),dynamic(0), extern_(0){}
         ~Node();
     private:
@@ -143,11 +142,17 @@ namespace Ast
             Pointer,
             Reference, // the type of a VAR param within a procedure
             Procedure,
-            Array, // fixed size: expr!=0; dynamic: ptr to expr==0; open var param: ref to expr==0; open val param: expr==0
+            Array, // fixed size: expr!=0; dynamic: ptr to either expr==0 or !=0; open var param: ref to expr==0; open val param: expr==0
             Record,
             Object,
             NameRef
         };
+
+        /* Theory:
+           A POINTER TO T automatically implies that the object was generated with NEW and lives on the heap; there is no other way to get a POINTER in Oberon
+           An OBJECT is an implicit "POINTER TO RECORD" and is on the heap up-front
+        */
+
         static const char* name[];
 
 #ifdef _DEBUG
@@ -237,6 +242,7 @@ namespace Ast
         QByteArray scopedName(bool withModule = false) const;
         QByteArray getModuleFullName(bool dots = false) const;
         static void deleteAll(Declaration*);
+        bool isVarParam() const;
 
     private:
         ~Declaration();

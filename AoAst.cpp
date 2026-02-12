@@ -673,6 +673,11 @@ void Declaration::deleteAll(Declaration* d)
     }
 }
 
+bool Declaration::isVarParam() const
+{
+    return kind == ParamDecl && type() && type()->kind == Type::Reference;
+}
+
 static inline bool allConst( const Expression* args )
 {
     while( args != 0 )
@@ -1017,9 +1022,19 @@ void Node::setType(Type * t)
 
 Type *Node::overrideType(Type * t)
 {
-    Type* old = _ty;
-    _ty = t;
-    return old;
+    if( _ty && _ty->kind == Type::Reference )
+    {
+        // in case the declaration has a reference type (indicating it is a var parameter)
+        // replace the type the reference points to instead
+        Type* old = _ty->_ty;
+        _ty->_ty = t;
+        return old;
+    }else
+    {
+        Type* old = _ty;
+        _ty = t;
+        return old;
+    }
 }
 
 Node::~Node()

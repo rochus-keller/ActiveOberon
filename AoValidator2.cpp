@@ -221,7 +221,7 @@ void Validator2::VarDecl(Ast::Declaration* d) {
         Q_ASSERT(false);
     }
 
-    arrayStats(d->type(), d->pos, what);
+    //arrayStats(d->type(), d->pos, what);
 }
 
 void Validator2::Assembler(Ast::Declaration* proc) {
@@ -251,7 +251,7 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
         //    qDebug() << "non-var open array param at" << module->name << d->pos.d_row;
         if( !d->receiver )
             Type_(d->type());
-        arrayStats(d->type(), d->pos, d->varParam ? 'v' : 'p');
+        //arrayStats(d->type(), d->pos, d->varParam ? 'v' : 'p');
         d = d->next;
     }
     if( proc->type() )
@@ -260,7 +260,7 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
         Type* t = deref(proc->type());
         if( t->kind == Type::Array || t->kind == Type::Record )
             error(proc->pos, "return type cannot be an array nor a record");
-        arrayStats(proc->type(), proc->pos, 'r');
+        //arrayStats(proc->type(), proc->pos, 'r');
     }
     d = DeclSeq(d);
     if( proc->body ) {
@@ -406,13 +406,13 @@ bool Validator2::ProcedureType(Ast::Type* t) {
         if( param->kind == Ast::Declaration::ParamDecl )
         {
             ok &= Type_(param->type());
-            arrayStats(param->type(), param->pos, param->varParam ? 'v' : 'p');
+            //arrayStats(param->type(), param->pos, param->varParam ? 'v' : 'p');
         }
     }
     if( t->type() && t->type()->kind != Ast::Type::NoType )
     {
         ok &= Type_(t->type());
-        arrayStats(t->type(), t->decl ? t->decl->pos : RowCol(), 'r');
+        //arrayStats(t->type(), t->decl ? t->decl->pos : RowCol(), 'r');
     }
     return ok;
 }
@@ -663,7 +663,7 @@ bool Validator2::isPtrOrVarWithRecordObject(Expression* e)
         t = deref(t->type());
         return t->kind == Type::Record;
     }else if( t->kind == Type::Record )
-        return d->kind == Declaration::ParamDecl && d->varParam;
+        return d->isVarParam();
     return false;
 }
 
@@ -1602,7 +1602,9 @@ bool Validator2::paramListsMatch(const Ast::DeclList & lhs, Ast::Type * lt, cons
     {
         Declaration* l = lhs[i];
         Declaration* r = rhs[i];
-        if( l->varParam != r->varParam )
+        const bool varL = deref(l->type(),false)->kind == Type::Reference;
+        const bool varR = deref(r->type(),false)->kind == Type::Reference;
+        if( varL != varR )
             return false;
         if( !equals(l->type(), r->type()) )
             return false;
@@ -1614,6 +1616,8 @@ bool Validator2::equals(Ast::Type * lhs, Ast::Type * rhs)
 {
     lhs = deref(lhs);
     rhs = deref(rhs);
+    // Type::Reference is transparent for type comparison; it cannot be assessed by its address
+    // because it is created ad hoc, implicitly when a VAR parameter is declared
     if( lhs == rhs )
         return true;
     if( lhs->kind == Type::Array && lhs->expr == 0 && rhs->kind == Type::Array && rhs->expr == 0 )
@@ -1719,12 +1723,12 @@ Symbol*Validator2::markUnref(int len, const RowCol& pos)
     return s;
 }
 
-Type *Validator2::deref(Ast::Type *t)
+Type *Validator2::deref(Ast::Type *t, bool transparentReference )
 {
     // never returns zero
     if( t == 0 )
         return mdl->getType(Type::NoType);
-    if( t->kind == Type::NameRef || t->kind == Type::Reference )
+    if( t->kind == Type::NameRef || (transparentReference && t->kind == Type::Reference) )
     {
         if( !t->validated )
         {

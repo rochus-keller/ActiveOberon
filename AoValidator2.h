@@ -103,7 +103,7 @@ namespace Ao {
         void markDecl(Ast::Declaration* d);
         Ast::Symbol* markRef(Ast::Declaration* d, const RowCol& pos);
         Ast::Symbol* markUnref(int len, const RowCol& pos);
-        Ast::Type* deref(Ast::Type* t);
+        Ast::Type* deref(Ast::Type* t, bool transparentReferences = true );
         void resolveIfNamedType(Ast::Type* nameRef, const RowCol &pos);
         void resolveDesig(Ast::Expression* nameRef);
         typedef QPair<Ast::Declaration*,Ast::Declaration*> ResolvedQ; // [module .] member
@@ -115,7 +115,7 @@ namespace Ao {
         bool lhsIsBaseOfRhs(Ast::Type* lhs, Ast::Type* rhs);
         bool paramListsMatch( const Ast::DeclList&, Ast::Type*, const Ast::DeclList&, Ast::Type*);
         bool equals(Ast::Type*, Ast::Type*);
-        void arrayStats(Ast::Type*, const RowCol&, char what);
+        void arrayStats(Ast::Type * t, const RowCol & rc, char what);
 
     private:
         Ast::Declaration* module;

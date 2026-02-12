@@ -265,7 +265,15 @@ void CeeGen::Module(Ast::Declaration *module) {
 
     hout << "#define ASH(x, n) (((n) >= 0) ? ((x) << ((n) >= 0 ? (n) : 0)) : ((x) >> ((n) < 0  ? -(n) : 0)))" << endl;
     hout << "#ifndef __MIC_DEFINE__" << endl << "#define __MIC_DEFINE__" << endl;
+
     // static analysis revealed that in ETH Oberon System v2.3.7 only the first dim of all n-dim arrays is open
+    // array kinds:
+    // fixed size by value: struct { array[n]; }
+    //            by pointer: TBD   dynamic=1
+    //            by reference: TBD pointer to struct { array[n]; } dynamic=0
+    // open       by pointer: MIC$DA dynamic=1
+    //            by reference: MIC$AP dynamic=0
+
     hout << "typedef struct MIC$AP { uint32_t $1; void* $; } MIC$AP;" << endl; // n-dim open array parameter (var or val)
     hout << "typedef struct MIC$DA { uint32_t $1; void* $[]; } MIC$DA;" << endl; // n-dim dynamic array, pointer points to $, not $1 (for compat with SYSTEM calls)
     hout << "#endif" << endl;
@@ -303,7 +311,7 @@ void CeeGen::Module(Ast::Declaration *module) {
         while( imp && imp->kind == Ast::Declaration::Import )
         {
             Import import = imp->data.value<Import>();
-            if( import.moduleName != "SYSTEM" && import.resolved && !import.resolved->extern_ )
+            if( import.moduleName != "SYSTEM" && !import.resolved->extern_ )
                 bout << "    " << import.moduleName << "$init$();" << endl;
             imp = imp->next;
         }
@@ -525,7 +533,18 @@ void CeeGen::assig(Ast::Statement* s) {
             if( lt->isSOA() )
                 bout << ".$";
             bout << ", ";
-            Expr(s->rhs, bout);
+            if( s->rhs->kind == Expression::Literal && s->rhs->val.type() == QVariant::ByteArray
+                    && s->rhs->val.toByteArray().size() == 1 )
+            {
+                QByteArray str = s->rhs->val.toByteArray();
+                bout << "\"";
+                char c = str[0];
+                if( c == '"' ) bout << "\\\"";
+                else if( c == '\\' ) bout << "\\\\";
+                else bout << c;
+                bout << "\"";
+            }else
+                Expr(s->rhs, bout);
             bout << ", ";
             Expr(lt->expr, bout);
             bout << ");";
@@ -1056,11 +1075,11 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
 
 bool CeeGen::inOp(Ast::Expression *e, QTextStream &out)
 {
-    out << "((1 << ";
+    out << "(((1 << ";
     Expr(e->lhs, out);
     out << ") & ";
     Expr(e->rhs,out);
-    out << ")";
+    out << ") != 0)";
     return true;
 }
 
@@ -1201,8 +1220,11 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
         return true;
     }
     Type* t = deref(d->type());
-    bool depointer = d && d->kind == Declaration::ParamDecl && d->varParam;
+    bool depointer = d && d->isVarParam();
     if( t && t->kind == Type::Array && t->expr == 0 )
+        depointer = false;
+    bool nonlocal = d->outer != curProc && ( d->kind == Declaration::LocalDecl || d->kind == Declaration::ParamDecl );
+    if( nonlocal && depointer )
         depointer = false;
     if( depointer )
         out << "(*";
@@ -1229,7 +1251,7 @@ bool CeeGen::select(Ast::Expression *e, QTextStream &out)
     Q_ASSERT(e->rhs == 0);
     Declaration* d = e->val.value<Declaration*>();
     Q_ASSERT(d);
-    out << d->name;
+    out << escape(d->name);
     return true;
 }
 
@@ -1258,8 +1280,19 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
         out << ".$)";
     }else
     {
+        bool ptrDeref = false;
+        if( indices[0]->lhs && indices[0]->lhs->kind == Expression::Deref )
+        {
+            Type* inner = deref(indices[0]->lhs->lhs->type());
+            if( inner && inner->kind == Type::Pointer )
+            {
+                Type* base = deref(inner->type());
+                if( base && base->kind == Type::Array )
+                    ptrDeref = true;
+            }
+        }
         Expr(indices[0]->lhs, out);
-        if( at->kind == Type::Array && at->expr != 0 )
+        if( at->kind == Type::Array && at->expr != 0 && !ptrDeref )
             out << ".$";
     }
 
@@ -1299,7 +1332,7 @@ bool CeeGen::depointer(Ast::Expression *e, QTextStream &out)
     if( pt && pt->kind == Type::Pointer )
     {
         Type* base = deref(pt->type());
-        if( base && base->kind == Type::Array && base->expr == 0 )
+        if( base && base->kind == Type::Array )
         {
             Expr(e->lhs, out);
             return false;
@@ -1367,18 +1400,39 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
             Type* actT = deref(arg->type());
             if( actT && actT->kind == Type::StrLit )
             {
-                out << "(MIC$AP){strlen(";
-                Expr(arg, out);
-                out << ") + 1, (void*)";
-                Expr(arg, out);
-                out << "}";
+                if( arg->kind == Expression::Literal && arg->val.type() == QVariant::ByteArray
+                        && arg->val.toByteArray().size() == 1 )
+                {
+                    QByteArray str = arg->val.toByteArray();
+                    out << "(MIC$AP){2, (void*)\"";
+                    char c = str[0];
+                    if( c == '"' ) out << "\\\"";
+                    else if( c == '\\' ) out << "\\\\";
+                    else out << c;
+                    out << "\"}";
+                }else
+                {
+                    out << "(MIC$AP){strlen(";
+                    Expr(arg, out);
+                    out << ") + 1, (void*)";
+                    Expr(arg, out);
+                    out << "}";
+                }
             }else if( actT && actT->kind == Type::Array && actT->expr != 0 )
             {
+                bool viaPtrDeref = false;
+                if( arg->kind == Expression::Deref )
+                {
+                    Type* inner = deref(arg->lhs->type());
+                    if( inner && inner->kind == Type::Pointer &&
+                            deref(inner->type()) && deref(inner->type())->kind == Type::Array )
+                        viaPtrDeref = true;
+                }
                 out << "(MIC$AP){";
                 Expr(actT->expr, out);
                 out << ", (void*)";
                 Expr(arg, out);
-                if( actT->isSOA() )
+                if( actT->isSOA() && !viaPtrDeref )
                     out << ".$";
                 out << "}";
             }else if( actT && actT->kind == Type::Array && actT->expr == 0 )
@@ -1400,16 +1454,31 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
             {
                 Expr(arg, out);
             }else
+            {
+                out << "(MIC$AP){sizeof(";
                 Expr(arg, out);
-        }else if( i < formals.size() && formals[i]->varParam )
+                out << "), (void*)&(";
+                Expr(arg, out);
+                out << ")}";
+            }
+        }else if( i < formals.size() && formals[i]->isVarParam() )
         {
             Type* actT = deref(arg->type());
             if( actT && actT->kind == Type::Array && actT->expr == 0 )
                 Expr(arg, out);
             else
             {
+                Expression* actualArg = arg;
+                bool needPtrCast = false;
+                if( actualArg->kind == Expression::Cast )
+                {
+                    actualArg = actualArg->lhs;
+                    needPtrCast = true;
+                }
+                if( needPtrCast )
+                    out << "(" << typeRef(formals[i]->type()) << "*)";
                 out << "&";
-                Expr(arg, out);
+                Expr(actualArg, out);
             }
         }else
         {
@@ -1432,7 +1501,12 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                     out << ", ";
                 i++;
                 if( p.sourceDecl->outer == curProc )
-                    bout << "&" << escape(p.sourceDecl->name);
+                {
+                    if( p.sourceDecl->isVarParam() )
+                        bout << escape(p.sourceDecl->name);
+                    else
+                        bout << "&" << escape(p.sourceDecl->name);
+                }
                 else
                 {
                     Q_ASSERT(curPlan);
@@ -1864,9 +1938,22 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 if( dstT->isSOA() || (dstT->kind == Type::Array && dstT->expr == 0 && !dstT->dynamic) )
                     out << ".$";
                 out << ", (const char*)";
-                Expr(a[0], out);
-                if( srcT && (srcT->isSOA() || (srcT->kind == Type::Array && srcT->expr == 0 && !srcT->dynamic)) )
-                    out << ".$";
+                if( a[0]->kind == Expression::Literal && a[0]->val.type() == QVariant::ByteArray
+                        && a[0]->val.toByteArray().size() == 1 )
+                {
+                    QByteArray str = a[0]->val.toByteArray();
+                    out << "\"";
+                    char c = str[0];
+                    if( c == '"' ) out << "\\\"";
+                    else if( c == '\\' ) out << "\\\\";
+                    else out << c;
+                    out << "\"";
+                }else
+                {
+                    Expr(a[0], out);
+                    if( srcT && (srcT->isSOA() || (srcT->kind == Type::Array && srcT->expr == 0 && !srcT->dynamic)) )
+                        out << ".$";
+                }
                 out << ", ";
                 Expr(dstT->expr, out);
                 out << ")";
@@ -1877,9 +1964,22 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 if( dstT && (dstT->isSOA() || (dstT->kind == Type::Array && dstT->expr == 0 && !dstT->dynamic)) )
                     out << ".$";
                 out << ", (const char*)";
-                Expr(a[0], out);
-                if( srcT && (srcT->isSOA() || (srcT->kind == Type::Array && srcT->expr == 0 && !srcT->dynamic)) )
-                    out << ".$";
+                if( a[0]->kind == Expression::Literal && a[0]->val.type() == QVariant::ByteArray
+                        && a[0]->val.toByteArray().size() == 1 )
+                {
+                    QByteArray str = a[0]->val.toByteArray();
+                    out << "\"";
+                    char c = str[0];
+                    if( c == '"' ) out << "\\\"";
+                    else if( c == '\\' ) out << "\\\\";
+                    else out << c;
+                    out << "\"";
+                }else
+                {
+                    Expr(a[0], out);
+                    if( srcT && (srcT->isSOA() || (srcT->kind == Type::Array && srcT->expr == 0 && !srcT->dynamic)) )
+                        out << ".$";
+                }
                 out << ")";
             }
         }
@@ -2287,7 +2387,7 @@ void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
         if( openDims > 1 )
             invalid("multi-dimensional open array parameter not yet supported", param->pos);
         out << "MIC$AP " << escape(param->name);
-    }else if( param->varParam )
+    }else if( param->isVarParam() )
         out << typeRef(param->type()) << "* " << escape(param->name);
     else
         out << typeRef(param->type()) << " " << escape(param->name);

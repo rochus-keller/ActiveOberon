@@ -794,7 +794,6 @@ void Parser2::FPSection() {
         Declaration* d = addDecl(l[i], 0, Declaration::ParamDecl);
         if( d == 0 )
             continue;
-        d->varParam = varParam;
         d->setType(t);
         deanonymizeType(d);
     }
