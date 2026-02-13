@@ -91,6 +91,7 @@ namespace Ao
 
         bool addFile(const QString& filePath, const QByteArray& moduleName);
         bool removeFile( const QString& filePath );
+        bool initializeFromDir(const QDir& dir, bool recursive = true);
 
         bool parse();
         bool generateC(const QString& outDir);

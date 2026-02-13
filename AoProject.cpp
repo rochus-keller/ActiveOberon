@@ -360,6 +360,18 @@ void Project::setArguments(const QStringList& args)
     touch();
 }
 
+bool Project::initializeFromDir(const QDir& dir, bool recursive)
+{
+    clear();
+    d_dirty = false;
+
+    QStringList files = findFiles(dir, recursive);
+    foreach( const QString& filePath, files )
+        addFile(filePath, QByteArray()); // TODO
+    emit sigRenamed();
+    return true;
+}
+
 bool Project::printTreeShaken(const QString& module, const QString& fileName)
 {
 #if 0

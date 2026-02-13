@@ -93,8 +93,12 @@ protected:
 protected:
     void invalid(const char* what, const RowCol&);
     void typeDecl(Ast::Declaration* type);
+    void typeDecl1(Ast::Declaration* type);
+    void typeDecl2(Ast::Declaration* type);
     Ast::Type* deref(Ast::Type*);
     QByteArray typeRef(Ast::Type*);
+    QByteArray typeRef1(Ast::Type *);
+    QByteArray typeRef2(Ast::Type* orig);
     void pointerTo(QTextStream& out, Ast::Type* ptr);
     void printHelper(Ast::Declaration*);
     inline QByteArray ws()
@@ -110,6 +114,7 @@ protected:
     void procHeader(Ast::Declaration* proc, bool header);
     QByteArray escape(const QByteArray&);
     QByteArray qualident(Ast::Declaration* d);
+    QByteArray qualident(Ast::Type* t);
     typedef QPair<Ast::ExpList,Ast::Type*> ArrayType;
     ArrayType arrayType(Ast::Type*);
 

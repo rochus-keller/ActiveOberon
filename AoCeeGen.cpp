@@ -28,6 +28,8 @@ using namespace Ast;
 
 static inline void dummy() {}
 
+#define _NEW_APPROACH_ // TEST
+
 CeeGen::CeeGen()
 {
     static const char* kw[] = {
@@ -39,6 +41,59 @@ CeeGen::CeeGen()
 
     for( int i = 0; kw[i] != 0; i++)
         keywords.insert(Token::getSymbol(kw[i]).constData());
+}
+
+static inline QByteArray typePrefix(Type* t)
+{
+    // if( t == 0 ) // TEST
+        return "";
+    switch(t->kind)
+    {
+    case Type::Record:
+    case Type::Object:
+        return "struct ";
+    case Type::Array:
+        if( t->expr != 0 )
+            return "struct ";
+        break;
+    }
+    return QByteArray();
+}
+
+static inline QByteArray basicType(Type* t)
+{
+    switch(t->kind)
+    {
+    case Type::StrLit:
+        return "const char*";
+    case Type::NIL:
+        return "NULL";
+    case Type::BOOLEAN:
+        return "unsigned char";
+    case Type::CHAR:
+        return "char";
+    case Type::BYTE:
+        return "unsigned char";
+    case Type::SHORTINT:
+        return "char";
+    case Type::INTEGER:
+        return "short";
+    case Type::LONGINT:
+        return "long"; // using long so it is 32 or 64 bits like the target system, useful for e.g. SYSTEM.GET)
+    case Type::SET:
+        return "int";
+    case Type::HUGEINT:
+        return "long long";
+    case Type::REAL:
+        return "float";
+    case Type::LONGREAL:
+        return "double";
+    case Type::PTR:
+        return "void*";
+    case Type::ANY:
+        return "void";
+    }
+    return "?";
 }
 
 QByteArray CeeGen::qualident(Declaration* d)
@@ -61,6 +116,32 @@ QByteArray CeeGen::qualident(Declaration* d)
             return escape(d->name);
         }
     }
+}
+
+QByteArray CeeGen::qualident(Ast::Type *t)
+{
+    Q_ASSERT(t);
+    if( t->kind == Type::Reference )
+        t = t->type();
+    Type* td = deref(t);
+    if( td->kind < Type::MaxBasicType )
+        return basicType(td);
+    QByteArray res;
+    if( t->kind == Type::NameRef )
+    {
+        // TODO: fails for namerefs to builtin types
+        Quali* q = t->quali;
+        if( q->first.isEmpty() )
+            res = curMod->name;
+        else
+            res = q->first;
+        res += "$" + q->second;
+    }else
+    {
+        Q_ASSERT( t->decl );
+        res = qualident(t->decl);
+    }
+    return res;
 }
 
 CeeGen::ArrayType CeeGen::arrayType(Ast::Type * t)
@@ -138,7 +219,17 @@ void CeeGen::invalid(const char* what, const RowCol& pos) {
     errors << Error(QString("invalid %1").arg(what),pos, curMod->name);
 }
 
-void CeeGen::typeDecl(Ast::Declaration *d)
+void CeeGen::typeDecl(Ast::Declaration *type)
+{
+    // TEST
+#ifdef _NEW_APPROACH_
+    typeDecl2(type);
+#else
+    typeDecl1(type);
+#endif
+}
+
+void CeeGen::typeDecl1(Ast::Declaration *d)
 {
     Ast::Type* t = d->type();
     if( t == 0 )
@@ -246,6 +337,127 @@ void CeeGen::typeDecl(Ast::Declaration *d)
             hout << "typedef ";
             hout << typeRef(t->type());
             break;
+        }
+    }
+    // typedef what name
+    hout << " " << qualident(d);
+}
+
+void CeeGen::typeDecl2(Ast::Declaration *d)
+{
+    Ast::Type* t = d->type();
+    if( t == 0 )
+    {
+        hout << "// undeclared type " << d->name;
+        return;
+    }
+
+#if 0
+    if( t->kind == Type::NameRef )
+        return; // don't create name aliasses
+#endif
+
+    if( t->kind == Type::Object )
+    {
+        // forward declaration for class objects
+        hout << "struct " << qualident(d) << "$Class$ " << qualident(d) << "$Class$;" << endl;
+    }
+
+    if( t->kind == Type::Array && t->expr == 0 )
+    {
+        hout << "// no typedef for open array " << qualident(d) << " (" << typeRef(t->type()) << "*)";
+        return; // we need not typedef for open arrays, instead they are referenced by element_type*
+    }
+
+    if( deref(t)->kind < Type::MaxBasicType )
+        return; // don't make typedefs for basic types: hout << "typedef " << typeRef(t); //  << " " << qualident(d);
+    else
+    {
+        switch( t->kind )
+        {
+        case Type::Pointer:
+            hout << "typedef ";
+            if( deref(t->type())->isSOA() )
+                hout << "struct ";
+            pointerTo(hout, t);
+            break;
+        case Type::Procedure:
+#if 0
+            if( t->typebound )
+            {
+                hout << "struct " << qualident(d) << " {" << endl;
+                hout << ws(0) << "void* self;" << endl;
+                hout << ws(0) << typeRef(t->getType()) << " (*proc)(void* self";
+                DeclList params = t->subs;
+                for( int i = 0; i < params.size(); i++ )
+                {
+                    if( t->typebound || i != 0 )
+                        hout << ", ";
+                    parameter(hout, params[i]);
+                }
+                hout << ");" << endl;
+                hout << "}";
+            }else
+#endif
+            {
+                hout << "typedef ";
+                hout << typeRef(t->type()) << " (*";
+                hout << qualident(d);
+                hout << ")(";
+                DeclList params = t->subs;
+                for( int i = 0; i < params.size(); i++ )
+                {
+                    if( i != 0 )
+                        hout << ", ";
+                    parameter(hout, params[i]);
+                }
+                hout << ")";
+                return;
+            }
+            break;
+        case Type::Array:
+            if( t->expr != 0 )
+            {
+                ArrayType at = arrayType(t);
+                hout << "typedef ";
+                hout << "struct " << qualident(d) << " { " << typeRef(at.second) << " $[";
+                Expr(t->expr, hout);
+                for( int i = 1; i < at.first.size(); i++ )
+                {
+                    t = deref(t->type());
+                    hout << " * ";
+                    Expr(t->expr, hout);
+                }
+                hout << "];" << " }";
+            }else
+                Q_ASSERT(false); // hout << typeRef(t->getType()) << "* ";
+            break;
+
+        case Type::Record:
+        case Type::Object: {
+            QList<Declaration*> fields = t->fieldList();
+            foreach( Declaration* field, fields )
+            {
+                if( field->kind == Declaration::Field )
+                    printHelper(field->helper);
+            }
+            hout << "typedef ";
+            hout << "struct " << qualident(d) << " {" << endl;
+            hout << ws(1) << "struct " << qualident(d) << "$Class$* class$;" << endl;
+            foreach( Declaration* field, fields )
+            {
+                if( field->kind == Declaration::Field )
+                    hout << ws(1) << typeRef(field->type()) << " " << escape(field->name) << ";" << endl;
+            }
+            hout << "}";
+            } break;
+        case Type::NameRef: {
+            Type* td = deref(t);
+            if( td->kind < Type::MaxBasicType || (td->kind == Type::Array && td->expr == 0) )
+                return;
+            hout << "typedef ";
+            hout << typeRef(td);
+            } break;
         }
     }
     // typedef what name
@@ -2279,40 +2491,103 @@ Type *CeeGen::deref(Ast::Type * t)
     return t;
 }
 
-QByteArray CeeGen::typeRef(Type * t)
+QByteArray CeeGen::typeRef(Ast::Type * t)
+{
+    // TEST
+#ifdef _NEW_APPROACH_
+    const QByteArray res = typeRef2(t);
+#else
+    const QByteArray res = typeRef1(t);
+#endif
+    return res;
+}
+
+QByteArray CeeGen::typeRef2(Type* orig)
+{
+    // Render a type for a "storage slot", i.e. a variable (module or local), a parameter, a field, an array element, a pointer target
+    // this is not about procedure return types (which don't allow arrays nor records)
+    // this is not (yet) about casting
+    // "orig" is the true type of the "storage slot", not deref'ed
+    // NOTE that all types have been "deanonymized", i.e. even if types are constructed in place, they have a name and a typedecl
+
+    if( orig == 0 || orig->kind == Type::NoType )
+        return "void";
+    const bool isVarParam = orig->kind == Type::Reference;
+    Type* nameRef = isVarParam ? orig->type()  : orig;
+    Quali* q = 0;
+    if( nameRef->kind != Type::NameRef )
+        nameRef = 0;
+    else
+        q = nameRef->quali;
+
+    QByteArray res;
+    Type* t = deref(orig);
+    switch(t->kind)
+    {
+    case Type::BOOLEAN:
+    case Type::CHAR:
+    case Type::BYTE:
+    case Type::SHORTINT:
+    case Type::INTEGER:
+    case Type::LONGINT:
+    case Type::SET:
+    case Type::HUGEINT:
+    case Type::REAL:
+    case Type::LONGREAL:
+    case Type::PTR:
+    case Type::ANY:
+        res = basicType(t);
+        if( isVarParam )
+            res = res + "*";
+        break;
+
+    case Type::StrLit:
+    case Type::NIL:
+    case Type::NoType:
+        Q_ASSERT(false);
+        break;
+
+    case Type::Pointer: {
+        Type* to = deref(t->type());
+        if( to->kind == Type::Array && to->expr == 0 )
+            res = typePrefix(to) + qualident(to->type()) + "*";
+        else
+            res = typePrefix(to) + qualident(orig);
+        if( isVarParam )
+            res = res + "*";
+        } break;
+    case Type::Procedure:
+    case Type::Record:
+    case Type::Object:
+        res = typePrefix(t) + qualident(orig);
+        if( isVarParam )
+            res = res + "*";
+        break;
+    case Type::Array:
+        if( t->expr == 0 )
+            res = "MIC$AP";
+        else
+        {
+            res = typePrefix(t) + qualident(orig);
+            if( isVarParam )
+                res = res + "*";
+        }
+        break;
+    case Type::Reference:
+    case Type::NameRef:
+        Q_ASSERT(false);
+        break;
+    }
+    return res;
+}
+
+QByteArray CeeGen::typeRef1(Type * t)
 {
     if( t == 0 || t->kind == Type::NoType )
         return "void";
     t = deref(t);
-    switch(t->kind)
-    {
-    case Type::StrLit:
-        return "const char*";
-    case Type::NIL:
-        return "NULL";
-    case Type::BOOLEAN:
-        return "unsigned char";
-    case Type::CHAR:
-        return "char";
-    case Type::BYTE:
-        return "unsigned char";
-    case Type::SHORTINT:
-        return "char";
-    case Type::INTEGER:
-        return "short";
-    case Type::LONGINT:
-        return "long"; // using long so it is 32 or 64 bits like the target system, useful for e.g. SYSTEM.GET)
-    case Type::SET:
-        return "int";
-    case Type::HUGEINT:
-        return "long long";
-    case Type::REAL:
-        return "float";
-    case Type::LONGREAL:
-        return "double";
-    case Type::PTR:
-        return "void*";
-    }
+    if( t->kind < Type::MaxBasicType )
+        return basicType(t);
 
     // Arrays:
     // fixed size: struct { a[1*2*3..]}
@@ -2361,7 +2636,7 @@ void CeeGen::pointerTo(QTextStream &out, Ast::Type *ptr)
 
 void CeeGen::printHelper(Ast::Declaration * d)
 {
-    if( d == 0 )
+    if( d == 0 || d->getModule() != curMod )
         return;
     Q_ASSERT(d->helper == 0);
     typeDecl(d);
@@ -2380,6 +2655,7 @@ void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
     Type* t = deref(param->type());
     if( t && t->kind == Type::Array && t->expr == 0 )
     {
+        // MIC$AP n-dim open array parameter (var or val)
         ArrayType a = arrayType(t);
         int openDims = 0;
         for( int i = 0; i < a.first.size(); i++ )
@@ -2387,8 +2663,12 @@ void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
         if( openDims > 1 )
             invalid("multi-dimensional open array parameter not yet supported", param->pos);
         out << "MIC$AP " << escape(param->name);
-    }else if( param->isVarParam() )
+    }
+#ifndef _NEW_APPROACH_
+    else if( param->isVarParam() )
+        // includes fixed size arrays (which are embedded in struct
         out << typeRef(param->type()) << "* " << escape(param->name);
+#endif
     else
         out << typeRef(param->type()) << " " << escape(param->name);
 }
