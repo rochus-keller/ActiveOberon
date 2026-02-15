@@ -72,6 +72,7 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
 
     *ret = mdl->getType(Type::NoType);
 
+    // TODO: check arg types
     try
     {
     switch(builtin)
@@ -95,8 +96,21 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
     case Builtin::LEN:
         if( !expectingNMArgs(args,1,2) )
             break;
-        // second argument only appears in Gad/AosProfiler.Mod, i.e. 5 lines of ~400k
-        *ret = mdl->getType(Type::INTEGER);
+        else
+        {
+            // second argument only appears in Gad/AosProfiler.Mod, i.e. 5 lines of ~400k
+            if( args.size() == 2 )
+                qWarning() << "LEN() used with two arguments";
+            *ret = mdl->getType(Type::INTEGER);
+            Type* t = deref(args.first()->type());
+            // arg can be VAR p: POINTER TO ARRAY
+            if( t->kind == Type::Reference )
+                t = deref(t->type());
+            if( t->kind == Type::Pointer )
+                t = deref(t->type());
+            if( t->kind != Type::Array )
+                return report("expecting an array or pointer to array argument", pos);
+        }
         break;
     case Builtin::MAX:
     case Builtin::MIN:
@@ -138,6 +152,26 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
     case Builtin::COPY:
         if( !expectingNArgs(args,2) )
             break;
+        else
+        {
+            Type* lhs = deref(args.first()->type());
+            // arg can be VAR p: POINTER TO ARRAY
+            if( lhs->kind == Type::Reference )
+                lhs = deref(lhs->type());
+            if( lhs->kind == Type::Pointer )
+                lhs = deref(lhs->type());
+            if( lhs->kind != Type::Array && lhs->kind != Type::StrLit )
+                return report("expecting an array, pointer to array or string literal first argument", pos);
+            Type* rhs = deref(args.last()->type());
+            // arg can be VAR p: POINTER TO ARRAY
+            if( rhs->kind == Type::Reference )
+                rhs = deref(rhs->type());
+            if( rhs->kind == Type::Pointer )
+                rhs = deref(rhs->type());
+            if( rhs->kind != Type::Array)
+                return report("expecting an array or pointer to array second argument", pos);
+        }
+        break;
         break;
 
     case Builtin::HALT:
@@ -301,14 +335,10 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
     }
     }catch( const QString& err )
     {
-        errPos = pos;
-        error = err;
-        return false;
+        return report(err,pos);
     }catch( const char* str)
     {
-        errPos = pos;
-        error = QString::fromUtf8(str);
-        return false;
+        return report(QString::fromUtf8(str),pos);
     }
 
     return true;
@@ -326,4 +356,11 @@ Type *Builins::deref(Ast::Type *t)
         return deref(t->type());
     }else
         return t;
+}
+
+bool Builins::report(const QString &msg, const RowCol &pos)
+{
+    error = msg;
+    errPos = pos;
+    return false;
 }

@@ -76,7 +76,8 @@ namespace Ast
         uint allocated : 1;
         uint owned : 1;
         uint anonymous : 1;
-        uint dynamic : 1; // array expr==0: dynamic==1->new(pointer), dynamic==0->parameter
+        uint objectInit : 1; // this or enclosed type need object initialization (vtbl)
+        uint pointerInit : 1; // this or enclosed type need pointer initialization
 
         // Declaration:
         uint constructor : 1;
@@ -92,7 +93,7 @@ namespace Ast
         uint byVal : 1; // option for LocalVar, Param, ModuleVar, Select, Index
         uint needsLval : 1;
 
-        // 29 bits
+        // 30 bits
 
         RowCol pos;
 
@@ -106,7 +107,8 @@ namespace Ast
     #endif
             validated(0),deferred(0),delegate(0),allocated(0),receiver(0),
             constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),imported(0),
-            byVal(0),needsLval(0),nonlocal(0),_ty(0),owned(0),anonymous(0),forward(0),dynamic(0), extern_(0){}
+            byVal(0),needsLval(0),nonlocal(0),_ty(0),owned(0),anonymous(0),forward(0), extern_(0),
+            objectInit(0), pointerInit(0) {}
         ~Node();
     private:
         Type* _ty;
@@ -160,7 +162,7 @@ namespace Ast
 #endif
 
         union {
-            quint32 len; // array length
+            // quint32 len; // array length, not used here since we don't eval expressions at compile time
             Quali* quali; // NameRef
         };
 

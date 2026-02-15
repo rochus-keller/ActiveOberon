@@ -53,6 +53,26 @@ static inline bool isConstChar( Expression* e )
     return false;
 }
 
+static void assureCharLit(Expression* e, Type* charType )
+{
+    if( e->kind == Expression::Literal && e->type() && e->type()->kind == Type::StrLit )
+    {
+        const QByteArray str = e->val.toByteArray();
+        Q_ASSERT(!str.isEmpty());
+        e->val = (quint32)str[0];
+        e->setType(charType);
+    }else if( e->kind == Expression::DeclRef && e->type() && e->type()->kind == Type::StrLit )
+    {
+        e->kind = Expression::Literal;
+        Declaration* d = e->val.value<Declaration*>();
+        Q_ASSERT(d && d->kind == Declaration::ConstDecl);
+        const QByteArray str = d->data.toByteArray();
+        Q_ASSERT(!str.isEmpty());
+        e->val = (quint32)str[0];
+        e->setType(charType);
+    }
+}
+
 static inline bool isCharArray( Expression* e )
 {
     if( e == 0 )
@@ -199,12 +219,61 @@ void Validator2::ConstDecl(Ast::Declaration* d) {
     d->data = d->expr->val;
 }
 
+bool Validator2::checkIfObjectInit(Type* t)
+{
+    switch(t->kind)
+    {
+    case Type::Array:
+        return checkIfObjectInit(deref(t->type()));
+    case Type::Record:
+    case Type::Object:
+        return true;
+    case Type::NameRef: {
+        Type* t2 = deref(t);
+        if( t == t2 )
+            return false;
+        return checkIfObjectInit(t2);
+    }
+    default:
+        return false;
+    }
+}
+
+bool Validator2::checkIfPointerInit(Type* t)
+{
+    switch(t->kind)
+    {
+    case Type::Array:
+        return checkIfPointerInit(deref(t->type()));
+    case Type::Record:
+    case Type::Object:
+        foreach( Declaration* d, t->subs )
+        {
+            if( d->kind == Declaration::Field && deref(d->type())->kind == Type::Pointer )
+                return true;
+        }
+        return false;
+    case Type::NameRef: {
+        Type* t2 = deref(t);
+        if( t == t2 )
+            return false;
+        return checkIfPointerInit(t2);
+    }
+    default:
+        return false;
+    }
+}
+
 void Validator2::TypeDecl(Ast::Declaration* d) {
-    Type_(d->type());
+    Type* t = d->type();
+    Type_(t);
+    t->objectInit = checkIfObjectInit(t);
+    t->pointerInit = checkIfPointerInit(t);
 }
 
 void Validator2::VarDecl(Ast::Declaration* d) {
-    Type_(d->type());
+    Type* t = d->type();
+    Type_(t);
     char what = ' ';
     switch(d->kind)
     {
@@ -220,7 +289,8 @@ void Validator2::VarDecl(Ast::Declaration* d) {
     default:
         Q_ASSERT(false);
     }
-
+    t->objectInit = checkIfObjectInit(t);
+    t->pointerInit = checkIfPointerInit(t);
     //arrayStats(d->type(), d->pos, what);
 }
 
@@ -318,8 +388,6 @@ bool Validator2::PointerType(Ast::Type* t) {
         Type* to = deref(t->type());
         if( to->kind != Type::Record && to->kind != Type::Array )
             return error(t->pos, "pointer base type must be ARRAY or RECORD");
-        if( to->kind == Type::Array )
-            to->dynamic = true; // applies to both fixed and open dynamic arrays
     }else
         return false;
 }
@@ -918,6 +986,8 @@ bool Validator2::relation(Ast::Expression *e)
 #endif
     }else if( isConstChar(e->lhs) && isConstChar(e->rhs) )
     {
+        assureCharLit(e->lhs, mdl->getType(Type::CHAR));
+        assureCharLit(e->rhs, mdl->getType(Type::CHAR));
         if( e->kind == Expression::In || e->kind == Expression::Is )
             error(e->pos, "CHAR operands not compatible with IN or IS operator");
     }else if( isCharArray(e->lhs) && isCharArray(e->rhs) )
@@ -1352,8 +1422,11 @@ bool Validator2::range(Ast::Expression *e)
     Expr(e->lhs);
     Expr(e->rhs);
     if( isConstChar(e->lhs) && isConstChar(e->rhs) )
+    {
+        assureCharLit(e->lhs, mdl->getType(Type::CHAR));
+        assureCharLit(e->rhs, mdl->getType(Type::CHAR));
         e->setType(mdl->getType(Type::CHAR));
-    else if( deref(e->lhs->type())->isInteger() && deref(e->rhs->type())->isInteger() )
+    }else if( deref(e->lhs->type())->isInteger() && deref(e->rhs->type())->isInteger() )
         e->setType(includingType(deref(e->lhs->type()), deref(e->rhs->type())));
     else
         return error(e->pos, "invalid range");

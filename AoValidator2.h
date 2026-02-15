@@ -116,6 +116,8 @@ namespace Ao {
         bool paramListsMatch( const Ast::DeclList&, Ast::Type*, const Ast::DeclList&, Ast::Type*);
         bool equals(Ast::Type*, Ast::Type*);
         void arrayStats(Ast::Type * t, const RowCol & rc, char what);
+        bool checkIfObjectInit(Ast::Type* t);
+        bool checkIfPointerInit(Ast::Type* t);
 
     private:
         Ast::Declaration* module;

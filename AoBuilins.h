@@ -33,6 +33,7 @@ public:
 
 protected:
     Ast::Type* deref(Ast::Type* t);
+    bool report(const QString& msg, const RowCol& pos);
 
 private:
     Ast::AstModel* mdl;

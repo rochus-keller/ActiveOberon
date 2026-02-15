@@ -28,8 +28,6 @@ using namespace Ast;
 
 static inline void dummy() {}
 
-#define _NEW_APPROACH_ // TEST
-
 CeeGen::CeeGen()
 {
     static const char* kw[] = {
@@ -58,6 +56,84 @@ static inline QByteArray typePrefix(Type* t)
         break;
     }
     return QByteArray();
+}
+
+enum ArrayKind {
+    Invalid,
+    NoArray,
+    FixedSize,        // typedef struct { $[]; }
+    PointerToArray,   // MIC$DA, a pointer which points to an array (fixed or open)
+    DerefedArray,     // MIC$DA, dereferenced pointer to array (fixed or open)
+    ReferenceToArray, // MIC$AP, a VAR parameter of open or fixed array type
+    ArrayParameter,   // MIC$AP, a value parameter of open array type (needs a copy)
+    // TODO: the case where "the array" is dim m of an n-dim array with m < n is not yet properly covered. In C we just see a pointer
+    // to the (final) element type, but it is not a MIC$DA, and due to dim-1-open-only rule, we see a fixed size array
+};
+
+static inline Type* deref(Type* t)
+{
+    if( t )
+        return t->deref();
+    else
+        return t;
+}
+
+static ArrayKind deriveArrayKind(Expression* e)
+{
+    if( e == 0 )
+        return NoArray;
+    Type* t = deref(e->type());
+    if( t && t->kind == Type::Reference )
+    {
+        // this happens when e directly designates a parameter
+        t = deref(t->type());
+        if( t && t->kind == Type::Array )
+            return ReferenceToArray; // can be fixed or open
+        else
+            return NoArray;
+    }
+    if( t && t->kind == Type::Pointer )
+    {
+        t = deref(t->type());
+        if( t && t->kind == Type::Array )
+            return PointerToArray;
+        else
+            return NoArray;
+    }
+    if( t == 0 || t->kind != Type::Array )
+        return NoArray;
+    switch(e->kind)
+    {
+    case Expression::DeclRef: {
+            Declaration* d = e->val.value<Declaration*>();
+            switch(d->kind)
+            {
+            case Declaration::LocalDecl:
+            case Declaration::VarDecl:
+                if( t->expr != 0 )
+                    return FixedSize;
+                else
+                    return Invalid;
+            case Declaration::ParamDecl:
+                return ArrayParameter; // value array parameter, can be fixed or open
+            default:
+                return Invalid;
+            }
+        } break;
+    case Expression::Select:
+    case Expression::Index:
+        // a.b where b is a fixed size array
+        // a[i] where the element is a fixed size array
+        if( t->expr != 0 )
+            return FixedSize;
+        else
+            return Invalid;
+    case Expression::Deref:
+        return DerefedArray; // can be open or fixed
+    default:
+        break;
+    }
+    return NoArray;
 }
 
 static inline QByteArray basicType(Type* t)
@@ -215,140 +291,17 @@ bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *bo
     return errors.isEmpty();
 }
 
-void CeeGen::invalid(const char* what, const RowCol& pos) {
+bool CeeGen::invalid(const char* what, const RowCol& pos) {
     errors << Error(QString("invalid %1").arg(what),pos, curMod->name);
+    return false;
 }
 
-void CeeGen::typeDecl(Ast::Declaration *type)
-{
-    // TEST
-#ifdef _NEW_APPROACH_
-    typeDecl2(type);
-#else
-    typeDecl1(type);
-#endif
-}
-
-void CeeGen::typeDecl1(Ast::Declaration *d)
+void CeeGen::typeDecl(Ast::Declaration *d)
 {
     Ast::Type* t = d->type();
     if( t == 0 )
     {
-        hout << "// undeclared type " << d->name;
-        return;
-    }
-
-    if( t->kind == Type::NameRef )
-        return; // don't create name aliasses
-
-    if( t->kind == Type::Object )
-    {
-        // forward declaration for class objects
-        hout << "struct " << qualident(d) << "$Class$ " << qualident(d) << "$Class$;" << endl;
-    }
-
-    if( t->kind == Type::Array && t->expr == 0 )
-    {
-        hout << "// no typedef for open array " << qualident(d) << " (" << typeRef(t->type()) << "*)";
-        return; // we need not typedef for open arrays, instead they are referenced by element_type*
-    }
-
-    if( t->kind < Type::MaxBasicType )
-        hout << "typedef " << typeRef(t); //  << " " << qualident(d);
-    else
-    {
-        switch( t->kind )
-        {
-        case Type::Pointer:
-            hout << "typedef ";
-            pointerTo(hout, t);
-            break;
-        case Type::Procedure:
-#if 0
-            if( t->typebound )
-            {
-                hout << "struct " << qualident(d) << " {" << endl;
-                hout << ws(0) << "void* self;" << endl;
-                hout << ws(0) << typeRef(t->getType()) << " (*proc)(void* self";
-                DeclList params = t->subs;
-                for( int i = 0; i < params.size(); i++ )
-                {
-                    if( t->typebound || i != 0 )
-                        hout << ", ";
-                    parameter(hout, params[i]);
-                }
-                hout << ");" << endl;
-                hout << "}";
-            }else
-#endif
-            {
-                hout << "typedef ";
-                hout << typeRef(t->type()) << " (*";
-                hout << qualident(d);
-                hout << ")(";
-                DeclList params = t->subs;
-                for( int i = 0; i < params.size(); i++ )
-                {
-                    if( i != 0 )
-                        hout << ", ";
-                    parameter(hout, params[i]);
-                }
-                hout << ")";
-                return;
-            }
-            break;
-        case Type::Array:
-            if( t->expr != 0 )
-            {
-                ArrayType at = arrayType(t);
-                hout << "typedef ";
-                hout << "struct " << qualident(d) << " { " << typeRef(at.second) << " $[";
-                Expr(t->expr, hout);
-                for( int i = 1; i < at.first.size(); i++ )
-                {
-                    t = deref(t->type());
-                    hout << " * ";
-                    Expr(t->expr, hout);
-                }
-                hout << "];" << " }";
-            }else
-                Q_ASSERT(false); // hout << typeRef(t->getType()) << "* ";
-            break;
-
-        case Type::Record:
-        case Type::Object: {
-            QList<Declaration*> fields = t->fieldList();
-            foreach( Declaration* field, fields )
-            {
-                if( field->kind == Declaration::Field )
-                    printHelper(field->helper);
-            }
-            hout << "typedef ";
-            hout << "struct " << qualident(d) << " {" << endl;
-            hout << ws(1) << "struct " << qualident(d) << "$Class$* class$;" << endl;
-            foreach( Declaration* field, fields )
-            {
-                if( field->kind == Declaration::Field )
-                    hout << ws(1) << typeRef(field->type()) << " " << escape(field->name) << ";" << endl;
-            }
-            hout << "}";
-            } break;
-        case Type::NameRef:
-            hout << "typedef ";
-            hout << typeRef(t->type());
-            break;
-        }
-    }
-    // typedef what name
-    hout << " " << qualident(d);
-}
-
-void CeeGen::typeDecl2(Ast::Declaration *d)
-{
-    Ast::Type* t = d->type();
-    if( t == 0 )
-    {
-        hout << "// undeclared type " << d->name;
+        hout << "// undeclared type " << d->name << endl;
         return;
     }
 
@@ -365,22 +318,29 @@ void CeeGen::typeDecl2(Ast::Declaration *d)
 
     if( t->kind == Type::Array && t->expr == 0 )
     {
-        hout << "// no typedef for open array " << qualident(d) << " (" << typeRef(t->type()) << "*)";
+        hout << "// no typedef for open array " << qualident(d) << " (" << typeRef(t->type()) << "*)" << endl;
         return; // we need not typedef for open arrays, instead they are referenced by element_type*
     }
 
+    bool makeInit = false;
     if( deref(t)->kind < Type::MaxBasicType )
         return; // don't make typedefs for basic types: hout << "typedef " << typeRef(t); //  << " " << qualident(d);
     else
     {
         switch( t->kind )
         {
-        case Type::Pointer:
-            hout << "typedef ";
-            if( deref(t->type())->isSOA() )
-                hout << "struct ";
-            pointerTo(hout, t);
-            break;
+        case Type::Pointer: {
+                Type* to = deref(t->type());
+                if( to->kind == Type::Array )
+                {
+                    hout << "// no typedef for pointer to array " << qualident(d) << " (using MIC$DA instead)" << endl;
+                    return;
+                }
+                hout << "typedef ";
+                if( to->isSO() )
+                    hout << "struct ";
+                hout << qualident(t->type()) << "*";
+            } break;
         case Type::Procedure:
 #if 0
             if( t->typebound )
@@ -411,13 +371,14 @@ void CeeGen::typeDecl2(Ast::Declaration *d)
                         hout << ", ";
                     parameter(hout, params[i]);
                 }
-                hout << ")";
+                hout << "); " << endl;
                 return;
             }
             break;
         case Type::Array:
             if( t->expr != 0 )
             {
+                // declare a fixed size array of the form struct { $[N]; }
                 ArrayType at = arrayType(t);
                 hout << "typedef ";
                 hout << "struct " << qualident(d) << " { " << typeRef(at.second) << " $[";
@@ -429,39 +390,145 @@ void CeeGen::typeDecl2(Ast::Declaration *d)
                     Expr(t->expr, hout);
                 }
                 hout << "];" << " }";
+                // for fixlen arrays whose fields or elements need object initialization, create an initializer
+                if( t->objectInit )
+                    makeInit = true;
             }else
                 Q_ASSERT(false); // hout << typeRef(t->getType()) << "* ";
             break;
 
         case Type::Record:
         case Type::Object: {
-            QList<Declaration*> fields = t->fieldList();
-            foreach( Declaration* field, fields )
-            {
-                if( field->kind == Declaration::Field )
-                    printHelper(field->helper);
-            }
-            hout << "typedef ";
-            hout << "struct " << qualident(d) << " {" << endl;
-            hout << ws(1) << "struct " << qualident(d) << "$Class$* class$;" << endl;
-            foreach( Declaration* field, fields )
-            {
-                if( field->kind == Declaration::Field )
-                    hout << ws(1) << typeRef(field->type()) << " " << escape(field->name) << ";" << endl;
-            }
-            hout << "}";
+                QList<Declaration*> fields = t->fieldList();
+                foreach( Declaration* field, fields )
+                {
+                    if( field->kind == Declaration::Field )
+                        printHelper(field->helper);
+                }
+                hout << "typedef ";
+                hout << "struct " << qualident(d) << " {" << endl;
+                hout << ws(1) << "struct " << qualident(d) << "$Class$* class$;" << endl;
+                foreach( Declaration* field, fields )
+                {
+                    if( field->kind == Declaration::Field )
+                        hout << ws(1) << typeRef(field->type()) << " " << escape(field->name) << ";" << endl;
+                }
+                hout << "}";
+                makeInit = true;
             } break;
         case Type::NameRef: {
-            Type* td = deref(t);
-            if( td->kind < Type::MaxBasicType || (td->kind == Type::Array && td->expr == 0) )
-                return;
-            hout << "typedef ";
-            hout << typeRef(td);
+                Type* td = deref(t);
+                if( td->kind < Type::MaxBasicType || (td->kind == Type::Array && td->expr == 0) )
+                    return;
+                hout << "typedef ";
+                hout << typeRef(td);
             } break;
         }
     }
     // typedef what name
-    hout << " " << qualident(d);
+    hout << " " << qualident(d) << ";" << endl;
+    if( makeInit )
+        emitInitializer(t);
+}
+
+void CeeGen::emitInitializer(Type* t)
+{
+    t = deref(t);
+    hout << "void " << qualident(t->decl) << "$init$(" << typeRef(t) << "* obj, unsigned int n);" << endl;
+    bout << "void " << qualident(t->decl) << "$init$(" << typeRef(t) << "* obj, unsigned int n) {" << endl;
+    // obj is a pointer to the object to be initialized; we can interpret this pointer as a single or an array of this object
+    bout << ws(1) << "int i;" << endl;
+    bout << ws(1) << "for( i = 0; i < n; i++ ) {" << endl; // this code is generalized to an array of this object of length n
+
+    if( t->kind == Type::Object || t->kind == Type::Record )
+        bout << ws(2) << "obj[i].class$ = &" << qualident(t->decl) << "$class$;" << endl; // set the vptr to its class object
+    else if( t->kind == Type::Array && t->expr != 0 && t->objectInit )
+    {
+        Type* et = deref(t->type());
+        bout << ws(2) << qualident(et->decl) << "$init$(obj, ";
+        ArrayType at = arrayType(t);
+        Type* tt = t;
+        Expr(tt->expr, bout);
+        for( int i = 1; i < at.first.size(); i++ )
+        {
+            tt = deref(tt->type());
+            bout << " * ";
+            Expr(tt->expr, bout);
+        }
+        bout << ");" << endl;
+    }
+
+    foreach( Declaration* field, t->subs )
+    {
+        if( field->kind != Declaration::Field )
+            continue;
+        Type* tt = deref(field->type());
+        if( tt->objectInit && tt->isSO() )
+        {
+            bout << ws(2) << qualident(tt->decl) << "$init$(&obj[i]." << field->name << ", 1);" << endl;
+        }else if( tt->objectInit && tt->kind == Type::Array && tt->expr != 0 )
+        {
+            Type* et = deref(tt->type());
+            if( et->isSO() )
+            {
+                bout << ws(2) << qualident(tt->decl) << "$init$(obj[i]." << field->name << ", ";
+                ArrayType at = arrayType(tt);
+                Expr(tt->expr, bout);
+                for( int i = 1; i < at.first.size(); i++ )
+                {
+                    tt = deref(tt->type());
+                    bout << " * ";
+                    Expr(tt->expr, bout);
+                }
+                bout << ");" << endl;
+            }
+        }
+    }
+
+    bout << ws(1) << "}" << endl;
+    bout << "}" << endl << endl;
+}
+
+void CeeGen::emitVariableInit(Ast::Declaration * d, int level)
+{
+    Type* t = deref(d->type());
+    if( t->kind == Type::Pointer && t->pointerInit )
+        bout << ws(level) << qualident(d) << " = NULL;" << endl;
+    else if( t->isSOA() )
+    {
+        if( t->pointerInit ) // it's cheaper to directly zero the whole thing
+            bout << ws(level) << "memset(&" << qualident(d) << ", 0, sizeof(" << typeRef(t) << "));" << endl;
+    }
+
+    if( t->isSO() )
+        bout << ws(level) << qualident(t) << "$init$(&" << qualident(d) << ", 1);" << endl;
+    else if( t->kind == Type::Array && t->expr != 0 && t->objectInit )
+    {
+        ArrayType at = arrayType(t);
+        bout << ws(level) << qualident(at.second) << "$init$(" << qualident(d) << ".$,";
+        Expr(t->expr, bout);
+        for( int i = 1; i < at.first.size(); i++ )
+        {
+            t = deref(t->type());
+            bout << " * ";
+            Expr(t->expr, bout);
+        }
+        bout << ");" << endl;
+    }
+}
+
+bool CeeGen::checkOpenArray(Ast::Type *t, const RowCol& pos)
+{
+    t = deref(t);
+    if( t == 0 || t->kind != Type::Array )
+        return true;
+    ArrayType a = arrayType(t);
+    int openDims = 0;
+    for( int i = 0; i < a.first.size(); i++ )
+        if( a.first[i] == 0 ) openDims++;
+    if( openDims > 1 )
+        return invalid("multi-dimensional open array parameter not yet supported", pos);
+    return true;
 }
 
 void CeeGen::Module(Ast::Declaration *module) {
@@ -480,13 +547,14 @@ void CeeGen::Module(Ast::Declaration *module) {
 
     // static analysis revealed that in ETH Oberon System v2.3.7 only the first dim of all n-dim arrays is open
     // array kinds:
-    // fixed size by value: struct { array[n]; }
-    //            by pointer: TBD   dynamic=1
-    //            by reference: TBD pointer to struct { array[n]; } dynamic=0
-    // open       by pointer: MIC$DA dynamic=1
-    //            by reference: MIC$AP dynamic=0
+    // fixed size by value: struct { array[n]; } on fields/var/param FixedSize
+    //            by pointer: MIC$DA   dynamic=1 DerefedArray/PointerToArray
+    //            by reference: MIC$AP dynamic=0 ReferenceToArray
+    // open       by pointer: MIC$DA dynamic=1   DerefedArray/PointerToArray
+    //            by reference: MIC$AP dynamic=0 ReferenceToArray
+    //            by value: MIC$AP dynamic=0     ArrayParameter
 
-    hout << "typedef struct MIC$AP { uint32_t $1; void* $; } MIC$AP;" << endl; // n-dim open array parameter (var or val)
+    hout << "typedef struct MIC$AP { uint32_t $1; void* $; } MIC$AP;" << endl; // n-dim open array parameter (var or val) or fixed size var parameter
     hout << "typedef struct MIC$DA { uint32_t $1; void* $[]; } MIC$DA;" << endl; // n-dim dynamic array, pointer points to $, not $1 (for compat with SYSTEM calls)
     hout << "#endif" << endl;
 
@@ -519,13 +587,17 @@ void CeeGen::Module(Ast::Declaration *module) {
         bout << "    if( " << module->name << "$initialized ) return;" << endl;
         bout << "    " << module->name << "$initialized = 1;" << endl;
 
-        Ast::Declaration* imp = module->link;
-        while( imp && imp->kind == Ast::Declaration::Import )
+        Ast::Declaration* d = module->link;
+        while( d )
         {
-            Import import = imp->data.value<Import>();
-            if( import.moduleName != "SYSTEM" && !import.resolved->extern_ )
-                bout << "    " << import.moduleName << "$init$();" << endl;
-            imp = imp->next;
+            if( d->kind == Ast::Declaration::Import )
+            {
+                Import import = d->data.value<Import>();
+                if( import.moduleName != "SYSTEM" && !import.resolved->extern_ )
+                    bout << "    " << import.moduleName << "$init$();" << endl;
+            }else if( d->objectInit || d->pointerInit )
+                emitVariableInit(d, 1);
+            d = d->next;
         }
 
         d = module->link;
@@ -600,7 +672,6 @@ void CeeGen::TypeDecl(Ast::Declaration* d) {
     if( d->visi > Declaration::Private )
         hout << "/* public */ ";
     typeDecl(d);
-    hout << ";" << endl;
     metaDecl(d);
     foreach( Declaration* p, d->type()->subs )
     {
@@ -624,8 +695,13 @@ void CeeGen::VarDecl(Ast::Declaration* d) {
         hout << ";" << endl;
     }else
     {
+        if( d->pos.d_row == 66 )
+            dummy();
         bout << ws();
-        parameter(bout, d);
+        if( d->kind == Declaration::ParamDecl )
+            parameter(bout, d);
+        else
+            variable(bout, d);
         bout << ";" << endl;
         // TODO emitSoapInit(bout, sub->name, sub->getType(), 0 );
     }
@@ -685,7 +761,14 @@ void CeeGen::ProcDecl(Ast::Declaration * proc) {
         while(d && d->kind == Declaration::ParamDecl )
             d = d->next;
         curLevel++;
-        d = DeclSeq(d, false, true);
+        DeclSeq(d, false, true);
+        d = proc->link;
+        while(d)
+        {
+            if( d->objectInit || d->pointerInit )
+                emitVariableInit(d, curLevel);
+            d = d->next;
+        }
         if( proc->body ) {
             if( proc->body->kind == Ast::Statement::Assembler )
                 Assembler(proc);
@@ -726,6 +809,8 @@ void CeeGen::StatSeq(Ast::Statement*s) {
 
 void CeeGen::assig(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Assig);
+    if( s->pos.d_row == 71 )
+        dummy();
     Type* lt = deref(s->lhs->type());
     Type* rt = deref(s->rhs->type());
     if( lt && (lt->kind == Type::Record || lt->kind == Type::Object) )
@@ -1223,7 +1308,7 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
         return false;
     Type* lt = deref(e->lhs->type());
     Type* rt = deref(e->rhs->type());
-    bool isChar = (lt && lt->kind == Type::CHAR) || (rt && rt->kind == Type::CHAR);
+    bool isChar = (lt && lt->kind == Type::CHAR) || (rt && rt->kind == Type::CHAR); // NOTE: validator assured that there is no StrLit here
     bool isStr = !isChar &&
                  ((lt && (lt->kind == Type::StrLit || (lt->kind == Type::Array && deref(lt->type()) &&
                    deref(lt->type())->kind == Type::CHAR))) ||
@@ -1231,15 +1316,19 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
                    deref(rt->type())->kind == Type::CHAR))));
     if( isStr )
     {
+        const ArrayKind lak = deriveArrayKind(e->lhs);
+        const ArrayKind rak = deriveArrayKind(e->rhs);
+
         out << "(strcmp((const char*)";
         Expr(e->lhs, out);
-        if( lt && lt->kind == Type::Array && (lt->isSOA() || (lt->expr == 0 && !lt->dynamic)) )
+        if( lak == FixedSize || lak == ReferenceToArray || lak == ArrayParameter )
             out << ".$";
         out << ", (const char*)";
         Expr(e->rhs, out);
-        if( rt && rt->kind == Type::Array && (rt->isSOA() || (rt->expr == 0 && !rt->dynamic)) )
+        if( rak == FixedSize || rak == ReferenceToArray || rak == ArrayParameter )
             out << ".$";
         out << ")";
+
         switch(e->kind)
         {
         case Ast::Expression::Lt: out << " < 0)"; break;
@@ -1471,6 +1560,9 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
+
+    // if we meet an index, first check whether it is the last of a series of indices
+    // of the same n-dim array
     QList<Expression*> indices;
     indices.push_front(e);
     Expression* i = e->lhs;
@@ -1482,30 +1574,18 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
     Q_ASSERT( !indices.isEmpty() );
 
     Type* at = deref(indices[0]->lhs->type());
-    bool isOpenParam = (at->kind == Type::Array && at->expr == 0 && !at->dynamic);
+    const ArrayKind lak = deriveArrayKind(indices[0]->lhs);
+    ArrayType art = arrayType(at);
 
-    if( isOpenParam )
+    // this transpiler represents n-dim array of T as 1-dim array of T
+    if( lak == FixedSize || lak == ReferenceToArray || lak == ArrayParameter )
     {
-        ArrayType art = arrayType(at);
         out << "((" << typeRef(art.second) << "*)";
         Expr(indices[0]->lhs, out);
         out << ".$)";
     }else
     {
-        bool ptrDeref = false;
-        if( indices[0]->lhs && indices[0]->lhs->kind == Expression::Deref )
-        {
-            Type* inner = deref(indices[0]->lhs->lhs->type());
-            if( inner && inner->kind == Type::Pointer )
-            {
-                Type* base = deref(inner->type());
-                if( base && base->kind == Type::Array )
-                    ptrDeref = true;
-            }
-        }
         Expr(indices[0]->lhs, out);
-        if( at->kind == Type::Array && at->expr != 0 && !ptrDeref )
-            out << ".$";
     }
 
     out << "[";
@@ -1514,18 +1594,17 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
     Expr(indices[0]->rhs, out);
     for( int n = 1; n < indices.size(); n++ )
     {
+        // calculate offset with Horner's rule
+        // ((idx[0] * len[1] + idx[1]) * len[2] + idx[2]...)
+        // we're lucky that we don't need len[0]!
         out << " * ";
-        at = deref(indices[n]->lhs->type());
-        Q_ASSERT(at->kind == Type::Array);
-        if( at->expr )
-            Expr(at->expr, out);
-        else if( at->dynamic )
+        Type* dt = deref(indices[n]->lhs->type());
+        Q_ASSERT(dt->kind == Type::Array);
+        if( dt->expr )
+            Expr(dt->expr, out);
+        else
         {
             invalid("multi-dimensional open/dynamic array indexing not yet supported", e->pos);
-            out << "0 /* unsupported multi-dim open array */";
-        }else
-        {
-            invalid("multi-dimensional open array param indexing not yet supported", e->pos);
             out << "0 /* unsupported multi-dim open array */";
         }
         out << " + ";
@@ -1908,42 +1987,44 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
     case Builtin::LEN:
         if( a.size() < 1 || a.size() > 2 )
             return false;
+        else
         {
+            if( a.size() == 2 )
+                invalid("LEN with two arguments not supported by CeeGen; ignored", a[1]->pos);
             Type* t = deref(a[0]->type());
             if( t && t->kind == Type::StrLit )
             {
                 out << "(strlen(";
                 Expr(a[0], out);
                 out << ") + 1)";
-            }else if( t && t->kind == Type::Array )
+            }else
             {
-                if( t->expr )
+                ArrayKind ak = deriveArrayKind(a[0]);
+                switch( ak )
                 {
+                case FixedSize:
                     Expr(t->expr, out);
-                }else if( t->dynamic )
-                {
+                    break;
+                case PointerToArray:
                     out << "$toda((void**)";
                     Expr(a[0], out);
                     out << ")->$1";
-                }else
-                {
+                    break;
+                case DerefedArray:
+                    out << "$toda((void**)";
+                    // NOTE: Expr(a[0]) doesn't deref the pointer, so we still have a pointer here
+                    Expr(a[0], out);
+                    out << ")->$1";
+                    break;
+                case ReferenceToArray:
+                case ArrayParameter:
                     Expr(a[0], out);
                     out << ".$1";
+                    break;
+                default:
+                    Q_ASSERT(false);
                 }
-            }else if( t && t->kind == Type::Pointer )
-            {
-                Type* base = deref(t->type());
-                if( base && base->kind == Type::Array && base->expr == 0 )
-                {
-                    out << "$toda((void**)";
-                    Expr(a[0], out);
-                    out << ")->$1";
-                }else
-                {
-                    out << "0";
-                }
-            }else
-                out << "0";
+            }
         }
         return true;
     case Builtin::MAX:
@@ -2141,6 +2222,53 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
         if( a.size() != 2 )
             return false;
         {
+#if 1
+            ArrayKind srcAk = deriveArrayKind(a[0]);
+            ArrayKind dstAk = deriveArrayKind(a[1]);
+            out << "strcpy((char*)";
+
+            Expr(a[1], out);
+            switch(dstAk)
+            {
+            case FixedSize:
+                out << ".$";
+                break;
+            case PointerToArray:
+                break;
+            case DerefedArray:
+                // NOTE: Expr(a[0]) doesn't deref the pointer, so we still have a pointer here
+                break;
+            case ReferenceToArray:
+            case ArrayParameter:
+                out << ".$";
+                break;
+            default:
+                Q_ASSERT(false);
+
+            }
+            out << ", (const char*)";
+
+            Expr(a[0], out);
+            switch(srcAk)
+            {
+            case FixedSize:
+                out << ".$";
+                break;
+            case PointerToArray:
+                break;
+            case DerefedArray:
+                // NOTE: Expr(a[0]) doesn't deref the pointer, so we still have a pointer here
+                break;
+            case ReferenceToArray:
+            case ArrayParameter:
+                out << ".$";
+                break;
+            default:
+                Q_ASSERT(deref(a[0]->type())->kind == Type::StrLit);
+                break;
+            }
+            out << ")";
+#else
             Type* srcT = deref(a[0]->type());
             Type* dstT = deref(a[1]->type());
             if( dstT && dstT->kind == Type::Array && dstT->expr )
@@ -2194,11 +2322,13 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 }
                 out << ")";
             }
+#endif
         }
         return true;
     case Builtin::NEW:
         if( a.size() < 1 )
             return false;
+        else
         {
             Type* ptrType = deref(a[0]->type());
             if( ptrType && ptrType->kind == Type::Pointer )
@@ -2207,35 +2337,39 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 if( base && (base->kind == Type::Record || base->kind == Type::Object) )
                 {
                     Expr(a[0], out);
-                    out << " = (" << typeRef(base) << "*)GC_MALLOC(sizeof(" << typeRef(base) << "))";
+                    out << " = (" << typeRef(base) << "*)GC_MALLOC(sizeof(" << typeRef(ptrType->type()) << "))";
                     if( base->decl )
                     {
                         out << "; ";
                         Expr(a[0], out);
-                        out << "->class$ = &" << qualident(base->decl) << "$class$";
+                        out << "->class$ = &" << qualident(ptrType->type()) << "$class$";
                     }
-                }else if( base && base->kind == Type::Array && base->expr == 0 )
+                }else if( base && base->kind == Type::Array )
                 {
+                    if( base->expr == 0 && !checkOpenArray(base, a[0]->pos) )
+                        return false;
                     ArrayType at = arrayType(base);
                     Expr(a[0], out);
                     out << " = (" << typeRef(at.second) << "*)$allocda(";
-                    if( a.size() > 1 )
-                        Expr(a[1], out);
-                    else
-                        out << "0";
+                    if( base->expr == 0 )
+                    {
+                        if( a.size() > 1 )
+                            Expr(a[1], out);
+                        else
+                            return invalid("calling NEW for an open array with no size parameter", a[0]->pos);
+                    }else
+                        Expr(at.first[0], out);
+                    for( int i = 1; i < at.first.size(); i++ )
+                    {
+                        out << " * ";
+                        Expr(at.first[i], out);
+                    }
                     out << ", sizeof(" << typeRef(at.second) << "))";
                 }else
-                {
-                    Expr(a[0], out);
-                    out << " = (" << typeRef(ptrType) << ")GC_MALLOC(sizeof(" << typeRef(base) << "))";
-                }
+                    Q_ASSERT(false);
+                // TODO: call initializer if needed
             }else
-            {
-                Expr(a[0], out);
-                out << " = GC_MALLOC(sizeof(*";
-                Expr(a[0], out);
-                out << "))";
-            }
+                Q_ASSERT(false);
         }
         return true;
     case Builtin::HALT:
@@ -2491,18 +2625,7 @@ Type *CeeGen::deref(Ast::Type * t)
     return t;
 }
 
-QByteArray CeeGen::typeRef(Ast::Type * t)
-{
-    // TEST
-#ifdef _NEW_APPROACH_
-    const QByteArray res = typeRef2(t);
-#else
-    const QByteArray res = typeRef1(t);
-#endif
-    return res;
-}
-
-QByteArray CeeGen::typeRef2(Type* orig)
+QByteArray CeeGen::typeRef(Type* orig)
 {
     // Render a type for a "storage slot", i.e. a variable (module or local), a parameter, a field, an array element, a pointer target
     // this is not about procedure return types (which don't allow arrays nor records)
@@ -2549,7 +2672,7 @@ QByteArray CeeGen::typeRef2(Type* orig)
 
     case Type::Pointer: {
         Type* to = deref(t->type());
-        if( to->kind == Type::Array && to->expr == 0 )
+        if( to->kind == Type::Array )
             res = typePrefix(to) + qualident(to->type()) + "*";
         else
             res = typePrefix(to) + qualident(orig);
@@ -2581,66 +2704,12 @@ QByteArray CeeGen::typeRef2(Type* orig)
     return res;
 }
 
-QByteArray CeeGen::typeRef1(Type * t)
-{
-    if( t == 0 || t->kind == Type::NoType )
-        return "void";
-    t = deref(t);
-    if( t->kind < Type::MaxBasicType )
-        return basicType(t);
-
-    // Arrays:
-    // fixed size: struct { a[1*2*3..]}
-    // dynamic open: [..sizes ] <ptr> [1*2*3..]
-    // param open: ptr, d1, d2, ...
-
-    if( t->kind == Type::Pointer )
-    {
-
-        Type* to = deref(t->type());
-        if( to->kind == Type::Array )
-        {
-            // pointer to open arrays have no extra typedef, instead we use element_type*
-            ArrayType at = arrayType(to);
-            to = at.second;
-        }
-        return typeRef(to) + "*";
-    }else if( t->kind == Type::Array && t->expr == 0 )
-    {
-        ArrayType at = arrayType(t);
-        return typeRef(at.second) + "*";
-    }else if( t->decl )
-    {
-        if( t->isSOA() )
-            return "struct " + qualident(t->decl);
-        else
-            return qualident(t->decl);
-    }else
-        return "?TYPE";
-}
-
-void CeeGen::pointerTo(QTextStream &out, Ast::Type *ptr)
-{
-    Type* to = ptr->type();
-    Type* to2 = deref(to);
-    if( to2 && to2->kind == Type::Array && to2->expr == 0 )
-    {
-        // Pointer to array is translated to pointer to array element
-        ptr = to2;
-        to = ptr->type();
-        to2 = deref(to);
-    }
-    out << typeRef(ptr->type()) << "*";
-
-}
-
 void CeeGen::printHelper(Ast::Declaration * d)
 {
     if( d == 0 || d->getModule() != curMod )
         return;
     Q_ASSERT(d->helper == 0);
     typeDecl(d);
-    hout << ";" << endl;
     metaDecl(d);
     foreach( Declaration* p, d->type()->subs )
     {
@@ -2653,23 +2722,17 @@ void CeeGen::printHelper(Ast::Declaration * d)
 void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
 {
     Type* t = deref(param->type());
-    if( t && t->kind == Type::Array && t->expr == 0 )
+    if( t && t->kind == Type::Array )
     {
-        // MIC$AP n-dim open array parameter (var or val)
-        ArrayType a = arrayType(t);
-        int openDims = 0;
-        for( int i = 0; i < a.first.size(); i++ )
-            if( a.first[i] == 0 ) openDims++;
-        if( openDims > 1 )
-            invalid("multi-dimensional open array parameter not yet supported", param->pos);
-        out << "MIC$AP " << escape(param->name);
-    }
-#ifndef _NEW_APPROACH_
-    else if( param->isVarParam() )
-        // includes fixed size arrays (which are embedded in struct
-        out << typeRef(param->type()) << "* " << escape(param->name);
-#endif
-    else
+        // VAR open or fixed array, value open or fixed array
+        checkOpenArray(t, param->pos);
+        if( param->isVarParam() || t->expr == 0 )
+            // VAR (fixed or open) or open
+            out << "MIC$AP " << escape(param->name);
+        else
+            // not VAR and not open:
+            out << typeRef(param->type()) << " " << escape(param->name);
+    }else
         out << typeRef(param->type()) << " " << escape(param->name);
 }
 
