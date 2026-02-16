@@ -1669,18 +1669,18 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
     {
         if( i != 0 )
             out << ", ";
-        Type* formT = deref( i < formals.size() ? formals[i]->type() : 0);
-        if( formT && formT->kind == Type::Array && formT->expr == 0 )
+        Type* ft = deref( i < formals.size() ? formals[i]->type() : 0);
+        if( ft && ft->kind == Type::Array && ft->expr == 0 )
         {
-            ArrayType formArr = arrayType(formT);
+            ArrayType formArr = arrayType(ft);
             int openDims = 0;
             for( int j = 0; j < formArr.first.size(); j++ )
                 if( formArr.first[j] == 0 ) openDims++;
             if( openDims > 1 )
                 invalid("multi-dimensional open array argument not yet supported", arg->pos);
-            Type* actT = deref(arg->type());
+            Type* at = deref(arg->type());
             // TODO: the following has not yet been migrated to the new ArrayKind approach
-            if( actT && actT->kind == Type::StrLit )
+            if( at && at->kind == Type::StrLit )
             {
                 if( arg->kind == Expression::Literal && arg->val.type() == QVariant::ByteArray
                         && arg->val.toByteArray().size() == 1 )
@@ -1700,7 +1700,7 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                     Expr(arg, out);
                     out << "}";
                 }
-            }else if( actT && actT->kind == Type::Array && actT->expr != 0 )
+            }else if( at && at->kind == Type::Array && at->expr != 0 )
             {
                 bool viaPtrDeref = false;
                 if( arg->kind == Expression::Deref )
@@ -1711,18 +1711,18 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                         viaPtrDeref = true;
                 }
                 out << "(MIC$AP){";
-                Expr(actT->expr, out);
+                Expr(at->expr, out);
                 out << ", (void*)";
                 Expr(arg, out);
-                if( actT->isSOA() && !viaPtrDeref )
+                if( at->isSOA() && !viaPtrDeref )
                     out << ".$";
                 out << "}";
-            }else if( actT && actT->kind == Type::Array && actT->expr == 0 )
+            }else if( at && at->kind == Type::Array && at->expr == 0 )
             {
                 Expr(arg, out);
-            }else if( actT && actT->kind == Type::Pointer )
+            }else if( at && at->kind == Type::Pointer )
             {
-                Type* base = deref(actT->type());
+                Type* base = deref(at->type());
                 if( base && base->kind == Type::Array && base->expr == 0 )
                 {
                     out << "(MIC$AP){$toda((void**)";
@@ -1732,7 +1732,7 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                     out << "}";
                 }else
                     Expr(arg, out);
-            }else if( actT && actT->kind == Type::Reference )
+            }else if( at && at->kind == Type::Reference )
             {
                 Expr(arg, out);
             }else
@@ -1765,8 +1765,8 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
         }else
         {
             Type* actT = deref(arg->type());
-            if( formT && actT && formT->kind == Type::Pointer && actT->kind == Type::Pointer && formT != actT )
-                out << "(" << typeRef(formT) << ")";
+            if( ft && actT && ft->kind == Type::Pointer && actT->kind == Type::Pointer && ft != actT )
+                out << "(" << typeRef(ft) << ")";
             Expr(arg, out);
         }
         i++;
@@ -1821,7 +1821,13 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
         else if( t->kind == Type::CHAR )
             out << val.toULongLong();
         else if( t->isReal() )
-            out << val.toDouble();
+        {
+            QByteArray tmp = QByteArray::number(val.toDouble());
+            // NOTE: if we don't do that, Qt writes 1/2 instead of 1.0/2.0 which renders a different result!
+            if( !tmp.contains('.') && !tmp.contains('e') )
+                tmp += ".0";
+            out << tmp;
+        }
         else if( t->kind == Type::StrLit )
         {
             QByteArray str = val.toByteArray();
