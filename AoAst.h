@@ -393,6 +393,8 @@ namespace Ast
 
         Type* getType(quint8 basicType) const { return types[basicType]; }
 
+        void assureCharLit(Expression* e);
+
         static void cleanupGlobals();
         static DeclList toList(Declaration* d);
         static Declaration* getSystem();

@@ -115,6 +115,8 @@ protected:
     void emitInitializer(Ast::Type*);
     void emitVariableInit(Ast::Declaration*, int level);
     bool checkOpenArray(Ast::Type* t, const RowCol &pos);
+    void renderArrayPtr(int ak, Ast::Expression* e, QTextStream &out );
+    void renderArrayLen(int ak, Ast::Expression* e, QTextStream &out );
 
 private:
     Ast::Declaration* curMod;

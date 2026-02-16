@@ -664,6 +664,8 @@ Ast::Declaration* CeeGen::DeclSeq(Ast::Declaration* d, bool doProcs, bool doOthe
 void CeeGen::ConstDecl(Ast::Declaration* d) {
     hout << "#define " << qualident(d) << " ";
     ConstExpr(d->expr, hout);
+    if( d->expr == 0 )
+        hout << d->data.toULongLong();
     hout << endl;
 }
 
@@ -695,8 +697,6 @@ void CeeGen::VarDecl(Ast::Declaration* d) {
         hout << ";" << endl;
     }else
     {
-        if( d->pos.d_row == 66 )
-            dummy();
         bout << ws();
         if( d->kind == Declaration::ParamDecl )
             parameter(bout, d);
@@ -809,8 +809,6 @@ void CeeGen::StatSeq(Ast::Statement*s) {
 
 void CeeGen::assig(Ast::Statement* s) {
     Q_ASSERT(s && s->kind == Ast::Statement::Assig);
-    if( s->pos.d_row == 71 )
-        dummy();
     Type* lt = deref(s->lhs->type());
     Type* rt = deref(s->rhs->type());
     if( lt && (lt->kind == Type::Record || lt->kind == Type::Object) )
@@ -820,38 +818,30 @@ void CeeGen::assig(Ast::Statement* s) {
         bout << ", &";
         Expr(s->rhs, bout);
         bout << ", sizeof(" << typeRef(lt) << "));";
-    }else if( lt && lt->kind == Type::Array && lt->expr != 0 )
+    }else if( lt && lt->kind == Type::Array )
     {
-        Type* elemT = deref(lt->type());
-        if( elemT && elemT->kind == Type::CHAR && rt && rt->kind == Type::StrLit )
+        ArrayKind lak = deriveArrayKind(s->lhs);
+        ArrayKind rak = deriveArrayKind(s->rhs);
+
+        if( rt->kind == Type::StrLit )
         {
-            bout << "strncpy((char*)";
-            Expr(s->lhs, bout);
-            if( lt->isSOA() )
-                bout << ".$";
+            bout << "strcpy((char*)";
+            renderArrayPtr(lak, s->lhs, bout);
             bout << ", ";
-            if( s->rhs->kind == Expression::Literal && s->rhs->val.type() == QVariant::ByteArray
-                    && s->rhs->val.toByteArray().size() == 1 )
-            {
-                QByteArray str = s->rhs->val.toByteArray();
-                bout << "\"";
-                char c = str[0];
-                if( c == '"' ) bout << "\\\"";
-                else if( c == '\\' ) bout << "\\\\";
-                else bout << c;
-                bout << "\"";
-            }else
-                Expr(s->rhs, bout);
-            bout << ", ";
-            Expr(lt->expr, bout);
+            Expr(s->rhs, bout);
             bout << ");";
         }else
         {
-            bout << "memcpy(&";
-            Expr(s->lhs, bout);
-            bout << ", &";
-            Expr(s->rhs, bout);
-            bout << ", sizeof(" << typeRef(lt) << "));";
+            ArrayType at = arrayType(lt);
+            bout << "memcpy(";
+            renderArrayPtr(lak, s->lhs, bout);
+            bout << ", ";
+            renderArrayPtr(rak, s->rhs, bout);
+            bout << ",";
+            renderArrayLen(lak, s->lhs, bout);
+            bout << " * ";
+            bout << "sizeof(" << typeRef(at.second) << ")";
+            bout << ");";
         }
     }else
     {
@@ -1512,12 +1502,12 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
     if( e == 0 )
         return false;
     Declaration* d = e->val.value<Declaration*>();
-    if( d && d->kind == Declaration::ConstDecl && d->outer == 0 && (d->name == "FALSE" || d->name == "TRUE") )
+    if( d && d->kind == Declaration::ConstDecl )
     {
-        if( d->name == "TRUE" )
-            out << "1";
+        if( d->expr )
+            Expr(d->expr, out);
         else
-            out << "0";
+            out << d->data.toULongLong();  // true/false
         return true;
     }
     Type* t = deref(d->type());
@@ -1689,6 +1679,7 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
             if( openDims > 1 )
                 invalid("multi-dimensional open array argument not yet supported", arg->pos);
             Type* actT = deref(arg->type());
+            // TODO: the following has not yet been migrated to the new ArrayKind approach
             if( actT && actT->kind == Type::StrLit )
             {
                 if( arg->kind == Expression::Literal && arg->val.type() == QVariant::ByteArray
@@ -1816,45 +1807,31 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
 {
     if( e == 0 )
         return false;
-    switch( e->val.type() )
+    QVariant val;
+    if( e->kind == Expression::Literal )
     {
-    case QVariant::Invalid:
-        out << "NULL";
-        break;
-    case QVariant::Bool:
-    case QVariant::Int:
-    case QVariant::UInt:
-    case QVariant::LongLong:
-    case QVariant::ULongLong:
-        out << e->val.toULongLong();
-        break;
-    case QVariant::Double:
-        out << e->val.toDouble();
-        break;
-    case QVariant::ByteArray: {
-        QByteArray str = e->val.toByteArray();
-        if( str.size() == 1 )
+        val = e->val;
+        Type* t = deref(e->type());
+        if( t->kind == Type::NIL )
+            out << "NULL";
+        else if( t->isIntegerOrByte() || t->kind == Type::SET )
+            out << val.toULongLong();
+        else if( t->kind == Type::BOOLEAN )
+            out << (int)val.toBool();
+        else if( t->kind == Type::CHAR )
+            out << val.toULongLong();
+        else if( t->isReal() )
+            out << val.toDouble();
+        else if( t->kind == Type::StrLit )
         {
-            char c = str[0];
-            if( c == '\'' )
-                out << "'\\\''";
-            else if( c == '\\' )
-                out << "'\\\\'"; 
-            else if( c >= 32 && c < 127 )
-                out << "'" << str << "'";
-            else
-                out << "(char)" << (int)(unsigned char)c;
-        }else
-        {
+            QByteArray str = val.toByteArray();
             str.replace("\"", "\\\"");
             out << "\"" << str << "\"";
-        }
-        } break;
-    default:
-        Q_ASSERT(false);
+        }else
+            Q_ASSERT(false);
+        return true;
     }
-
-    return true;
+    return false;
 }
 
 bool CeeGen::constructor(Ast::Expression *e, QTextStream &out)
@@ -2000,30 +1977,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             }else
             {
                 ArrayKind ak = deriveArrayKind(a[0]);
-                switch( ak )
-                {
-                case FixedSize:
-                    Expr(t->expr, out);
-                    break;
-                case PointerToArray:
-                    out << "$toda((void**)";
-                    Expr(a[0], out);
-                    out << ")->$1";
-                    break;
-                case DerefedArray:
-                    out << "$toda((void**)";
-                    // NOTE: Expr(a[0]) doesn't deref the pointer, so we still have a pointer here
-                    Expr(a[0], out);
-                    out << ")->$1";
-                    break;
-                case ReferenceToArray:
-                case ArrayParameter:
-                    Expr(a[0], out);
-                    out << ".$1";
-                    break;
-                default:
-                    Q_ASSERT(false);
-                }
+                renderArrayLen(ak, a[0], out);
             }
         }
         return true;
@@ -2227,46 +2181,13 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             ArrayKind dstAk = deriveArrayKind(a[1]);
             out << "strcpy((char*)";
 
-            Expr(a[1], out);
-            switch(dstAk)
-            {
-            case FixedSize:
-                out << ".$";
-                break;
-            case PointerToArray:
-                break;
-            case DerefedArray:
-                // NOTE: Expr(a[0]) doesn't deref the pointer, so we still have a pointer here
-                break;
-            case ReferenceToArray:
-            case ArrayParameter:
-                out << ".$";
-                break;
-            default:
-                Q_ASSERT(false);
-
-            }
+            renderArrayPtr(dstAk, a[1], out);
             out << ", (const char*)";
 
-            Expr(a[0], out);
-            switch(srcAk)
-            {
-            case FixedSize:
-                out << ".$";
-                break;
-            case PointerToArray:
-                break;
-            case DerefedArray:
-                // NOTE: Expr(a[0]) doesn't deref the pointer, so we still have a pointer here
-                break;
-            case ReferenceToArray:
-            case ArrayParameter:
-                out << ".$";
-                break;
-            default:
-                Q_ASSERT(deref(a[0]->type())->kind == Type::StrLit);
-                break;
-            }
+            if( srcAk == NoArray )
+                Expr(a[0], out);
+            else
+                renderArrayPtr(srcAk, a[0], out);
             out << ")";
 #else
             Type* srcT = deref(a[0]->type());
@@ -2773,7 +2694,10 @@ void CeeGen::procHeader(Ast::Declaration *proc, bool header)
             if( hasPars )
                 out << ", ";
             hasPars = true;
-            out << typeRef(ap.sourceDecl->type()) << "* " << escape(ap.name);
+            out << typeRef(ap.sourceDecl->type());
+            if( !ap.sourceDecl->isVarParam() )
+                out << "* "; // only make it a pointer if it is not already a reference
+            out << escape(ap.name);
         }
     }
     out << ")";
@@ -2785,4 +2709,55 @@ QByteArray CeeGen::escape(const QByteArray & name)
         return name + "_";
     else
         return name;
+}
+
+void CeeGen::renderArrayPtr(int ak, Expression* e, QTextStream &out )
+{
+    Expr(e, out);
+    switch(ak)
+    {
+    case FixedSize:
+        out << ".$";
+        break;
+    case PointerToArray:
+        break;
+    case DerefedArray:
+        // NOTE: Expr(e) doesn't deref the pointer, so we still have a pointer here
+        break;
+    case ReferenceToArray:
+    case ArrayParameter:
+        out << ".$";
+        break;
+    default:
+        Q_ASSERT(false);
+
+    }
+}
+
+void CeeGen::renderArrayLen(int ak, Ast::Expression *e, QTextStream &out)
+{
+    switch( ak )
+    {
+    case FixedSize:
+        Expr(deref(e->type())->expr, out);
+        break;
+    case PointerToArray:
+        out << "$toda((void**)";
+        Expr(e, out);
+        out << ")->$1";
+        break;
+    case DerefedArray:
+        out << "$toda((void**)";
+        // NOTE: Expr(e) doesn't deref the pointer, so we still have a pointer here
+        Expr(e, out);
+        out << ")->$1";
+        break;
+    case ReferenceToArray:
+    case ArrayParameter:
+        Expr(e, out);
+        out << ".$1";
+        break;
+    default:
+        Q_ASSERT(false);
+    }
 }

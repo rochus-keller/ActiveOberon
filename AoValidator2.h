@@ -95,6 +95,8 @@ namespace Ao {
         bool decl(Ast::Declaration*);
         bool assigCompat(Ast::Type* lhs, Ast::Type* rhs);
         bool assigCompat(Ast::Type* lhs, Ast::Expression* rhs);
+        bool paramCompat(Ast::Type* lhs, Ast::Expression* rhs);
+        bool arrayCompat(Ast::Type* lhs, Ast::Type* rhs);
         bool isPtrOrVarWithRecordObject(Ast::Expression* e);
 
 	protected:

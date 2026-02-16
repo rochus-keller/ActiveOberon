@@ -40,40 +40,11 @@ static inline bool isConstChar( Expression* e )
 {
     if( e == 0 )
         return false;
-    if( e->type() && e->type()->deref()->kind == Type::CHAR )
-        return true;
-    if( e->kind == Expression::Literal && e->type() && e->type()->kind == Type::StrLit )
-        return e->val.toByteArray().size() == 1;
-    if( e->kind == Expression::DeclRef && e->type() && e->type()->kind == Type::StrLit )
-    {
-        Declaration* d = e->val.value<Declaration*>();
-        if( d && d->kind == Declaration::ConstDecl )
-            return d->data.toByteArray().size() == 1;
-    }
-    return false;
+    else
+        return e->isCharLiteral();
 }
 
-static void assureCharLit(Expression* e, Type* charType )
-{
-    if( e->kind == Expression::Literal && e->type() && e->type()->kind == Type::StrLit )
-    {
-        const QByteArray str = e->val.toByteArray();
-        Q_ASSERT(!str.isEmpty());
-        e->val = (quint32)str[0];
-        e->setType(charType);
-    }else if( e->kind == Expression::DeclRef && e->type() && e->type()->kind == Type::StrLit )
-    {
-        e->kind = Expression::Literal;
-        Declaration* d = e->val.value<Declaration*>();
-        Q_ASSERT(d && d->kind == Declaration::ConstDecl);
-        const QByteArray str = d->data.toByteArray();
-        Q_ASSERT(!str.isEmpty());
-        e->val = (quint32)str[0];
-        e->setType(charType);
-    }
-}
-
-static inline bool isCharArray( Expression* e )
+static inline bool isTextual( Expression* e )
 {
     if( e == 0 )
         return false;
@@ -216,7 +187,7 @@ Ast::Declaration* Validator2::DeclSeq(Ast::Declaration* d) {
 void Validator2::ConstDecl(Ast::Declaration* d) {
     ConstExpr(d->expr);
     d->setType(d->expr->type());
-    d->data = d->expr->val;
+    // no effect, value is in expr d->data = d->expr->val;
 }
 
 bool Validator2::checkIfObjectInit(Type* t)
@@ -601,7 +572,7 @@ void Validator2::assig(Ast::Statement* s) {
 
     if( !assigCompat(s->lhs->type(), s->rhs) )
     {
-        assigCompat(s->lhs->type(), s->rhs);
+        // assigCompat(s->lhs->type(), s->rhs); // sTEST
         error(s->pos, "rhs is not assignment compatible with lhs");
     }
 }
@@ -642,13 +613,12 @@ Ast::Statement *Validator2::CaseStat(Ast::Statement *s) {
         while( label )
         {
             ConstExpr(label);
-#if 1
+
             if( !assigCompat(te, label) )
-#else
-            Type* tl = deref(label->type());
-            if( (te->kind == Type::CHAR && !isConstChar(label)) || (te->kind != Type::CHAR && !tl->isInteger()) )
-#endif
+            {
+                //assigCompat(te, label); // TEST
                 error(label->pos, "label not compatible with case expression type");
+            }
             label = label->next;
         }
         StatSeq(s->body);
@@ -986,11 +956,11 @@ bool Validator2::relation(Ast::Expression *e)
 #endif
     }else if( isConstChar(e->lhs) && isConstChar(e->rhs) )
     {
-        assureCharLit(e->lhs, mdl->getType(Type::CHAR));
-        assureCharLit(e->rhs, mdl->getType(Type::CHAR));
+        mdl->assureCharLit(e->lhs);
+        mdl->assureCharLit(e->rhs);
         if( e->kind == Expression::In || e->kind == Expression::Is )
             error(e->pos, "CHAR operands not compatible with IN or IS operator");
-    }else if( isCharArray(e->lhs) && isCharArray(e->rhs) )
+    }else if( isTextual(e->lhs) && isTextual(e->rhs) )
     {
         if( e->kind == Expression::In || e->kind == Expression::Is )
             error(e->pos, "string operands not compatible with IN or IS operator");
@@ -1319,9 +1289,16 @@ bool Validator2::call(Ast::Expression *e)
         procType = 0;
 
     const DeclList formals = proc ? proc->getParams(true) : procType ? procType->subs : DeclList();
-    Expression* arg = e->rhs;
-    for(int i = 0; arg != 0; i++, arg = arg->next )
-        Expr(arg);
+    ExpList args = Expression::getList(e->rhs);
+    if( proc && proc->kind != Declaration::Builtin && args.size() != formals.size() )
+        error(e->pos, "number of actual arguments does not correspond to number of formal paramteters");
+    else
+        for(int i = 0; i < args.size(); i++ )
+        {
+            Expr(args[i]);
+            if( proc && proc->kind != Declaration::Builtin && !paramCompat(formals[i]->type(), args[i]) )
+                error(args[i]->pos, "actual argument is not compatible with formal parameter");
+        }
 
     const bool isTypeCast = (proc == 0 || proc->kind != Declaration::Builtin) &&
             e->rhs &&
@@ -1423,8 +1400,8 @@ bool Validator2::range(Ast::Expression *e)
     Expr(e->rhs);
     if( isConstChar(e->lhs) && isConstChar(e->rhs) )
     {
-        assureCharLit(e->lhs, mdl->getType(Type::CHAR));
-        assureCharLit(e->rhs, mdl->getType(Type::CHAR));
+        mdl->assureCharLit(e->lhs);
+        mdl->assureCharLit(e->rhs);
         e->setType(mdl->getType(Type::CHAR));
     }else if( deref(e->lhs->type())->isInteger() && deref(e->rhs->type())->isInteger() )
         e->setType(includingType(deref(e->lhs->type()), deref(e->rhs->type())));
@@ -1607,6 +1584,14 @@ bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
     if( lhsT->kind == Type::Array && lhsT->expr != 0 && deref(lhsT->type())->kind == Type::CHAR && rhsT->kind == Type::StrLit )
         return true; // TODO: check m < n for ARRAY n OF CHAR and string constant with m characters
 
+    if( lhsT->kind == Type::CHAR && rhsT->kind == Type::StrLit )
+    {
+        if( !isConstChar(rhs) )
+            return false;
+        mdl->assureCharLit(rhs);
+        return true;
+    }
+
     if( lhsT->kind == Type::Procedure && rhs->kind == Expression::DeclRef )
     {
         Declaration* d = rhs->val.value<Declaration*>();
@@ -1622,6 +1607,33 @@ bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
     }
 
     return assigCompat(lhsT, rhsT);
+}
+
+bool Validator2::paramCompat(Ast::Type *lhs, Ast::Expression *rhs)
+{
+    if( arrayCompat(lhs, rhs->type()))
+        return true;
+    return assigCompat(lhs, rhs);
+}
+
+bool Validator2::arrayCompat(Ast::Type *lhs, Ast::Type *rhs)
+{
+    Type* tf = deref(lhs);
+    Type* ta = deref(rhs);
+
+    // Tf and Ta are the same type
+    if( tf == ta )
+        return true;
+
+    // Tf is an open array, Ta is any array, and their element types are array compatible
+    if( tf->kind == Type::Array && tf->expr == 0 && ta->kind == Type::Array )
+        return arrayCompat(tf->type(), ta->type());
+
+    // Tf is ARRAY OF CHAR and a is a string
+    if( tf->kind == Type::Array && deref(tf->type())->kind == Type::CHAR && ta->kind == Type::StrLit)
+        return true;
+
+    return false;
 }
 
 Type *Validator2::includingType(Ast::Type * lhs, Ast::Type * rhs)

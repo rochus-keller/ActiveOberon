@@ -234,6 +234,29 @@ Declaration*AstModel::getTopModule() const
     return 0;
 }
 
+void AstModel::assureCharLit(Expression *e)
+{
+    if( e->kind == Expression::Literal && e->type() && e->type()->kind == Type::StrLit )
+    {
+        const QByteArray str = QString::fromUtf8(e->val.toByteArray()).toLatin1();
+        Q_ASSERT(!str.isEmpty());
+        e->val = (quint32)str[0];
+        e->setType(getType(Type::CHAR));
+    }else if( e->kind == Expression::DeclRef && e->type() && e->type()->kind == Type::StrLit )
+    {
+        Declaration* d = e->val.value<Declaration*>();
+        Q_ASSERT(d && d->kind == Declaration::ConstDecl);
+        if( d->expr && d->expr->kind == Expression::Literal )
+        {
+            e->kind = Expression::Literal;
+            const QByteArray str = QString::fromUtf8(d->expr->val.toByteArray()).toLatin1();
+            Q_ASSERT(!str.isEmpty());
+            e->val = (quint32)str[0];
+            e->setType(getType(Type::CHAR));
+        }
+    }
+}
+
 void AstModel::cleanupGlobals()
 {
     if( globalScope )
@@ -770,20 +793,26 @@ void Expression::setByVal()
         cur->byVal = true;
 }
 
+static inline bool valIsLatin1Char( const QVariant& val)
+{
+    const QByteArray conv = QString::fromUtf8(val.toByteArray()).toLatin1();
+    return conv.size() == 1;
+}
+
 bool Expression::isCharLiteral()
 {
     if( type() == 0 )
         return false;
-    if( kind == Literal )
+    Type* t = type()->deref();
+    if( t && t->kind == Type::CHAR )
+        return true;
+    if( kind == Expression::Literal && t && t->kind == Type::StrLit )
+        return valIsLatin1Char(val);
+    if( kind == Expression::DeclRef && t && t->kind == Type::StrLit )
     {
-        Type* t = type()->deref();
-        if( t->kind == Type::CHAR )
-            return true;
-        if( t->kind == Type::StrLit )
-        {
-            const QByteArray str = val.toByteArray();
-            return strlen(str.constData()) == 1;
-        }
+        Declaration* d = val.value<Declaration*>();
+        if( d && d->kind == Declaration::ConstDecl && d->expr && d->expr->kind == Expression::Literal )
+            return valIsLatin1Char(d->expr->val);
     }
     return false;
 }

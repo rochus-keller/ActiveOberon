@@ -72,7 +72,7 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
 
     *ret = mdl->getType(Type::NoType);
 
-    // TODO: check arg types
+    // TODO: check arg types, not yet complete
     try
     {
     switch(builtin)
@@ -129,7 +129,14 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
     case Builtin::ORD:
         if( !expectingNArgs(args,1) )
             return false;
-        *ret = mdl->getType(Type::INTEGER);
+        else
+        {
+            *ret = mdl->getType(Type::INTEGER);
+            Type* t = deref(args.first()->type());
+            if( !args.first()->isCharLiteral() && t && t->kind != Type::BYTE )
+                return report("expecing a character or byte argument", args.first()->pos);
+            mdl->assureCharLit(args.first());
+        }
         break;
     case Builtin::ASSERT:
         if( !expectingNMArgs(args,1,2) )
@@ -178,8 +185,15 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
         expectingNArgs(args,1);
         break;
     case Builtin::CAP:
-        expectingNArgs(args,1);
-        *ret = mdl->getType(Type::CHAR);
+        if( !expectingNArgs(args,1) )
+            break;
+        else
+        {
+            *ret = mdl->getType(Type::CHAR);
+            if( !args.first()->isCharLiteral() )
+                return report("expecing a character argument", args.first()->pos);
+            mdl->assureCharLit(args.first());
+        }
         break;
     case Builtin::ASH:
         expectingNArgs(args,2);
