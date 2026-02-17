@@ -26,6 +26,8 @@
 using namespace Ao;
 using namespace Ast;
 
+// result can be simply built with `gcc *.c -lm -lgc -O2`
+
 static inline void dummy() {}
 
 CeeGen::CeeGen()
@@ -43,7 +45,7 @@ CeeGen::CeeGen()
 
 static inline QByteArray typePrefix(Type* t)
 {
-    // if( t == 0 ) // TEST
+    // if( t == 0 )
         return "";
     switch(t->kind)
     {
@@ -58,6 +60,44 @@ static inline QByteArray typePrefix(Type* t)
     return QByteArray();
 }
 
+static inline QByteArray typePrefix2(Type* t)
+{
+    if( t == 0 || t->kind != Type::Pointer )
+        return "";
+
+    t = t->type();
+    if( t ) t = t->deref();
+    switch(t->kind)
+    {
+    case Type::Record:
+    case Type::Object:
+        return "struct ";
+    case Type::Array:
+        if( t->expr != 0 )
+            return "struct ";
+        break;
+    }
+    return QByteArray();
+}
+
+static inline QByteArray typePrefix3(Type* t, bool isPtr)
+{
+    if( t == 0 || !isPtr )
+        return "";
+    switch(t->kind)
+    {
+    case Type::Record:
+    case Type::Object:
+        return "struct ";
+    case Type::Array:
+        if( t->expr != 0 )
+            return "struct ";
+        break;
+    }
+    return QByteArray();
+}
+
+
 enum ArrayKind {
     Invalid,
     NoArray,
@@ -65,15 +105,13 @@ enum ArrayKind {
     PointerToArray,   // MIC$DA, a pointer which points to an array (fixed or open)
     DerefedArray,     // MIC$DA, dereferenced pointer to array (fixed or open)
     ReferenceToArray, // MIC$AP, a VAR parameter of open or fixed array type
-    ArrayParameter,   // MIC$AP, a value parameter of open array type (needs a copy)
-    // TODO: the case where "the array" is dim m of an n-dim array with m < n is not yet properly covered. In C we just see a pointer
-    // to the (final) element type, but it is not a MIC$DA, and due to dim-1-open-only rule, we see a fixed size array
+    OpenArrayValue,   // MIC$AP, a value parameter of open array type (needs a copy)
 };
 
 static inline Type* deref(Type* t)
 {
     if( t )
-        return t->deref();
+        return t->deref(false);
     else
         return t;
 }
@@ -115,7 +153,10 @@ static ArrayKind deriveArrayKind(Expression* e)
                 else
                     return Invalid;
             case Declaration::ParamDecl:
-                return ArrayParameter; // value array parameter, can be fixed or open
+                if( t->expr == 0 )
+                    return OpenArrayValue; // value open array parameter
+                else
+                    return FixedSize;
             default:
                 return Invalid;
             }
@@ -554,8 +595,8 @@ void CeeGen::Module(Ast::Declaration *module) {
     //            by reference: MIC$AP dynamic=0 ReferenceToArray
     //            by value: MIC$AP dynamic=0     ArrayParameter
 
-    hout << "typedef struct MIC$AP { uint32_t $1; void* $; } MIC$AP;" << endl; // n-dim open array parameter (var or val) or fixed size var parameter
-    hout << "typedef struct MIC$DA { uint32_t $1; void* $[]; } MIC$DA;" << endl; // n-dim dynamic array, pointer points to $, not $1 (for compat with SYSTEM calls)
+    hout << "typedef struct MIC$AP { uint32_t $1; void* $; } MIC$AP;" << endl; // n-dim open array parameter (var or val) or fixed size var parameter; $1 is **the first dimension**
+    hout << "typedef struct MIC$DA { uint32_t $1; void* $[]; } MIC$DA;" << endl; // n-dim dynamic array, pointer points to $, not $1 (for compat with SYSTEM calls); $1 is **the first dimension**
     hout << "#endif" << endl;
 
     bout << "typedef struct $Class { struct $Class* super; } $Class;" << endl;
@@ -670,10 +711,13 @@ void CeeGen::ConstDecl(Ast::Declaration* d) {
 }
 
 void CeeGen::TypeDecl(Ast::Declaration* d) {
-    printHelper(d->helper);
+    if( d->type()->kind != Type::Pointer )
+        printHelper(d->helper);
     if( d->visi > Declaration::Private )
         hout << "/* public */ ";
     typeDecl(d);
+    if( d->type()->kind == Type::Pointer )
+        printHelper(d->helper);
     metaDecl(d);
     foreach( Declaration* p, d->type()->subs )
     {
@@ -760,6 +804,7 @@ void CeeGen::ProcDecl(Ast::Declaration * proc) {
         d = proc->link;
         while(d && d->kind == Declaration::ParamDecl )
             d = d->next;
+        // TODO: make a copy for OpenArrayValue
         curLevel++;
         DeclSeq(d, false, true);
         d = proc->link;
@@ -838,9 +883,15 @@ void CeeGen::assig(Ast::Statement* s) {
             bout << ", ";
             renderArrayPtr(rak, s->rhs, bout);
             bout << ",";
-            renderArrayLen(lak, s->lhs, bout);
+            renderArrayLen(lak, s->lhs, bout); // RISK: just use the size of the left side
+            // we assume the validator would have rejected invalid assignments
             bout << " * ";
             bout << "sizeof(" << typeRef(at.second) << ")";
+            for( int i = 1; i < at.first.size(); i++ )
+            {
+                bout << " * ";
+                Expr(at.first[i],bout);
+            }
             bout << ");";
         }
     }else
@@ -1311,11 +1362,11 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
 
         out << "(strcmp((const char*)";
         Expr(e->lhs, out);
-        if( lak == FixedSize || lak == ReferenceToArray || lak == ArrayParameter )
+        if( lak == FixedSize || lak == ReferenceToArray || lak == OpenArrayValue )
             out << ".$";
         out << ", (const char*)";
         Expr(e->rhs, out);
-        if( rak == FixedSize || rak == ReferenceToArray || rak == ArrayParameter )
+        if( rak == FixedSize || rak == ReferenceToArray || rak == OpenArrayValue )
             out << ".$";
         out << ")";
 
@@ -1511,7 +1562,7 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
         return true;
     }
     Type* t = deref(d->type());
-    bool depointer = d && d->isVarParam();
+    bool depointer = d && d->isVarParam() && t->kind != Type::Array; // don't deref if it is a MIC$AP value
     if( t && t->kind == Type::Array && t->expr == 0 )
         depointer = false;
     bool nonlocal = d->outer != curProc && ( d->kind == Declaration::LocalDecl || d->kind == Declaration::ParamDecl );
@@ -1568,7 +1619,7 @@ bool CeeGen::index(Ast::Expression *e, QTextStream &out)
     ArrayType art = arrayType(at);
 
     // this transpiler represents n-dim array of T as 1-dim array of T
-    if( lak == FixedSize || lak == ReferenceToArray || lak == ArrayParameter )
+    if( lak == FixedSize || lak == ReferenceToArray || lak == OpenArrayValue )
     {
         out << "((" << typeRef(art.second) << "*)";
         Expr(indices[0]->lhs, out);
@@ -1670,6 +1721,121 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
         if( i != 0 )
             out << ", ";
         Type* ft = deref( i < formals.size() ? formals[i]->type() : 0);
+        const bool varParam = i < formals.size() ? formals[i]->type()->kind == Type::Reference : false;
+        Type* at = deref(arg->type());
+        if( ft->kind == Type::Array )
+        {
+            // formal type is an Array, either by value or VAR param, either fixed or open
+            ArrayKind aak = deriveArrayKind(arg);
+            if( varParam && arg->varArrOfByte )
+            {
+                // formal uses MIC$AP, irregular actual
+                switch(aak)
+                {
+                case FixedSize:
+                case DerefedArray:
+                case ReferenceToArray:
+                case OpenArrayValue: {
+                    // reinterpret an incompatible array as an array of bytes
+                    ArrayType a = arrayType(at);
+                    out << "(MIC$AP){ sizeof(";
+                    out << typeRef(a.second);
+                    out << ") * ";
+                    renderArrayLen(aak, arg, out);
+                    for( int i = 1; i < a.first.size(); i++ )
+                    {
+                        out << " * ";
+                        Expr(a.first[i], out);
+                    }
+                    out << ",";
+                    renderArrayPtr(aak, arg, out);
+                    out << "}";
+                    } break;
+                case NoArray:
+                    // reinterpret any non-array value as array of bytes
+                    out << "(MIC$AP){ sizeof(";
+                    out << typeRef(at);
+                    out << "), &"; // non-array var params come derefed from Expr
+                    Expr(arg,out);
+                    out << "}";
+                    break;
+                default:
+                    Q_ASSERT(false);
+                    break;
+                }
+            }else if( varParam || ft->expr == 0 )
+            {
+                // formal uses MIC$AP, regular actual
+                if( at->kind == Type::StrLit )
+                {
+                    out << "(MIC$AP){strlen(";
+                    Expr(arg, out);
+                    out << ") + 1,";
+                    Expr(arg, out);
+                    out << "}";
+                }else
+                    switch(aak)
+                    {
+                    case FixedSize:
+                        out << "(MIC$AP){";
+                        Expr(at->expr, out);
+                        out << ", ";
+                        renderArrayPtr(aak, arg, out);
+                        out << "}";
+                        break;
+                    case DerefedArray:
+                        out << "(MIC$AP){";
+                        renderArrayLen(aak, arg, out);
+                        out << ",";
+                        renderArrayPtr(aak, arg, out);
+                        out << "}";
+                        break;
+                    case ReferenceToArray:
+                    case OpenArrayValue:
+                        Expr(arg, out); // just render the arg
+                        break;
+                    case NoArray:
+                    default:
+                        Q_ASSERT(false);
+                        break;
+                    }
+            }else
+            {
+                // formal uses struct { $[]; }
+                if( at->kind == Type::StrLit )
+                {
+                    out << "(" << typeRef(ft) << "){.$ = ";
+                    Expr(arg, out);
+                    out << "}";
+                }else
+                    switch(aak)
+                    {
+                    case FixedSize:
+                        Expr(arg, out); // just render the arg
+                        break;
+                    case DerefedArray:
+                    case ReferenceToArray:
+                        out << "*(" << typeRef(ft) << "*)";
+                        renderArrayPtr(aak, arg, out);
+                        break;
+                    case OpenArrayValue:
+                    default:
+                        Q_ASSERT(false);
+                        break;
+                    }
+            }
+        }else if( varParam )
+        {
+            // non-array VAR parameter
+            out << "&"; // Expr derefs var parameters for non-array arg
+            Expr(arg, out);
+        }else
+        {
+            // non-array value parameter
+            Expr(arg, out);
+        }
+#if 0
+        // obsolete, old approach, incomplete
         if( ft && ft->kind == Type::Array && ft->expr == 0 )
         {
             ArrayType formArr = arrayType(ft);
@@ -1678,8 +1844,6 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                 if( formArr.first[j] == 0 ) openDims++;
             if( openDims > 1 )
                 invalid("multi-dimensional open array argument not yet supported", arg->pos);
-            Type* at = deref(arg->type());
-            // TODO: the following has not yet been migrated to the new ArrayKind approach
             if( at && at->kind == Type::StrLit )
             {
                 if( arg->kind == Expression::Literal && arg->val.type() == QVariant::ByteArray
@@ -1769,6 +1933,7 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                 out << "(" << typeRef(ft) << ")";
             Expr(arg, out);
         }
+#endif
         i++;
         arg = arg->next;
     }
@@ -2281,7 +2446,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                     if( base->expr == 0 )
                     {
                         if( a.size() > 1 )
-                            Expr(a[1], out);
+                            Expr(a[1], out); // use the second argument of NEW as dynamic size
                         else
                             return invalid("calling NEW for an open array with no size parameter", a[0]->pos);
                     }else
@@ -2660,12 +2825,12 @@ void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
             // not VAR and not open:
             out << typeRef(param->type()) << " " << escape(param->name);
     }else
-        out << typeRef(param->type()) << " " << escape(param->name);
+        out << typePrefix2(param->type()) << typeRef(param->type()) << " " << escape(param->name);
 }
 
 void CeeGen::variable(QTextStream &out, Ast::Declaration *var)
 {
-    out << typeRef(var->type()) << " " << qualident(var);
+    out << typePrefix2(var->type()) << typeRef(var->type()) << " " << qualident(var);
 }
 
 void CeeGen::procHeader(Ast::Declaration *proc, bool header)
@@ -2700,7 +2865,7 @@ void CeeGen::procHeader(Ast::Declaration *proc, bool header)
             if( hasPars )
                 out << ", ";
             hasPars = true;
-            out << typeRef(ap.sourceDecl->type());
+            out << typePrefix3(ap.sourceDecl->type(),!ap.sourceDecl->isVarParam()) << typeRef(ap.sourceDecl->type());
             if( !ap.sourceDecl->isVarParam() )
                 out << "* "; // only make it a pointer if it is not already a reference
             out << escape(ap.name);
@@ -2731,7 +2896,7 @@ void CeeGen::renderArrayPtr(int ak, Expression* e, QTextStream &out )
         // NOTE: Expr(e) doesn't deref the pointer, so we still have a pointer here
         break;
     case ReferenceToArray:
-    case ArrayParameter:
+    case OpenArrayValue:
         out << ".$";
         break;
     default:
@@ -2742,6 +2907,7 @@ void CeeGen::renderArrayPtr(int ak, Expression* e, QTextStream &out )
 
 void CeeGen::renderArrayLen(int ak, Ast::Expression *e, QTextStream &out)
 {
+    // this is only the number of elements in the first array dimension!
     switch( ak )
     {
     case FixedSize:
@@ -2759,7 +2925,7 @@ void CeeGen::renderArrayLen(int ak, Ast::Expression *e, QTextStream &out)
         out << ")->$1";
         break;
     case ReferenceToArray:
-    case ArrayParameter:
+    case OpenArrayValue:
         Expr(e, out);
         out << ".$1";
         break;

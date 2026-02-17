@@ -71,7 +71,6 @@ namespace Ast
         uint nonlocal : 1; // namerefs, proc decls
 
         // Type:
-        uint deferred : 1;
         uint delegate : 1;
         uint allocated : 1;
         uint owned : 1;
@@ -92,6 +91,7 @@ namespace Ast
         // Expression:
         uint byVal : 1; // option for LocalVar, Param, ModuleVar, Select, Index
         uint needsLval : 1;
+        uint varArrOfByte : 1; // this is an argument to a VAR ARRAY OF BYTE with an incompatible type
 
         // 30 bits
 
@@ -105,7 +105,7 @@ namespace Ast
     #ifndef _DEBUG
             kind(0),
     #endif
-            validated(0),deferred(0),delegate(0),allocated(0),receiver(0),
+            validated(0),delegate(0),allocated(0),receiver(0),varArrOfByte(0),
             constructor(0),begin(0),ownstype(0),inList(0),hasErrors(0),hasSubs(0),imported(0),
             byVal(0),needsLval(0),nonlocal(0),_ty(0),owned(0),anonymous(0),forward(0), extern_(0),
             objectInit(0), pointerInit(0) {}
@@ -187,7 +187,7 @@ namespace Ast
 
         bool isDerefCharArray() const;
         bool isDerefByteArray() const;
-        Type* deref() const;
+        Type* deref(bool transparentReferences = true) const;
 
         Declaration* find(const QByteArray& name, bool recursive = true) const;
         QList<Declaration*> fieldList() const;

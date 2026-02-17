@@ -398,9 +398,9 @@ bool Type::isDerefByteArray() const
     return false;
 }
 
-Type*Type::deref() const
+Type*Type::deref(bool transparentReferences) const
 {
-    if( kind == NameRef || kind == Reference )
+    if( kind == NameRef || (transparentReferences && kind == Reference) )
     {
         if( type() == 0 )
             return const_cast<Type*>(this);

@@ -572,7 +572,7 @@ void Validator2::assig(Ast::Statement* s) {
 
     if( !assigCompat(s->lhs->type(), s->rhs) )
     {
-        // assigCompat(s->lhs->type(), s->rhs); // sTEST
+        assigCompat(s->lhs->type(), s->rhs); // TEST
         error(s->pos, "rhs is not assignment compatible with lhs");
     }
 }
@@ -940,10 +940,15 @@ bool Validator2::relation(Ast::Expression *e)
         }else if( lhsT->kind == Type::Pointer )
         {
             lhsT = deref(lhsT->type());
+            if( rhsT->kind == Type::Pointer )
+                rhsT = deref(rhsT->type());
             if( lhsT->kind != Type::Record )
                 error(e->pos, "IS can only be applied to RECORD or OBJECT types");
             else if( !assigCompat(lhsT, rhsT) )
+            {
+                assigCompat(lhsT, rhsT); // TEST
                 error(e->pos, "RECORD operands not related, so IS cannot be applied");
+            }
         }else if( lhsT->kind == Type::Record )
         {
             if( !assigCompat(lhsT, rhsT) )
@@ -1565,7 +1570,9 @@ bool Validator2::assigCompat(Ast::Type *lhs, Ast::Type *rhs)
          lhs->kind == Type::PTR || lhs->kind == Type::Procedure)
             && rhs->kind == Type::NIL )
         return true;
-    return true;
+    if( lhs->kind == Type::PTR && rhs->kind == Type::Pointer )
+        return true; // happens in Oberon Systen 2.3.7
+    return false;
 }
 
 bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
@@ -1584,7 +1591,7 @@ bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
     if( lhsT->kind == Type::Array && lhsT->expr != 0 && deref(lhsT->type())->kind == Type::CHAR && rhsT->kind == Type::StrLit )
         return true; // TODO: check m < n for ARRAY n OF CHAR and string constant with m characters
 
-    if( lhsT->kind == Type::CHAR && rhsT->kind == Type::StrLit )
+    if( (lhsT->kind == Type::CHAR || lhsT->kind == Type::BYTE) && rhsT->kind == Type::StrLit )
     {
         if( !isConstChar(rhs) )
             return false;
@@ -1613,7 +1620,44 @@ bool Validator2::paramCompat(Ast::Type *lhs, Ast::Expression *rhs)
 {
     if( arrayCompat(lhs, rhs->type()))
         return true;
-    return assigCompat(lhs, rhs);
+    const bool res = assigCompat(lhs, rhs);
+    if( !res )
+    {
+        Type* tf = deref(lhs);
+        Type* ta = deref(rhs->type());
+        if( tf->kind == Type::Array && tf->expr == 0 && deref(tf->type())->kind == Type::BYTE && lhs->kind == Type::Reference )
+        {
+            // this is the Oberon VAR ARRAY OF SYSTEM.BYTE trick.
+            rhs->varArrOfByte = true;
+            return true;
+        }
+        if( tf->kind == Type::CHAR && rhs->kind == Expression::Literal )
+        {
+            if( ta->isInteger() && rhs->val.toLongLong() >= 0 && rhs->val.toLongLong() <= 255 )
+            {
+                rhs->setType(tf);
+                return true; // illegal shortcut used in OPL.Mod
+            }
+        }
+        if( tf->kind == Type::CHAR && rhs->kind == Expression::DeclRef )
+        {
+            Declaration* d = rhs->val.value<Declaration*>();
+            if( ta->isInteger() && d->kind == Declaration::ConstDecl && d->expr && d->expr->kind == Expression::Literal &&
+                    d->expr->val.toLongLong() >= 0 && d->expr->val.toLongLong() <= 255  )
+            {
+                rhs->setType(tf);
+                return true; // illegal shortcut used in OPL.Mod
+            }
+        }
+        if( lhs->kind == Type::Reference  && tf->kind == Type::Array && deref(tf->type())->kind == Type::CHAR && tf->expr == 0 )
+        {
+            Type* taa = deref(ta->type());
+            Type* taaa = deref(taa->type());
+            if( ta->kind == Type::Pointer && taa->kind == Type::Array && taaa->kind == Type::CHAR || ta->kind == Type::NIL )
+                return true; // happens in OFSFATVolumes v2.3.7
+        }
+    }
+    return res;
 }
 
 bool Validator2::arrayCompat(Ast::Type *lhs, Ast::Type *rhs)
