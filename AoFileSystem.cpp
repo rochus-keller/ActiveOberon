@@ -319,7 +319,10 @@ FileSystem::Dir*FileSystem::getDir(const QString& relPath)
 void FileSystem::Dir::clear()
 {
     for( int i = 0; i < d_subdirs.size(); i++ )
+    {
         d_subdirs[i]->clear();
+        delete d_subdirs[i];
+    }
     d_subdirs.clear();
     for( int i = 0; i < d_files.size(); i++ )
         delete d_files[i];

@@ -168,7 +168,7 @@ namespace Ast
 
         // see Node Type* type; // array/pointer base type, return type
         QList<Declaration*> subs; // list of record fields or enum elements, or params for proc type
-        Declaration* decl; // if NameRef includes pos and name
+        Declaration* decl; // Helpers if anonymous, not owned; Module if NameRef, not owned
         Expression* expr; // array len
 
         bool isNumber() const { return kind >= SHORTINT && kind <= LONGREAL; }

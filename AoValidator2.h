@@ -98,6 +98,7 @@ namespace Ao {
         bool paramCompat(Ast::Type* lhs, Ast::Expression* rhs);
         bool arrayCompat(Ast::Type* lhs, Ast::Type* rhs);
         bool isPtrOrVarWithRecordObject(Ast::Expression* e);
+        bool checkCircularBaseTypes(Ast::Type*, QList<Ast::Type*>& seen);
 
 	protected:
         void invalid(const char* what, const RowCol&);

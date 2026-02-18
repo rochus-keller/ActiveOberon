@@ -254,10 +254,11 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
 
     case Builtin::SYSTEM_ADR:
         expectingNArgs(args,1);
-        //*ret = mdl->getType(Type::PTR);
-        *ret = mdl->getType(Type::LONGINT);
-        // TODO: should be PTR, but there is a lot of code storing the result of ADR in LONGINT vars
+        *ret = mdl->getType(Type::PTR);
+        //*ret = mdl->getType(Type::LONGINT);
+        // NOTE: there is a lot of code storing the result of ADR in LONGINT vars
         // and doing arithmetic operations assuming LONGINT
+        // TODO: when returning PTR, most Oberon System 3 produce validator errors, but the test code works on x64, and vice versa!
         break;
     case Builtin::SYSTEM_BIT:
         expectingNArgs(args,2);
@@ -334,6 +335,10 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
             throw "first argument must be a pointer";
         break;
 
+    case Builtin::SYSTEM_DISABLEINTERRUPTS:
+        *ret = mdl->getType(Type::LONGINT);
+        break;
+
         // system procs
     case Builtin::SYSTEM_PORTOUT:
     case Builtin::SYSTEM_PORTIN:
@@ -342,7 +347,6 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
     case Builtin::SYSTEM_GETREG:
     case Builtin::SYSTEM_PUTREG:
     case Builtin::SYSTEM_ENABLEINTERRUPTS:
-    case Builtin::SYSTEM_DISABLEINTERRUPTS:
     case Builtin::SYSTEM_RESTOREINTERRUPTS:
         break;
     default:

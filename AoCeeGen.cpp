@@ -196,7 +196,7 @@ static inline QByteArray basicType(Type* t)
     case Type::INTEGER:
         return "short";
     case Type::LONGINT:
-        return "long"; // using long so it is 32 or 64 bits like the target system, useful for e.g. SYSTEM.GET)
+        return "int";
     case Type::SET:
         return "int";
     case Type::HUGEINT:
@@ -249,8 +249,14 @@ QByteArray CeeGen::qualident(Ast::Type *t)
         // TODO: fails for namerefs to builtin types
         Quali* q = t->quali;
         if( q->first.isEmpty() )
-            res = curMod->name;
-        else
+        {
+            if( t->decl )
+            {
+                Q_ASSERT(t->decl->kind == Declaration::Module);
+                res = t->decl->name;
+            }else
+                res = curMod->name;
+        }else
             res = q->first;
         res += "$" + q->second;
     }else
@@ -773,7 +779,7 @@ void CeeGen::ProcDecl(Ast::Declaration * proc) {
     Ast::Declaration* d = proc->link;
     while(d && d->kind == Declaration::ParamDecl )
         d = d->next;
-    DeclSeq(d, true, false);
+    DeclSeq(d, true, false); // make sure nested procedures are declared before the procedure using them
 
     Q_ASSERT(curPlan == 0);
     curPlan = cl.plan(proc);
@@ -781,8 +787,12 @@ void CeeGen::ProcDecl(Ast::Declaration * proc) {
     Q_ASSERT(curProc == 0);
     curProc = proc;
 
-    procHeader(proc, true);
-    hout << ";" << endl;
+    if( proc->outer && proc->outer->kind == Declaration::Module )
+    {
+        // no header file declarations for nested procedures
+        procHeader(proc, true);
+        hout << ";" << endl;
+    }
 
     if( !proc->extern_ )
     {
@@ -2498,13 +2508,21 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
         Expr(a[0], out);
         out << ")";
         return true;
-    case Builtin::SYSTEM_VAL:
+    case Builtin::SYSTEM_VAL: {
         if( a.size() != 2 )
             return false;
-        out << "((" << typeRef(a[0]->type()) << ")(";
-        Expr(a[1], out);
-        out << "))";
+        const QByteArray from = typeRef(a[1]->type());
+        const QByteArray to = typeRef(a[0]->type());
+        if( from == to )
+            Expr(a[1], out);
+        else
+        {
+            out << "((" << to << ")(";
+            Expr(a[1], out);
+            out << "))";
+        }
         return true;
+    }
     case Builtin::SYSTEM_BIT:
         if( a.size() != 2 )
             return false;
@@ -2728,12 +2746,6 @@ QByteArray CeeGen::typeRef(Type* orig)
     if( orig == 0 || orig->kind == Type::NoType )
         return "void";
     const bool isVarParam = orig->kind == Type::Reference;
-    Type* nameRef = isVarParam ? orig->type()  : orig;
-    Quali* q = 0;
-    if( nameRef->kind != Type::NameRef )
-        nameRef = 0;
-    else
-        q = nameRef->quali;
 
     QByteArray res;
     Type* t = deref(orig);

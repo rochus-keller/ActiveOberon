@@ -348,6 +348,9 @@ bool Validator2::RecordType(Ast::Type* t) {
             if( base->kind != Type::Record )
                 error(t->pos, "invalid base record type");
         }
+        QList<Type*> seen;
+        if( !checkCircularBaseTypes(base, seen) )
+            error(t->pos, "circular base type detected");
     }
     return FieldList(t);
 }
@@ -396,6 +399,9 @@ bool Validator2::ObjectType(Ast::Type* t) {
                 */
         }else if( base->kind != Type::Object )
             error(t->pos, "invalid base object type");
+        QList<Type*> seen;
+        if( !checkCircularBaseTypes(base, seen) )
+            error(t->pos, "circular base type detected");
     }
 
     QList<Ast::Declaration*> boundProcs;
@@ -572,7 +578,7 @@ void Validator2::assig(Ast::Statement* s) {
 
     if( !assigCompat(s->lhs->type(), s->rhs) )
     {
-        assigCompat(s->lhs->type(), s->rhs); // TEST
+        //assigCompat(s->lhs->type(), s->rhs); // TEST
         error(s->pos, "rhs is not assignment compatible with lhs");
     }
 }
@@ -703,6 +709,20 @@ bool Validator2::isPtrOrVarWithRecordObject(Expression* e)
     }else if( t->kind == Type::Record )
         return d->isVarParam();
     return false;
+}
+
+bool Validator2::checkCircularBaseTypes(Ast::Type * t, QList<Ast::Type *> &seen)
+{
+#if 1
+    while( t && t->kind != Type::NoType )
+    {
+        seen << t;
+        t = deref(t->type());
+        if( seen.contains(t) )
+            return false;
+    }
+#endif
+    return true;
 }
 
 Ast::Statement *Validator2::WithStat(Ast::Statement *s) {
@@ -1712,13 +1732,17 @@ bool Validator2::lhsIsBaseOfRhs(Ast::Type *lhs, Ast::Type *rhs)
     if( lhs->kind != Type::Object && lhs->kind != Type::Record )
         return false;
     rhs = deref(rhs);
+    QList<Type*> seen;
     while( rhs->kind != Type::NoType )
     {
+        seen << rhs;
         if( rhs->kind == Type::Pointer )
             rhs = deref(rhs->type());
         if( rhs == lhs )
             return true;
         rhs = deref(rhs->type());
+        if( seen.contains(rhs) )
+            return error(rhs->pos, "circular depenceny in base type hierarchy");
     }
     return false;
 }

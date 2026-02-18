@@ -552,7 +552,7 @@ Declaration::~Declaration()
     if( kind == ConstDecl && expr )
         delete expr;
     else if( helper )
-        delete helper;
+        Declaration::deleteAll(helper);
 }
 
 QList<Declaration*> Declaration::getParams(bool skipReceiver) const

@@ -1666,6 +1666,7 @@ void Parser2::deanonymizeType(Ast::Declaration * d, Ast::Type * t)
         helper->pos = t->pos;
         helper->setType(t);
         helper->outer = thisMod;
+        Q_ASSERT(t->kind != Type::NameRef);
         t->decl = helper;
         Declaration* tmp = d->helper;
         d->helper = helper;
@@ -1806,6 +1807,7 @@ Ast::Type* Parser2::NamedType() {
     res->quali = new Quali();
     *res->quali = q;
     res->pos = t.toRowCol();
+    res->decl = thisMod;
     return res;
 }
 
