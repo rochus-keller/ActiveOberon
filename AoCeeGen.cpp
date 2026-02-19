@@ -222,7 +222,7 @@ QByteArray CeeGen::qualident(Declaration* d)
     else
     {
         const bool nonlocal = d->outer != curProc && ( d->kind == Declaration::LocalDecl || d->kind == Declaration::ParamDecl );
-        if(nonlocal)
+        if(nonlocal) // TODO handle nonlocal properly
         {
             QByteArray res = "(*";
             res += escape(d->name);
@@ -1572,6 +1572,7 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
         return true;
     }
     Type* t = deref(d->type());
+#if 0
     bool depointer = d && d->isVarParam() && t->kind != Type::Array; // don't deref if it is a MIC$AP value
     if( t && t->kind == Type::Array && t->expr == 0 )
         depointer = false;
@@ -1583,6 +1584,16 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
     out << qualident(d);
     if( depointer )
         out << ")";
+#else
+    const bool needsDeref = d && d->isVarParam() &&
+                      t->kind != Type::Array &&
+                      !(t && t->kind == Type::Array && t->expr == 0) &&
+                      (d->outer == curProc || (d->kind != Declaration::LocalDecl && d->kind != Declaration::ParamDecl));
+    if( needsDeref )
+        out << "(*" << qualident(d) << ")";
+    else
+        out << qualident(d);
+#endif
 #if 0
     if( t && t->kind == Type::Array && t->expr == 0 )
         out << "$";
@@ -1735,8 +1746,27 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
         Type* at = deref(arg->type());
         if( ft->kind == Type::Array )
         {
-            // formal type is an Array, either by value or VAR param, either fixed or open
             ArrayKind aak = deriveArrayKind(arg);
+            if( arg->kind == Expression::DeclRef && arg->val.value<Declaration*>()->outer != curProc )
+            {
+                // the argument references a non-local variable or constant; this is not a genaral work-around, but good enough for OP2
+
+                // seen in OP2: NoArray, FixedSize, ReferenceToArray
+                if( arg->type()->kind == Type::Reference )
+                    ; // don't care, the Expr machinery dereferences it
+                if(at->kind == Type::StrLit)
+                    ; // don't care, just a constant from outer scope
+                else if( at->kind == Type::Array )
+                {
+                    if( at->expr == 0 )
+                        invalid("non-local open arrays cannot be properly represented by this transpiler", arg->pos);
+                    else
+                        aak = FixedSize;
+                }else
+                    ; // don't care, not an array
+            }
+
+            // formal type is an Array, either by value or VAR param, either fixed or open
             if( varParam && arg->varArrOfByte )
             {
                 // formal uses MIC$AP, irregular actual
@@ -1844,106 +1874,6 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
             // non-array value parameter
             Expr(arg, out);
         }
-#if 0
-        // obsolete, old approach, incomplete
-        if( ft && ft->kind == Type::Array && ft->expr == 0 )
-        {
-            ArrayType formArr = arrayType(ft);
-            int openDims = 0;
-            for( int j = 0; j < formArr.first.size(); j++ )
-                if( formArr.first[j] == 0 ) openDims++;
-            if( openDims > 1 )
-                invalid("multi-dimensional open array argument not yet supported", arg->pos);
-            if( at && at->kind == Type::StrLit )
-            {
-                if( arg->kind == Expression::Literal && arg->val.type() == QVariant::ByteArray
-                        && arg->val.toByteArray().size() == 1 )
-                {
-                    QByteArray str = arg->val.toByteArray();
-                    out << "(MIC$AP){2, (void*)\"";
-                    char c = str[0];
-                    if( c == '"' ) out << "\\\"";
-                    else if( c == '\\' ) out << "\\\\";
-                    else out << c;
-                    out << "\"}";
-                }else
-                {
-                    out << "(MIC$AP){strlen(";
-                    Expr(arg, out);
-                    out << ") + 1, (void*)";
-                    Expr(arg, out);
-                    out << "}";
-                }
-            }else if( at && at->kind == Type::Array && at->expr != 0 )
-            {
-                bool viaPtrDeref = false;
-                if( arg->kind == Expression::Deref )
-                {
-                    Type* inner = deref(arg->lhs->type());
-                    if( inner && inner->kind == Type::Pointer &&
-                            deref(inner->type()) && deref(inner->type())->kind == Type::Array )
-                        viaPtrDeref = true;
-                }
-                out << "(MIC$AP){";
-                Expr(at->expr, out);
-                out << ", (void*)";
-                Expr(arg, out);
-                if( at->isSOA() && !viaPtrDeref )
-                    out << ".$";
-                out << "}";
-            }else if( at && at->kind == Type::Array && at->expr == 0 )
-            {
-                Expr(arg, out);
-            }else if( at && at->kind == Type::Pointer )
-            {
-                Type* base = deref(at->type());
-                if( base && base->kind == Type::Array && base->expr == 0 )
-                {
-                    out << "(MIC$AP){$toda((void**)";
-                    Expr(arg, out);
-                    out << ")->$1, (void*)";
-                    Expr(arg, out);
-                    out << "}";
-                }else
-                    Expr(arg, out);
-            }else if( at && at->kind == Type::Reference )
-            {
-                Expr(arg, out);
-            }else
-            {
-                out << "(MIC$AP){sizeof(";
-                Expr(arg, out);
-                out << "), (void*)&(";
-                Expr(arg, out);
-                out << ")}";
-            }
-        }else if( i < formals.size() && formals[i]->isVarParam() )
-        {
-            Type* actT = deref(arg->type());
-            if( actT && actT->kind == Type::Array && actT->expr == 0 )
-                Expr(arg, out);
-            else
-            {
-                Expression* actualArg = arg;
-                bool needPtrCast = false;
-                if( actualArg->kind == Expression::Cast )
-                {
-                    actualArg = actualArg->lhs;
-                    needPtrCast = true;
-                }
-                if( needPtrCast )
-                    out << "(" << typeRef(formals[i]->type()) << "*)";
-                out << "&";
-                Expr(actualArg, out);
-            }
-        }else
-        {
-            Type* actT = deref(arg->type());
-            if( ft && actT && ft->kind == Type::Pointer && actT->kind == Type::Pointer && ft != actT )
-                out << "(" << typeRef(ft) << ")";
-            Expr(arg, out);
-        }
-#endif
         i++;
         arg = arg->next;
     }
@@ -1959,13 +1889,28 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                 i++;
                 if( p.sourceDecl->outer == curProc )
                 {
-                    if( p.sourceDecl->isVarParam() )
-                        bout << escape(p.sourceDecl->name);
-                    else
+                    // pass a local object to the present lifted argument
+                    if( p.sourceDecl->kind == Declaration::ParamDecl )
+                    {
+                        // if it's a parameter, it might be a special case
+                        Type* t = deref(p.sourceDecl->type());
+                        if( t->kind == Type::Array && (t->expr == 0 || p.sourceDecl->isVarParam()) )
+                        {
+                            // open arrays or fixed VAR array params need special treatment
+                            ArrayType at = arrayType(t);
+                            // convert the MIC$AP back to pointer to element type
+                            bout << "(" << typeRef(at.second) << "*)" << escape(p.sourceDecl->name) << ".$";
+                        }else if( p.sourceDecl->isVarParam() )
+                            bout << escape(p.sourceDecl->name);
+                        else
+                            bout << "&" << escape(p.sourceDecl->name);
+                    }else
+                        // this is unproblematic, just take the address
                         bout << "&" << escape(p.sourceDecl->name);
                 }
                 else
                 {
+                    // just pass through a lifted argument to the present lifted argument
                     Q_ASSERT(curPlan);
                     const ClosureLifter::LiftParam* pp = curPlan->findFromSourceDecl(p.sourceDecl);
                     Q_ASSERT(pp);
@@ -2289,12 +2234,17 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             {
                 switch( t->kind )
                 {
-                case Type::LONGINT: out << "(long long)("; break;
-                case Type::INTEGER: out << "(long)("; break;
+                case Type::LONGINT:
+                    out << "(long long)("; break;
+                case Type::INTEGER:
+                    out << "(long)("; break;
                 case Type::SHORTINT:
-                case Type::CHAR: out << "(short)("; break;
-                case Type::REAL: out << "(double)("; break;
-                default: out << "("; break;
+                case Type::CHAR:
+                    out << "(short)("; break;
+                case Type::REAL:
+                    out << "(double)("; break;
+                default:
+                    out << "("; break;
                 }
             }else
                 out << "(";
@@ -2511,11 +2461,17 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
     case Builtin::SYSTEM_VAL: {
         if( a.size() != 2 )
             return false;
-        const QByteArray from = typeRef(a[1]->type());
-        const QByteArray to = typeRef(a[0]->type());
+        Type* fromT = deref(a[1]->type());
+        Type* toT = deref(a[0]->type());
+        const QByteArray from = typeRef(fromT);
+        const QByteArray to = typeRef(toT);
         if( from == to )
             Expr(a[1], out);
-        else
+        else if( toT->kind == Type::LONGINT && fromT->kind == Type::Pointer )
+        {
+            out << "(void*)";
+            Expr(a[1], out);
+        }else
         {
             out << "((" << to << ")(";
             Expr(a[1], out);
@@ -2649,11 +2605,11 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
     case Builtin::SYSTEM_MOVE:
         if( a.size() != 3 )
             return false;
-        out << "memcpy((void*)(";
+        out << "memcpy(";
         Expr(a[1], out);
-        out << "), (void*)(";
+        out << ", ";
         Expr(a[0], out);
-        out << "), ";
+        out << ", ";
         Expr(a[2], out);
         out << ")";
         return true;
@@ -2825,19 +2781,50 @@ void CeeGen::printHelper(Ast::Declaration * d)
 
 void CeeGen::parameter(QTextStream &out, Ast::Declaration *param)
 {
-    Type* t = deref(param->type());
-    if( t && t->kind == Type::Array )
+    Type* orig = param->type();
+    parameter(out, orig, param->name, param->pos);
+}
+
+void CeeGen::parameter(QTextStream &out, Ast::Type *orig, const QByteArray &name, const RowCol& pos)
+{
+    Type* t = deref(orig);
+    if( orig == 0 )
+        out << "? " << escape(name);
+    else if( t && t->kind == Type::Array )
     {
         // VAR open or fixed array, value open or fixed array
-        checkOpenArray(t, param->pos);
-        if( param->isVarParam() || t->expr == 0 )
+        checkOpenArray(t, pos);
+        if( orig->kind == Type::Reference || t->expr == 0 )
             // VAR (fixed or open) or open
-            out << "MIC$AP " << escape(param->name);
+            out << "MIC$AP " << escape(name);
         else
             // not VAR and not open:
-            out << typeRef(param->type()) << " " << escape(param->name);
+            out << typeRef(orig) << " " << escape(name);
     }else
-        out << typePrefix2(param->type()) << typeRef(param->type()) << " " << escape(param->name);
+        out << typePrefix2(orig) << typeRef(orig) << " " << escape(name);
+}
+
+void CeeGen::liftedParam(QTextStream &out, Ast::Declaration *what, const QByteArray& name)
+{
+#if 1 // TODO
+    out << typePrefix3(what->type(),!what->isVarParam()) << typeRef(what->type());
+    if( !what->isVarParam() )
+        out << "* "; // only make it a pointer if it is not already a reference
+    out << escape(name);
+#else
+    // NOTE: this is actually the correct approach, but designators could no longer just be *derefed
+    if( what->isVarParam() )
+        parameter(out, what->type(), name, what->pos);
+    else
+    {
+        Type ref;
+        ref.kind = Type::Reference;
+        ref.pos = what->pos;
+        ref.setType(what->type()); // simulate a var parameter if not already the case
+        parameter(out, &ref, name, what->pos);
+        ref.setType(0);
+    }
+#endif
 }
 
 void CeeGen::variable(QTextStream &out, Ast::Declaration *var)
@@ -2877,10 +2864,7 @@ void CeeGen::procHeader(Ast::Declaration *proc, bool header)
             if( hasPars )
                 out << ", ";
             hasPars = true;
-            out << typePrefix3(ap.sourceDecl->type(),!ap.sourceDecl->isVarParam()) << typeRef(ap.sourceDecl->type());
-            if( !ap.sourceDecl->isVarParam() )
-                out << "* "; // only make it a pointer if it is not already a reference
-            out << escape(ap.name);
+            liftedParam(out, ap.sourceDecl, ap.name);
         }
     }
     out << ")";

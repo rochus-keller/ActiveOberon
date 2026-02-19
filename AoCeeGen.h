@@ -105,6 +105,8 @@ protected:
         return QByteArray(level*4,' ');
     }
     void parameter(QTextStream& out, Ast::Declaration* param);
+    void parameter(QTextStream& out, Ast::Type* orig, const QByteArray& name, const RowCol &pos);
+    void liftedParam(QTextStream& out, Ast::Declaration* what, const QByteArray &name);
     void variable(QTextStream& out, Ast::Declaration* var);
     void procHeader(Ast::Declaration* proc, bool header);
     QByteArray escape(const QByteArray&);
