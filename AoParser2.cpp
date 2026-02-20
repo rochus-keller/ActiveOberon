@@ -1832,34 +1832,49 @@ Parser2::ID Parser2::IdentDef() {
     return res;
 }
 
-Type* Parser2::smallestIntType(quint64 i)
+Type* Parser2::smallestIntType(quint64 u, bool isHex)
 {
-    if( i <= std::numeric_limits<qint8>::max() )
-        return mdl->getType(Type::SHORTINT);
-    else if( i <= std::numeric_limits<qint16>::max() )
-        return mdl->getType(Type::INTEGER);
-    else if( i <= std::numeric_limits<qint32>::max() )
-        return mdl->getType(Type::LONGINT);
-    else
-        return mdl->getType(Type::HUGEINT);
+    if( isHex )
+    {
+        if( u <= std::numeric_limits<quint8>::max() )
+            return mdl->getType(Type::SHORTINT);
+        else if( u <= std::numeric_limits<quint16>::max() )
+            return mdl->getType(Type::INTEGER);
+        else if( u <= std::numeric_limits<quint32>::max() )
+            return mdl->getType(Type::LONGINT);
+        else
+            return mdl->getType(Type::HUGEINT);
+    }else
+    {
+        if( u <= std::numeric_limits<qint8>::max() )
+            return mdl->getType(Type::SHORTINT);
+        else if( u <= std::numeric_limits<qint16>::max() )
+            return mdl->getType(Type::INTEGER);
+        else if( u <= std::numeric_limits<qint32>::max() )
+            return mdl->getType(Type::LONGINT);
+        else
+            return mdl->getType(Type::HUGEINT);
+    }
 }
 
 Expression* Parser2::number() {
     Expression* res = Expression::createFromToken(la.d_type,la.toRowCol());
     if( la.d_type == Tok_integer ) {
 		expect(Tok_integer, false, "number");
-        quint64 i = 0;
+        quint64 u = 0;
+        bool isHex = false;
         if( cur.d_val.endsWith('h') || cur.d_val.endsWith('H') )
         {
             QByteArray hex = cur.d_val.left(cur.d_val.size()-1);
             bool ok;
-            i = hex.toULongLong(&ok, 16);
+            u = hex.toULongLong(&ok, 16);
             if( !ok )
                 error(cur.toRowCol(), "invalid hex number");
+            isHex = true;
         }else
-            i = cur.d_val.toULongLong();
-        res->setType(smallestIntType(i));
-        res->val = i;
+            u = cur.d_val.toULongLong();
+        res->setType(smallestIntType(u, isHex));
+        res->val = u;
 	} else if( la.d_type == Tok_real ) {
 		expect(Tok_real, false, "number");
         res->setType(0);

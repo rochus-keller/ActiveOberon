@@ -67,27 +67,27 @@ protected:
     void ReturnStat(Ast::Statement *s);
     Ast::Statement *Statement(Ast::Statement *s);
     bool ConstExpr(Ast::Expression *e, QTextStream& out);
-    bool Expr(Ast::Expression *e, QTextStream& out);
+    bool Expr(Ast::Expression *e, QTextStream& out, bool isConst = false);
 
 protected:
-    bool relation(Ast::Expression *e, QTextStream& out);
-    bool inOp(Ast::Expression *e, QTextStream &out);
+    bool relation(Ast::Expression *e, QTextStream& out, bool isConst);
+    bool inOp(Ast::Expression *e, QTextStream &out, bool isConst);
     bool isOp(Ast::Expression *e, QTextStream &out);
-    bool unaryOp(Ast::Expression *e, QTextStream& out);
-    bool arithOp(Ast::Expression *e, QTextStream& out);
+    bool unaryOp(Ast::Expression *e, QTextStream& out, bool isConst);
+    bool arithOp(Ast::Expression *e, QTextStream& out, bool isConst);
     bool logicOp(Ast::Expression *e, QTextStream& out);
-    bool declRef(Ast::Expression *e, QTextStream& out);
+    bool declRef(Ast::Expression *e, QTextStream& out, bool isConst);
     bool select(Ast::Expression *e, QTextStream& out);
     bool index(Ast::Expression *e, QTextStream& out);
     bool depointer(Ast::Expression *e, QTextStream& out);
-    bool cast(Ast::Expression *e, QTextStream& out);
-    bool call(Ast::Expression *e, QTextStream& out);
+    bool cast(Ast::Expression *e, QTextStream& out, bool isConst);
+    bool call(Ast::Expression *e, QTextStream& out, bool isConst = false);
     bool literal(Ast::Expression *e, QTextStream& out);
-    bool constructor(Ast::Expression *e, QTextStream& out);
+    bool constructor(Ast::Expression *e, QTextStream& out, bool isConst);
     void assig(Ast::Statement* s);
-    void call(Ast::Statement* s);
+    void call(Ast::Statement* s, bool isConst = false);
     void metaDecl(Ast::Declaration *d);
-    bool builtin(int bi, Ast::Expression * args, QTextStream &out);
+    bool builtin(int bi, Ast::Expression * args, QTextStream &out, bool isConst);
 
 
 protected:
@@ -107,7 +107,7 @@ protected:
     void parameter(QTextStream& out, Ast::Declaration* param);
     void parameter(QTextStream& out, Ast::Type* orig, const QByteArray& name, const RowCol &pos);
     void liftedParam(QTextStream& out, Ast::Declaration* what, const QByteArray &name);
-    void variable(QTextStream& out, Ast::Declaration* var);
+    void variable(QTextStream& out, Ast::Declaration* var, bool body);
     void procHeader(Ast::Declaration* proc, bool header);
     QByteArray escape(const QByteArray&);
     QByteArray qualident(Ast::Declaration* d);

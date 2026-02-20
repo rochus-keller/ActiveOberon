@@ -97,6 +97,30 @@ static inline QByteArray typePrefix3(Type* t, bool isPtr)
     return QByteArray();
 }
 
+static void renderIntLit(Type* t, const QVariant& val, QTextStream &out)
+{
+    if (t->kind == Type::HUGEINT) {
+        quint64 u = val.toULongLong();
+        if (u > 9223372036854775807ULL) {
+            out << "((long long)" << u << "ULL)";
+        } else {
+            out << u << "LL";
+        }
+    } else if (t->kind == Type::LONGINT) {
+        quint64 u = (quint32)val.toULongLong();
+        if (u > 2147483647ULL) {
+            out << "((int)" << u << "U)";
+        } else {
+            out << u;
+        }
+    } else {
+        // SHORTINT and INTEGER fit into C's signed 'int'.
+        // If they are part of a negative declaration (like MinSInt = -80H),
+        // the AST provides a UnaryMinus node that correctly negates them.
+        out << val.toLongLong();
+    }
+}
+
 
 enum ArrayKind {
     Invalid,
@@ -326,6 +350,7 @@ bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *bo
     if( generateMain )
     {
         bout << "int main(int argc, char* argv[]) {" << endl;
+        bout << "    setvbuf(stdout, NULL, _IONBF, 0);" << endl;
         bout << "    GC_INIT();" << endl;
         bout << "    " << module->name << "$init$();" << endl;
         bout << "    return 0;" << endl;
@@ -429,12 +454,12 @@ void CeeGen::typeDecl(Ast::Declaration *d)
                 ArrayType at = arrayType(t);
                 hout << "typedef ";
                 hout << "struct " << qualident(d) << " { " << typeRef(at.second) << " $[";
-                Expr(t->expr, hout);
+                ConstExpr(t->expr, hout);
                 for( int i = 1; i < at.first.size(); i++ )
                 {
                     t = deref(t->type());
                     hout << " * ";
-                    Expr(t->expr, hout);
+                    ConstExpr(t->expr, hout);
                 }
                 hout << "];" << " }";
                 // for fixlen arrays whose fields or elements need object initialization, create an initializer
@@ -589,8 +614,13 @@ void CeeGen::Module(Ast::Declaration *module) {
 
     hout << endl;
 
-    hout << "#define ASH(x, n) (((n) >= 0) ? ((x) << ((n) >= 0 ? (n) : 0)) : ((x) >> ((n) < 0  ? -(n) : 0)))" << endl;
+    hout << "#define ASH$(x, n) (((n) >= 0) ? ((x) << ((n) >= 0 ? (n) : 0)) : ((x) >> ((n) < 0  ? -(n) : 0)))" << endl;
+    hout << "#define MOD$(x, y) (((x) % (y) < 0) ? ((x) % (y) + (y)) : ((x) % (y)))" << endl;
+       hout << "#define DIV$(x, y) ((((x) % (y) != 0) && (((x) < 0) != ((y) < 0))) ? ((x) / (y) - 1) : ((x) / (y)))" << endl;
     hout << "#ifndef __MIC_DEFINE__" << endl << "#define __MIC_DEFINE__" << endl;
+    hout << "static inline long long OBERON$MOD(long long x, long long y) { long long r = x % y; return r < 0 ? r + y : r; }" << endl;
+    hout << "static inline long long OBERON$DIV(long long x, long long y) { long long q = x / y; long long r = x % y; " <<
+            "return (r != 0 && ((x < 0) != (y < 0))) ? q - 1 : q; }" << endl;
 
     // static analysis revealed that in ETH Oberon System v2.3.7 only the first dim of all n-dim arrays is open
     // array kinds:
@@ -711,8 +741,14 @@ Ast::Declaration* CeeGen::DeclSeq(Ast::Declaration* d, bool doProcs, bool doOthe
 void CeeGen::ConstDecl(Ast::Declaration* d) {
     hout << "#define " << qualident(d) << " ";
     ConstExpr(d->expr, hout);
-    if( d->expr == 0 )
-        hout << d->data.toULongLong();
+    if( d->expr == 0 ) {
+        Type* t = deref(d->type());
+        if (t && t->isInteger()) {
+            renderIntLit(t, d->data, hout);
+        } else {
+            hout << d->data.toULongLong();
+        }
+    }
     hout << endl;
 }
 
@@ -738,12 +774,12 @@ void CeeGen::VarDecl(Ast::Declaration* d) {
     {
         if( d->visi > Declaration::Private )
             bout << "/* public */ ";
-        variable(bout, d);
+        variable(bout, d, true);
         bout << ";" << endl << endl;
         if( d->visi > Declaration::Private )
             hout << "/* public */ ";
         hout << "extern ";
-        variable(hout, d);
+        variable(hout, d, false);
         hout << ";" << endl;
     }else
     {
@@ -751,7 +787,7 @@ void CeeGen::VarDecl(Ast::Declaration* d) {
         if( d->kind == Declaration::ParamDecl )
             parameter(bout, d);
         else
-            variable(bout, d);
+            variable(bout, d, true);
         bout << ";" << endl;
         // TODO emitSoapInit(bout, sub->name, sub->getType(), 0 );
     }
@@ -1028,7 +1064,7 @@ Ast::Statement *CeeGen::CaseStat(Ast::Statement *s) {
             {
                 bout << ws() << "case ";
                 Q_ASSERT(label->kind != Expression::Range);
-                Expr(label, bout);
+                Expr(label, bout, true);
                 bout << ":" << endl;
                 label = label->next;
             }
@@ -1267,10 +1303,10 @@ Ast::Statement* CeeGen::Statement(Ast::Statement* s) {
 }
 
 bool CeeGen::ConstExpr(Ast::Expression* e, QTextStream &out) {
-    return Expr(e, out);
+    return Expr(e, out, true);
 }
 
-bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
+bool CeeGen::Expr(Ast::Expression* e, QTextStream &out, bool isConst) {
     // Q_ASSERT(e); // TEST
     if( e == 0 )
         return false;
@@ -1281,7 +1317,7 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
     case Ast::Expression::Neq:
     case Ast::Expression::Eq:
     case Ast::Expression::Gt:
-        if( !relation(e, out) )
+        if( !relation(e, out, isConst) )
             return false;
         break;
     case Ast::Expression::Is:
@@ -1289,13 +1325,13 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
             return false;
         break;
     case Ast::Expression::In:
-        if( !inOp(e, out) )
+        if( !inOp(e, out,isConst) )
             return false;
         break;
     case Ast::Expression::Plus:
     case Ast::Expression::Minus:
     case Ast::Expression::Not:
-        if( !unaryOp(e, out) )
+        if( !unaryOp(e, out, isConst) )
             return false;
         break;
     case Ast::Expression::Add:
@@ -1304,7 +1340,7 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
     case Ast::Expression::Fdiv:
     case Ast::Expression::Div:
     case Ast::Expression::Mod:
-        if( !arithOp(e, out) )
+        if( !arithOp(e, out, isConst) )
             return false;
         break;
     case Ast::Expression::Or:
@@ -1313,7 +1349,7 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
             return false;
         break;
     case Ast::Expression::DeclRef:
-        if( !declRef(e, out) )
+        if( !declRef(e, out,isConst) )
             return false;
         break;
     case Ast::Expression::Select:
@@ -1329,11 +1365,11 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
             return false;
         break;
     case Ast::Expression::Cast:
-        if( !cast(e, out) )
+        if( !cast(e, out,isConst) )
             return false;
         break;
     case Ast::Expression::Call:
-        if( !call(e, out) )
+        if( !call(e, out, isConst) )
             return false;
         break;
     case Ast::Expression::Literal:
@@ -1341,7 +1377,7 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
             return false;
         break;
     case Ast::Expression::Constructor:
-        if( !constructor(e, out) )
+        if( !constructor(e, out, isConst) )
             return false;
         break;
     case Ast::Expression::Range:
@@ -1353,7 +1389,7 @@ bool CeeGen::Expr(Ast::Expression* e, QTextStream &out) {
     return true;
 }
 
-bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
+bool CeeGen::relation(Ast::Expression *e, QTextStream &out, bool isConst)
 {
     if( e == 0 )
         return false;
@@ -1371,11 +1407,11 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
         const ArrayKind rak = deriveArrayKind(e->rhs);
 
         out << "(strcmp((const char*)";
-        Expr(e->lhs, out);
+        Expr(e->lhs, out,isConst);
         if( lak == FixedSize || lak == ReferenceToArray || lak == OpenArrayValue )
             out << ".$";
         out << ", (const char*)";
-        Expr(e->rhs, out);
+        Expr(e->rhs, out, isConst);
         if( rak == FixedSize || rak == ReferenceToArray || rak == OpenArrayValue )
             out << ".$";
         out << ")";
@@ -1393,7 +1429,7 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
     }else
     {
         out << "(";
-        Expr(e->lhs, out);
+        Expr(e->lhs, out, isConst);
         switch(e->kind)
         {
         case Ast::Expression::Lt:
@@ -1419,18 +1455,18 @@ bool CeeGen::relation(Ast::Expression *e, QTextStream &out)
         default:
             Q_ASSERT(false);
         }
-        Expr(e->rhs, out);
+        Expr(e->rhs, out, isConst);
         out << ")";
     }
     return true;
 }
 
-bool CeeGen::inOp(Ast::Expression *e, QTextStream &out)
+bool CeeGen::inOp(Ast::Expression *e, QTextStream &out, bool isConst)
 {
     out << "(((1 << ";
-    Expr(e->lhs, out);
+    Expr(e->lhs, out,isConst);
     out << ") & ";
-    Expr(e->rhs,out);
+    Expr(e->rhs,out,isConst);
     out << ") != 0)";
     return true;
 }
@@ -1462,7 +1498,7 @@ bool CeeGen::isOp(Ast::Expression *e, QTextStream &out)
     return true;
 }
 
-bool CeeGen::unaryOp(Ast::Expression *e, QTextStream &out)
+bool CeeGen::unaryOp(Ast::Expression *e, QTextStream &out, bool isConst)
 {
     if( e == 0 )
         return false;
@@ -1484,12 +1520,12 @@ bool CeeGen::unaryOp(Ast::Expression *e, QTextStream &out)
     default:
         Q_ASSERT(false);
     }
-    Expr(e->lhs, out);
+    Expr(e->lhs, out,isConst);
     out << ")";
     return true;
 }
 
-bool CeeGen::arithOp(Ast::Expression *e, QTextStream &out)
+bool CeeGen::arithOp(Ast::Expression *e, QTextStream &out, bool isConst)
 {
     if( e == 0 )
         return false;
@@ -1499,15 +1535,38 @@ bool CeeGen::arithOp(Ast::Expression *e, QTextStream &out)
     if( isSet && e->kind == Ast::Expression::Sub )
     {
         out << "(";
-        Expr(e->lhs, out);
+        Expr(e->lhs, out,isConst);
         out << " & ~(";
-        Expr(e->rhs, out);
+        Expr(e->rhs, out,isConst);
         out << "))";
         return true;
     }
 
+    if (!isSet && e->kind == Ast::Expression::Div) {
+        if( isConst )
+            out << "DIV$(";
+        else
+            out << "OBERON$DIV(";
+        Expr(e->lhs, out,isConst);
+        out << ", ";
+        Expr(e->rhs, out,isConst);
+        out << ")";
+        return true;
+    }
+    if (!isSet && e->kind == Ast::Expression::Mod) {
+        if( isConst )
+            out << "MOD$(";
+        else
+            out << "OBERON$MOD(";
+        Expr(e->lhs, out,isConst);
+        out << ", ";
+        Expr(e->rhs, out,isConst);
+        out << ")";
+        return true;
+    }
+
     out << "(";
-    Expr(e->lhs, out);
+    Expr(e->lhs, out,isConst);
     switch(e->kind)
     {
     case Ast::Expression::Add:
@@ -1531,7 +1590,7 @@ bool CeeGen::arithOp(Ast::Expression *e, QTextStream &out)
     default:
         Q_ASSERT(false);
     }
-    Expr(e->rhs, out);
+    Expr(e->rhs, out,isConst);
     out << ")";
     return true;
 }
@@ -1558,7 +1617,7 @@ bool CeeGen::logicOp(Ast::Expression *e, QTextStream &out)
     return true;
 }
 
-bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
+bool CeeGen::declRef(Ast::Expression *e, QTextStream &out, bool isConst)
 {
     if( e == 0 )
         return false;
@@ -1566,9 +1625,16 @@ bool CeeGen::declRef(Ast::Expression *e, QTextStream &out)
     if( d && d->kind == Declaration::ConstDecl )
     {
         if( d->expr )
-            Expr(d->expr, out);
+            Expr(d->expr, out, isConst);
         else
-            out << d->data.toULongLong();  // true/false
+        {
+            Type* t = deref(d->type());
+            if (t && t->isInteger()) {
+                renderIntLit(t, d->data, out);
+            } else {
+                out << d->data.toULongLong();
+            }
+        }
         return true;
     }
     Type* t = deref(d->type());
@@ -1697,7 +1763,7 @@ bool CeeGen::depointer(Ast::Expression *e, QTextStream &out)
     return false;
 }
 
-bool CeeGen::cast(Ast::Expression *e, QTextStream &out)
+bool CeeGen::cast(Ast::Expression *e, QTextStream &out, bool isConst)
 {
     if( e == 0 )
         return false;
@@ -1705,14 +1771,14 @@ bool CeeGen::cast(Ast::Expression *e, QTextStream &out)
     if( t )
     {
         out << "((" << typeRef(t) << ")";
-        Expr(e->lhs, out);
+        Expr(e->lhs, out, isConst);
         out << ")";
     }else
-        Expr(e->lhs, out);
+        Expr(e->lhs, out, isConst);
     return true;
 }
 
-bool CeeGen::call(Ast::Expression *e, QTextStream &out)
+bool CeeGen::call(Ast::Expression *e, QTextStream &out, bool isConst)
 {
     if( e == 0 )
         return false;
@@ -1729,10 +1795,10 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
         procType = 0;
     const DeclList formals = proc ? proc->getParams(true) : procType ? procType->subs : DeclList();
 
-    if( proc && proc->kind == Declaration::Builtin && builtin(proc->id, e->rhs, out) )
+    if( proc && proc->kind == Declaration::Builtin && builtin(proc->id, e->rhs, out,isConst) )
         return true;
 
-    Expr(e->lhs, out);
+    Expr(e->lhs, out, isConst);
 
     out << "(";
     Expression* arg = e->rhs;
@@ -1785,7 +1851,7 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                     for( int i = 1; i < a.first.size(); i++ )
                     {
                         out << " * ";
-                        Expr(a.first[i], out);
+                        Expr(a.first[i], out,isConst);
                     }
                     out << ",";
                     renderArrayPtr(aak, arg, out);
@@ -1796,7 +1862,7 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                     out << "(MIC$AP){ sizeof(";
                     out << typeRef(at);
                     out << "), &"; // non-array var params come derefed from Expr
-                    Expr(arg,out);
+                    Expr(arg,out,isConst);
                     out << "}";
                     break;
                 default:
@@ -1809,16 +1875,16 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                 if( at->kind == Type::StrLit )
                 {
                     out << "(MIC$AP){strlen(";
-                    Expr(arg, out);
+                    Expr(arg, out,isConst);
                     out << ") + 1,";
-                    Expr(arg, out);
+                    Expr(arg, out,isConst);
                     out << "}";
                 }else
                     switch(aak)
                     {
                     case FixedSize:
                         out << "(MIC$AP){";
-                        Expr(at->expr, out);
+                        Expr(at->expr, out,isConst);
                         out << ", ";
                         renderArrayPtr(aak, arg, out);
                         out << "}";
@@ -1832,7 +1898,7 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                         break;
                     case ReferenceToArray:
                     case OpenArrayValue:
-                        Expr(arg, out); // just render the arg
+                        Expr(arg, out,isConst); // just render the arg
                         break;
                     case NoArray:
                     default:
@@ -1845,13 +1911,13 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
                 if( at->kind == Type::StrLit )
                 {
                     out << "(" << typeRef(ft) << "){.$ = ";
-                    Expr(arg, out);
+                    Expr(arg, out,isConst);
                     out << "}";
                 }else
                     switch(aak)
                     {
                     case FixedSize:
-                        Expr(arg, out); // just render the arg
+                        Expr(arg, out,isConst); // just render the arg
                         break;
                     case DerefedArray:
                     case ReferenceToArray:
@@ -1868,11 +1934,11 @@ bool CeeGen::call(Ast::Expression *e, QTextStream &out)
         {
             // non-array VAR parameter
             out << "&"; // Expr derefs var parameters for non-array arg
-            Expr(arg, out);
+            Expr(arg, out,isConst);
         }else
         {
             // non-array value parameter
-            Expr(arg, out);
+            Expr(arg, out,isConst);
         }
         i++;
         arg = arg->next;
@@ -1934,7 +2000,9 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
         Type* t = deref(e->type());
         if( t->kind == Type::NIL )
             out << "NULL";
-        else if( t->isIntegerOrByte() || t->kind == Type::SET )
+        else if( t->isInteger() )
+            renderIntLit(t, val, out);
+        else if( t->kind == Type::BYTE || t->kind == Type::SET )
             out << val.toULongLong();
         else if( t->kind == Type::BOOLEAN )
             out << (int)val.toBool();
@@ -1960,7 +2028,7 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
     return false;
 }
 
-bool CeeGen::constructor(Ast::Expression *e, QTextStream &out)
+bool CeeGen::constructor(Ast::Expression *e, QTextStream &out, bool isConst)
 {
     if( e == 0 )
         return false;
@@ -1973,16 +2041,16 @@ bool CeeGen::constructor(Ast::Expression *e, QTextStream &out)
         {
             // TODO: assuming lhs <= rhs
             out << "(uint32_t)((((uint64_t)1 << (";
-            Expr(elem->rhs, out); // high
+            Expr(elem->rhs, out, isConst); // high
             out << " - ";
-            Expr(elem->lhs, out); // low
+            Expr(elem->lhs, out, isConst); // low
             out << " + 1)) - 1) << ";
-            Expr(elem->lhs, out); // low
+            Expr(elem->lhs, out, isConst); // low
             out << ")";
         }else
         {
             out << "1u << ";
-            Expr(elem, out);
+            Expr(elem, out, isConst);
         }
         elem = elem->next;
     }
@@ -1990,12 +2058,12 @@ bool CeeGen::constructor(Ast::Expression *e, QTextStream &out)
     return true;
 }
 
-void CeeGen::call(Ast::Statement *s)
+void CeeGen::call(Ast::Statement *s, bool isConst)
 {
     if( s == 0 )
         return;
     Q_ASSERT(s->lhs && s->lhs->kind == Expression::Call);
-    Expr(s->lhs, bout);
+    Expr(s->lhs, bout, isConst);
     bout << ";";
 }
 
@@ -2045,7 +2113,7 @@ void CeeGen::metaDecl(Ast::Declaration *d)
     hout << "extern struct " << className << "$Class$ " << className << "$class$;" << endl;
 }
 
-bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
+bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isConst)
 {
     ExpList a = Expression::getList(args);
 
@@ -2060,7 +2128,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 out << "fabs(";
             else
                 out << "abs(";
-            Expr(a[0], out);
+            Expr(a[0], out, isConst);
             out << ")";
         }
         return true;
@@ -2068,23 +2136,23 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
         if( a.size() != 1 )
             return false;
         out << "((";
-        Expr(a[0], out);
+        Expr(a[0], out, isConst);
         out << ") & 1)";
         return true;
     case Builtin::CAP:
         if( a.size() != 1 )
             return false;
         out << "(char)toupper((unsigned char)";
-        Expr(a[0], out);
+        Expr(a[0], out, isConst);
         out << ")";
         return true;
     case Builtin::ASH:
         if( a.size() != 2 )
             return false;
-        out << "ASH(";
-        Expr(a[0], out);
+        out << "ASH$(";
+        Expr(a[0], out, isConst);
         out << ", ";
-        Expr(a[1], out);
+        Expr(a[1], out, isConst);
         out << ")";
         return true;
     case Builtin::LEN:
@@ -2098,7 +2166,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             if( t && t->kind == Type::StrLit )
             {
                 out << "(strlen(";
-                Expr(a[0], out);
+                Expr(a[0], out, isConst);
                 out << ") + 1)";
             }else
             {
@@ -2135,13 +2203,13 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
         }else if( a.size() == 2 )
         {
             out << "((";
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << ") > (";
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
             out << ") ? (";
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << ") : (";
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
             out << "))";
             return true;
         }
@@ -2174,13 +2242,13 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
         }else if( a.size() == 2 )
         {
             out << "((";
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << ") < (";
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
             out << ") ? (";
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << ") : (";
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
             out << "))";
             return true;
         }
@@ -2193,15 +2261,15 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
     case Builtin::ORD:
         if( a.size() != 1 )
             return false;
-        out << "(long)(unsigned char)(";
-        Expr(a[0], out);
+        out << "(int)(unsigned char)(";
+        Expr(a[0], out,isConst);
         out << ")";
         return true;
     case Builtin::CHR:
         if( a.size() != 1 )
             return false;
         out << "(char)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ")";
         return true;
     case Builtin::SHORT:
@@ -2213,7 +2281,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             {
                 switch( t->kind )
                 {
-                case Type::HUGEINT: out << "(long)("; break;
+                case Type::HUGEINT: out << "(int)("; break;
                 case Type::LONGINT: out << "(short)("; break;
                 case Type::INTEGER: out << "(char)("; break;
                 case Type::LONGREAL: out << "(float)("; break;
@@ -2221,7 +2289,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 }
             }else
                 out << "(";
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << ")";
         }
         return true;
@@ -2237,7 +2305,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 case Type::LONGINT:
                     out << "(long long)("; break;
                 case Type::INTEGER:
-                    out << "(long)("; break;
+                    out << "(int)("; break;
                 case Type::SHORTINT:
                 case Type::CHAR:
                     out << "(short)("; break;
@@ -2248,15 +2316,18 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 }
             }else
                 out << "(";
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << ")";
         }
         return true;
     case Builtin::ENTIER:
         if( a.size() != 1 )
             return false;
-        out << "(long)floor((double)";
-        Expr(a[0], out);
+        if( deref(a[0]->type())->kind == Type::LONGREAL )
+            out << "(long long)floor((double)";
+        else
+            out << "(int)floor((float)";
+        Expr(a[0], out,isConst);
         out << ")";
         return true;
     case Builtin::INC:
@@ -2264,13 +2335,13 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             return false;
         if( a.size() == 1 )
         {
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << "++";
         }else
         {
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << " += ";
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
         }
         return true;
     case Builtin::DEC:
@@ -2278,29 +2349,29 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             return false;
         if( a.size() == 1 )
         {
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << "--";
         }else
         {
-            Expr(a[0], out);
+            Expr(a[0], out,isConst);
             out << " -= ";
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
         }
         return true;
     case Builtin::INCL:
         if( a.size() != 2 )
             return false;
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << " |= (1u << ";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::EXCL:
         if( a.size() != 2 )
             return false;
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << " &= ~(1u << ";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::COPY:
@@ -2316,7 +2387,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             out << ", (const char*)";
 
             if( srcAk == NoArray )
-                Expr(a[0], out);
+                Expr(a[0], out,isConst);
             else
                 renderArrayPtr(srcAk, a[0], out);
             out << ")";
@@ -2388,12 +2459,12 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                 Type* base = deref(ptrType->type());
                 if( base && (base->kind == Type::Record || base->kind == Type::Object) )
                 {
-                    Expr(a[0], out);
+                    Expr(a[0], out,isConst);
                     out << " = (" << typeRef(base) << "*)GC_MALLOC(sizeof(" << typeRef(ptrType->type()) << "))";
                     if( base->decl )
                     {
                         out << "; ";
-                        Expr(a[0], out);
+                        Expr(a[0], out,isConst);
                         out << "->class$ = &" << qualident(ptrType->type()) << "$class$";
                     }
                 }else if( base && base->kind == Type::Array )
@@ -2401,20 +2472,20 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
                     if( base->expr == 0 && !checkOpenArray(base, a[0]->pos) )
                         return false;
                     ArrayType at = arrayType(base);
-                    Expr(a[0], out);
+                    Expr(a[0], out,isConst);
                     out << " = (" << typeRef(at.second) << "*)$allocda(";
                     if( base->expr == 0 )
                     {
                         if( a.size() > 1 )
-                            Expr(a[1], out); // use the second argument of NEW as dynamic size
+                            Expr(a[1], out,isConst); // use the second argument of NEW as dynamic size
                         else
                             return invalid("calling NEW for an open array with no size parameter", a[0]->pos);
                     }else
-                        Expr(at.first[0], out);
+                        Expr(at.first[0], out,isConst);
                     for( int i = 1; i < at.first.size(); i++ )
                     {
                         out << " * ";
-                        Expr(at.first[i], out);
+                        Expr(at.first[i], out,isConst);
                     }
                     out << ", sizeof(" << typeRef(at.second) << "))";
                 }else
@@ -2428,14 +2499,14 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
         if( a.size() != 1 )
             return false;
         out << "exit(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ")";
         return true;
     case Builtin::AWAIT:
         if( a.size() != 1 )
             return false;
         out << "/* AWAIT("; // stub for concurrency
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ") */";
         return true;
     case Builtin::ASSERT:
@@ -2443,11 +2514,11 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
             return false;
 #if _DEBUG
         out << "if(!";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << "){fprintf(stderr,\"assertion FAILED in %s:%d\\n\", __FILE__, __LINE__);fflush(stderr);}";
 #else
         out << "assert(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ")";
 #endif
         return true;
@@ -2455,7 +2526,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
         if( a.size() != 1 )
             return false;
         out << "(void*)&(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_VAL: {
@@ -2466,15 +2537,15 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
         const QByteArray from = typeRef(fromT);
         const QByteArray to = typeRef(toT);
         if( from == to )
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
         else if( toT->kind == Type::LONGINT && fromT->kind == Type::Pointer )
         {
             out << "(void*)";
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
         }else
         {
             out << "((" << to << ")(";
-            Expr(a[1], out);
+            Expr(a[1], out,isConst);
             out << "))";
         }
         return true;
@@ -2482,10 +2553,10 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
     case Builtin::SYSTEM_BIT:
         if( a.size() != 2 )
             return false;
-        out << "((*(long*)(";
-        Expr(a[0], out);
+        out << "((*(int*)(";
+        Expr(a[0], out,isConst);
         out << ") >> (";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ")) & 1)";
         return true;
     case Builtin::SYSTEM_CC:
@@ -2496,121 +2567,121 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out)
     case Builtin::SYSTEM_LSH:
         if( a.size() != 2 )
             return false;
-        out << "ASH(";
-        Expr(a[0], out);
+        out << "ASH$(";
+        Expr(a[0], out,isConst);
         out << ", ";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_ROT:
         if( a.size() != 2 )
             return false;
         out << "((";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ") << ((";
-        Expr(a[1], out);
-        out << ") & 31) | (unsigned long)(";
-        Expr(a[0], out);
+        Expr(a[1], out,isConst);
+        out << ") & 31) | (uint32_t)(";
+        Expr(a[0], out,isConst);
         out << ") >> (32 - ((";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ") & 31)))";
         return true;
     case Builtin::SYSTEM_TYPECODE:
         if( a.size() != 1 )
             return false;
-        out << "(long)(";
-        Expr(a[0], out);
+        out << "(int)(";
+        Expr(a[0], out,isConst);
         out << ")->class$";
         return true;
     case Builtin::SYSTEM_GET:
         if( a.size() != 2 )
             return false;
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << " = *((" << typeRef(a[1]->type()) << "*)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << "))";
         return true;
     case Builtin::SYSTEM_GET8:
         if( a.size() != 1 )
             return false;
         out << "(*(char*)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << "))";
         return true;
     case Builtin::SYSTEM_GET16:
         if( a.size() != 1 )
             return false;
         out << "(*(short*)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << "))";
         return true;
     case Builtin::SYSTEM_GET32:
         if( a.size() != 1 )
             return false;
-        out << "(*(long*)(";
-        Expr(a[0], out);
+        out << "(*(int*)(";
+        Expr(a[0], out,isConst);
         out << "))";
         return true;
     case Builtin::SYSTEM_GET64:
         if( a.size() != 1 )
             return false;
         out << "(*(long long*)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << "))";
         return true;
     case Builtin::SYSTEM_PUT:
         if( a.size() != 2 )
             return false;
         out << "*((" << typeRef(a[1]->type()) << "*)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ")) = ";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         return true;
     case Builtin::SYSTEM_PUT8:
         if( a.size() != 2 )
             return false;
         out << "(*(char*)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ")) = (char)(";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_PUT16:
         if( a.size() != 2 )
             return false;
         out << "(*(short*)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ")) = (short)(";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_PUT32:
         if( a.size() != 2 )
             return false;
-        out << "(*(long*)(";
-        Expr(a[0], out);
-        out << ")) = (long)(";
-        Expr(a[1], out);
+        out << "(*(int*)(";
+        Expr(a[0], out,isConst);
+        out << ")) = (int)(";
+        Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_PUT64:
         if( a.size() != 2 )
             return false;
         out << "(*(long long*)(";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ")) = (long long)(";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_MOVE:
         if( a.size() != 3 )
             return false;
         out << "memcpy(";
-        Expr(a[1], out);
+        Expr(a[1], out,isConst);
         out << ", ";
-        Expr(a[0], out);
+        Expr(a[0], out,isConst);
         out << ", ";
-        Expr(a[2], out);
+        Expr(a[2], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_NEW:
@@ -2827,9 +2898,11 @@ void CeeGen::liftedParam(QTextStream &out, Ast::Declaration *what, const QByteAr
 #endif
 }
 
-void CeeGen::variable(QTextStream &out, Ast::Declaration *var)
+void CeeGen::variable(QTextStream &out, Ast::Declaration *var, bool body)
 {
     out << typePrefix2(var->type()) << typeRef(var->type()) << " " << qualident(var);
+    if( body && deref(var->type())->kind == Type::Pointer )
+        out << " = NULL";
 }
 
 void CeeGen::procHeader(Ast::Declaration *proc, bool header)

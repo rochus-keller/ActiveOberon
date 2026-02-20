@@ -122,7 +122,7 @@ namespace Ao {
         Ast::Declaration* addDecl(const Token& id, quint8 visi, Ast::Declaration::Kind mode);
         void error( const Token&, const QString& msg);
         void error( const RowCol&, const QString& msg );
-        Ast::Type* smallestIntType(quint64 i);
+        Ast::Type* smallestIntType(quint64 u, bool isHex);
         Ast::Expression* maybeQualident();
         void deanonymizeType(Ast::Declaration*);
         void deanonymizeType(Ast::Declaration*, Ast::Type*);

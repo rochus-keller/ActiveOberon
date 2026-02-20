@@ -752,6 +752,9 @@ bool Project::generateC(const QString &outDir)
     out << "// main+.c" << endl;
     out << CeeGen::genDedication() << endl << endl;
 
+    out << "#include <stdio.h>" << endl;
+    out << "#include <gc.h>" << endl;
+
     foreach( Declaration* module, tops )
     {
         // if a module is not in "used", it is never imported and thus a root module
@@ -762,6 +765,8 @@ bool Project::generateC(const QString &outDir)
     out << endl;
 
     out << "int main(int argc, char** argv) {" << endl;
+    out << "    setvbuf(stdout, NULL, _IONBF, 0);" << endl;
+    out << "    GC_INIT();" << endl;
 
     foreach( Declaration* module, tops )
     {
