@@ -254,11 +254,14 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
 
     case Builtin::SYSTEM_ADR:
         expectingNArgs(args,1);
+#if 1
+        // when returning PTR, most Oberon System 3 produce validator errors, but the test code works on x64, and vice versa!
         *ret = mdl->getType(Type::PTR);
-        //*ret = mdl->getType(Type::LONGINT);
+#else
         // NOTE: there is a lot of code storing the result of ADR in LONGINT vars
         // and doing arithmetic operations assuming LONGINT
-        // TODO: when returning PTR, most Oberon System 3 produce validator errors, but the test code works on x64, and vice versa!
+        *ret = mdl->getType(Type::LONGINT);
+#endif
         break;
     case Builtin::SYSTEM_BIT:
         expectingNArgs(args,2);

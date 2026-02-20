@@ -102,14 +102,14 @@ static void renderIntLit(Type* t, const QVariant& val, QTextStream &out)
     if (t->kind == Type::HUGEINT) {
         quint64 u = val.toULongLong();
         if (u > 9223372036854775807ULL) {
-            out << "((long long)" << u << "ULL)";
+            out << "((int64_t)" << u << "ULL)";
         } else {
             out << u << "LL";
         }
     } else if (t->kind == Type::LONGINT) {
         quint64 u = (quint32)val.toULongLong();
         if (u > 2147483647ULL) {
-            out << "((int)" << u << "U)";
+            out << "((int32_t)" << u << "U)";
         } else {
             out << u;
         }
@@ -210,21 +210,19 @@ static inline QByteArray basicType(Type* t)
     case Type::NIL:
         return "NULL";
     case Type::BOOLEAN:
-        return "unsigned char";
     case Type::CHAR:
-        return "char";
     case Type::BYTE:
-        return "unsigned char";
+        return "uint8_t";
     case Type::SHORTINT:
-        return "char";
+        return "int8_t";
     case Type::INTEGER:
-        return "short";
+        return "int16_t";
     case Type::LONGINT:
-        return "int";
+        return "int32_t";
     case Type::SET:
-        return "int";
+        return "int32_t";
     case Type::HUGEINT:
-        return "long long";
+        return "int64_t";
     case Type::REAL:
         return "float";
     case Type::LONGREAL:
@@ -618,8 +616,8 @@ void CeeGen::Module(Ast::Declaration *module) {
     hout << "#define MOD$(x, y) (((x) % (y) < 0) ? ((x) % (y) + (y)) : ((x) % (y)))" << endl;
        hout << "#define DIV$(x, y) ((((x) % (y) != 0) && (((x) < 0) != ((y) < 0))) ? ((x) / (y) - 1) : ((x) / (y)))" << endl;
     hout << "#ifndef __MIC_DEFINE__" << endl << "#define __MIC_DEFINE__" << endl;
-    hout << "static inline long long OBERON$MOD(long long x, long long y) { long long r = x % y; return r < 0 ? r + y : r; }" << endl;
-    hout << "static inline long long OBERON$DIV(long long x, long long y) { long long q = x / y; long long r = x % y; " <<
+    hout << "static inline int64_t OBERON$MOD(int64_t x, int64_t y) { int64_t r = x % y; return r < 0 ? r + y : r; }" << endl;
+    hout << "static inline int64_t OBERON$DIV(int64_t x, int64_t y) { int64_t q = x / y; int64_t r = x % y; " <<
             "return (r != 0 && ((x < 0) != (y < 0))) ? q - 1 : q; }" << endl;
 
     // static analysis revealed that in ETH Oberon System v2.3.7 only the first dim of all n-dim arrays is open
@@ -2007,8 +2005,13 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
         else if( t->kind == Type::BOOLEAN )
             out << (int)val.toBool();
         else if( t->kind == Type::CHAR )
-            out << val.toULongLong();
-        else if( t->isReal() )
+        {
+            const int ch = val.toULongLong();
+            if( isprint(ch) && ch < 128 && ch != 0x5c)
+                out << "'" << (char)ch << "'";
+            else
+                out << ch;
+        }else if( t->isReal() )
         {
             QByteArray tmp = QByteArray::number(val.toDouble());
             // NOTE: if we don't do that, Qt writes 1/2 instead of 1.0/2.0 which renders a different result!
@@ -2142,7 +2145,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
     case Builtin::CAP:
         if( a.size() != 1 )
             return false;
-        out << "(char)toupper((unsigned char)";
+        out << "(uint8_t)toupper((uint8_t)";
         Expr(a[0], out, isConst);
         out << ")";
         return true;
@@ -2261,14 +2264,14 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
     case Builtin::ORD:
         if( a.size() != 1 )
             return false;
-        out << "(int)(unsigned char)(";
+        out << "(int32_t)(uint8_t)(";
         Expr(a[0], out,isConst);
         out << ")";
         return true;
     case Builtin::CHR:
         if( a.size() != 1 )
             return false;
-        out << "(char)(";
+        out << "(uint8_t)(";
         Expr(a[0], out,isConst);
         out << ")";
         return true;
@@ -2281,9 +2284,9 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
             {
                 switch( t->kind )
                 {
-                case Type::HUGEINT: out << "(int)("; break;
-                case Type::LONGINT: out << "(short)("; break;
-                case Type::INTEGER: out << "(char)("; break;
+                case Type::HUGEINT: out << "(int32_t)("; break;
+                case Type::LONGINT: out << "(int16_t)("; break;
+                case Type::INTEGER: out << "(uint8_t)("; break;
                 case Type::LONGREAL: out << "(float)("; break;
                 default: out << "("; break;
                 }
@@ -2303,12 +2306,12 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
                 switch( t->kind )
                 {
                 case Type::LONGINT:
-                    out << "(long long)("; break;
+                    out << "(int64_t)("; break;
                 case Type::INTEGER:
-                    out << "(int)("; break;
+                    out << "(int32_t)("; break;
                 case Type::SHORTINT:
                 case Type::CHAR:
-                    out << "(short)("; break;
+                    out << "(int16_t)("; break;
                 case Type::REAL:
                     out << "(double)("; break;
                 default:
@@ -2324,7 +2327,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
         if( a.size() != 1 )
             return false;
         if( deref(a[0]->type())->kind == Type::LONGREAL )
-            out << "(long long)floor((double)";
+            out << "(int64_t)floor((double)";
         else
             out << "(int)floor((float)";
         Expr(a[0], out,isConst);
@@ -2589,7 +2592,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
     case Builtin::SYSTEM_TYPECODE:
         if( a.size() != 1 )
             return false;
-        out << "(int)(";
+        out << "(int32_t)(";
         Expr(a[0], out,isConst);
         out << ")->class$";
         return true;
@@ -2604,28 +2607,28 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
     case Builtin::SYSTEM_GET8:
         if( a.size() != 1 )
             return false;
-        out << "(*(char*)(";
+        out << "(*(uint8_t*)(";
         Expr(a[0], out,isConst);
         out << "))";
         return true;
     case Builtin::SYSTEM_GET16:
         if( a.size() != 1 )
             return false;
-        out << "(*(short*)(";
+        out << "(*(int16_t*)(";
         Expr(a[0], out,isConst);
         out << "))";
         return true;
     case Builtin::SYSTEM_GET32:
         if( a.size() != 1 )
             return false;
-        out << "(*(int*)(";
+        out << "(*(int32_t*)(";
         Expr(a[0], out,isConst);
         out << "))";
         return true;
     case Builtin::SYSTEM_GET64:
         if( a.size() != 1 )
             return false;
-        out << "(*(long long*)(";
+        out << "(*(int64_t*)(";
         Expr(a[0], out,isConst);
         out << "))";
         return true;
@@ -2640,36 +2643,36 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
     case Builtin::SYSTEM_PUT8:
         if( a.size() != 2 )
             return false;
-        out << "(*(char*)(";
+        out << "(*(uint8_t*)(";
         Expr(a[0], out,isConst);
-        out << ")) = (char)(";
+        out << ")) = (uint8_t)(";
         Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_PUT16:
         if( a.size() != 2 )
             return false;
-        out << "(*(short*)(";
+        out << "(*(int16_t*)(";
         Expr(a[0], out,isConst);
-        out << ")) = (short)(";
+        out << ")) = (int16_t)(";
         Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_PUT32:
         if( a.size() != 2 )
             return false;
-        out << "(*(int*)(";
+        out << "(*(int32_t*)(";
         Expr(a[0], out,isConst);
-        out << ")) = (int)(";
+        out << ")) = (int32_t)(";
         Expr(a[1], out,isConst);
         out << ")";
         return true;
     case Builtin::SYSTEM_PUT64:
         if( a.size() != 2 )
             return false;
-        out << "(*(long long*)(";
+        out << "(*(int64_t*)(";
         Expr(a[0], out,isConst);
-        out << ")) = (long long)(";
+        out << ")) = (int64_t)(";
         Expr(a[1], out,isConst);
         out << ")";
         return true;
