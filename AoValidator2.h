@@ -134,6 +134,7 @@ namespace Ao {
         Ast::Symbol* last;
         QHash<Ast::Declaration*,Ast::SymList> xref;
         QHash<Ast::Declaration*,Ast::DeclList> subs;
+        bool allowPtrToLongint;
 
 	};
 }

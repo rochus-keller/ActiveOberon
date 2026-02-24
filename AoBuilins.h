@@ -24,7 +24,7 @@ namespace Ao
 class Builins
 {
 public:
-    Builins(Ast::AstModel* mdl);
+    Builins(Ast::AstModel* mdl, Ast::Declaration* module);
 
     bool checkArgs(quint8 builtin, const Ast::ExpList& args, Ast::Type** ret, const RowCol& pos);
 
@@ -37,6 +37,7 @@ protected:
 
 private:
     Ast::AstModel* mdl;
+    Ast::Declaration* module;
 };
 }
 

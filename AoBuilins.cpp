@@ -18,7 +18,7 @@
 using namespace Ao;
 using namespace Ast;
 
-Builins::Builins(Ast::AstModel *mdl):mdl(mdl)
+Builins::Builins(Ast::AstModel *mdl, Declaration *module):mdl(mdl), module(module)
 {
 
 }
@@ -247,6 +247,7 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
     case Builtin::SIZE:
         expectingNArgs(args,1);
         *ret = mdl->getType(Type::LONGINT);
+        // never called for REAL or LONGREAL in OBS2.3.7
         break;
     case Builtin::AWAIT:
         expectingNArgs(args,1);
@@ -257,6 +258,7 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
 #if 1
         // when returning PTR, most Oberon System 3 produce validator errors, but the test code works on x64, and vice versa!
         *ret = mdl->getType(Type::PTR);
+        // Validator has now a allowPtrToLongint flag which supports this; works for Oberon System 3 2.3.7
 #else
         // NOTE: there is a lot of code storing the result of ADR in LONGINT vars
         // and doing arithmetic operations assuming LONGINT
@@ -271,8 +273,8 @@ bool Builins::checkArgs(quint8 builtin, const ExpList& args, Type** ret, const R
         expectingNArgs(args,1);
         *ret = mdl->getType(Type::BOOLEAN);
         break;
-    case Builtin::SYSTEM_LSH:
     case Builtin::SYSTEM_ROT:
+    case Builtin::SYSTEM_LSH:
     case Builtin::SYSTEM_VAL:
         expectingNArgs(args,2);
         *ret = args[0]->type();

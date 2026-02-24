@@ -66,7 +66,7 @@ static inline bool isTextual( Expression* e )
 }
 
 Validator2::Validator2(Ast::AstModel *mdl, Ast::Importer *imp, bool haveXref):module(0),mdl(mdl),imp(imp),
-    first(0),last(0),curObj(0)
+    first(0),last(0),curObj(0), allowPtrToLongint(true)
 {
     Q_ASSERT(mdl);
     if( haveXref )
@@ -1177,6 +1177,13 @@ bool Validator2::select(Ast::Expression *e)
     Expr(e->lhs);
     Expr(e->rhs);
 
+    if( e->lhs && e->lhs->kind == Expression::DeclRef )
+    {
+        Declaration* d = e->lhs->val.value<Declaration*>();
+        if( d && d->kind == Declaration::Module && d->name == "SYSTEM" )
+            error(e->lhs->pos,"Referencing SYSTEM without importing it");
+    }
+
     if( e->lhs == 0 || e->lhs->type() == 0 )
         return true;
 
@@ -1366,7 +1373,7 @@ bool Validator2::call(Ast::Expression *e)
 
         if( proc && proc->kind == Declaration::Builtin )
         {
-            Builins bi(mdl);
+            Builins bi(mdl, module);
 #if 0
             if( proc->id == Builtin::LEN && actuals.size() > 1 )
                 qDebug() << "LEN(" << actuals.size()-1 << ")" << module->name.constData() << e->pos.d_row; // never happens in OS v2.3.7
@@ -1592,6 +1599,8 @@ bool Validator2::assigCompat(Ast::Type *lhs, Ast::Type *rhs)
         return true;
     if( lhs->kind == Type::PTR && rhs->kind == Type::Pointer )
         return true; // happens in Oberon Systen 2.3.7
+    if( allowPtrToLongint && lhs->kind == Type::LONGINT && rhs->kind == Type::PTR )
+        return true;
     return false;
 }
 

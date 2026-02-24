@@ -2007,7 +2007,7 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
         else if( t->kind == Type::CHAR )
         {
             const int ch = val.toULongLong();
-            if( isprint(ch) && ch < 128 && ch != 0x5c)
+            if( isprint(ch) && ch < 128 && ch != 0x5c && ch != '\'')
                 out << "'" << (char)ch << "'";
             else
                 out << ch;
