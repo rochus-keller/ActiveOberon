@@ -245,6 +245,7 @@ void Validator2::TypeDecl(Ast::Declaration* d) {
 void Validator2::VarDecl(Ast::Declaration* d) {
     Type* t = d->type();
     Type_(t);
+#if 0
     char what = ' ';
     switch(d->kind)
     {
@@ -260,6 +261,7 @@ void Validator2::VarDecl(Ast::Declaration* d) {
     default:
         Q_ASSERT(false);
     }
+#endif
     t->objectInit = checkIfObjectInit(t);
     t->pointerInit = checkIfPointerInit(t);
     //arrayStats(d->type(), d->pos, what);
@@ -362,8 +364,9 @@ bool Validator2::PointerType(Ast::Type* t) {
         Type* to = deref(t->type());
         if( to->kind != Type::Record && to->kind != Type::Array )
             return error(t->pos, "pointer base type must be ARRAY or RECORD");
-    }else
-        return false;
+    }
+    // else
+    return false;
 }
 
 bool Validator2::ObjectType(Ast::Type* t) {
@@ -586,13 +589,13 @@ void Validator2::assig(Ast::Statement* s) {
 Ast::Statement *Validator2::IfStat(Ast::Statement *s) {
     Q_ASSERT(s && s->kind == Ast::Statement::If);
     Expr(s->rhs); // if
-    if( s->rhs && !deref(s->rhs->type())->kind == Type ::BOOLEAN )
+    if( s->rhs && deref(s->rhs->type())->kind != Type::BOOLEAN )
         error(s->rhs->pos, "expecting a boolean expression");
     StatSeq(s->body);
     while( s && s->getNext() && s->getNext()->kind == Ast::Statement::Elsif ) {
         s = s->getNext();
         Expr(s->rhs);
-        if( s->rhs && !deref(s->rhs->type())->kind == Type ::BOOLEAN )
+        if( s->rhs && (deref(s->rhs->type())->kind != Type::BOOLEAN) )
             error(s->rhs->pos, "expecting a boolean expression");
         StatSeq(s->body);
     }
@@ -1682,7 +1685,7 @@ bool Validator2::paramCompat(Ast::Type *lhs, Ast::Expression *rhs)
         {
             Type* taa = deref(ta->type());
             Type* taaa = deref(taa->type());
-            if( ta->kind == Type::Pointer && taa->kind == Type::Array && taaa->kind == Type::CHAR || ta->kind == Type::NIL )
+            if( (ta->kind == Type::Pointer && taa->kind == Type::Array && taaa->kind == Type::CHAR) || ta->kind == Type::NIL )
                 return true; // happens in OFSFATVolumes v2.3.7
         }
     }
@@ -1714,7 +1717,7 @@ Type *Validator2::includingType(Ast::Type * lhs, Ast::Type * rhs)
     Q_ASSERT( lhs && rhs );
     if( !lhs->isNumber() || !rhs->isNumber() )
         return mdl->getType(Ast::Type::NoType);
-    if( lhs->kind == rhs->kind == Type::BYTE )
+    if( (lhs->kind == rhs->kind) && (rhs->kind == Type::BYTE) )
         return mdl->getType(Type::SHORTINT);
     if( lhs->kind >= rhs->kind )
         return lhs;

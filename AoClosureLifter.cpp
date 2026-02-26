@@ -17,7 +17,7 @@
 * http://www.gnu.org/copyleft/gpl.html.
 */
 
-#include "AoClosureLifter.h".h"
+#include "AoClosureLifter.h"
 #include <QtAlgorithms>
 using namespace Ao;
 using namespace Ast;

@@ -29,6 +29,7 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class QLabel;
 
+
 namespace Gui
 {
 class AutoMenu;
@@ -36,7 +37,7 @@ class AutoMenu;
 
 namespace Ao
 {
-    class Project;
+    class Project2;
 
     class Ide : public QMainWindow
     {
@@ -47,6 +48,7 @@ namespace Ao
         ~Ide();
 
         void loadFile( const QString& path );
+        void logMessage(const QString& , bool err = false);
 
     protected:
         class Editor;
@@ -70,7 +72,7 @@ namespace Ao
         void createMenuBar();
         void closeEvent(QCloseEvent* event);
         bool checkSaved( const QString& title );
-        bool compile(bool doGenerate = false);
+        bool compile();
         void fillMods();
         void showDocument( const QString& filePath );
         void addTopCommands(Gui::AutoMenu * pop);
@@ -85,12 +87,12 @@ namespace Ao
         Ast::Declaration* moduleOfCurrentEditor();
         void fillModule(Ast::Declaration*);
         void fillHier(Ast::Declaration*);
+        void removePosMarkers();
         void pushLocation( const Location& );
         void clear();
 
     protected slots:
         void onCompile();
-        void onGenerate();
         void onNewPro();
         void onOpenPro();
         void onSavePro();
@@ -111,7 +113,6 @@ namespace Ao
         void onOpenFile();
         void onOakwood();
         void onSetOptions();
-        void onSetArguments();
         void onAddFiles();
         void onNewModule();
         void onAddDir();
@@ -124,18 +125,17 @@ namespace Ao
         void onWorkingDir();
         void onAbout();
         void onQt();
+        void onExpMod();
     private:
         class DocTab;
         class Debugger;
+        Project2* d_pro;
         DocTab* d_tab;
-        Project* d_pro;
         QTreeWidget* d_mods;
         QTreeWidget* d_mod;
         QTreeWidget* d_hier;
         QHash<Ast::Declaration*,QTreeWidgetItem*> d_modIdx;
-        QTreeWidget* d_stack;
         QVector<Ast::Declaration*> d_scopes;
-        QTreeWidget* d_locals;
         QLabel* d_xrefTitle;
         QLabel* d_modTitle;
         QLabel* d_hierTitle;

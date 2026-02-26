@@ -29,15 +29,13 @@ SOURCES += AoIde.cpp \
     ../GuiTools/DocTabWidget.cpp \
     AoBuilins.cpp \
     AoCeeGen.cpp \
+    AoProject2.cpp \
     AoRowCol.cpp \
     AoToken.cpp \
     AoLexer.cpp \
     AoTokenType.cpp \
-    AoFileSystem.cpp \
     AoParser2.cpp \
     AoAst.cpp \
-    AoProject.cpp \
-    AoCodeNavigator2.cpp \
     AoHighlighter2.cpp \
     AoClosureLifter.cpp \
     AoValidator2.cpp
@@ -48,15 +46,13 @@ HEADERS  += AoIde.h \
     ../GuiTools/DocTabWidget.h \
     AoBuilins.h \
     AoCeeGen.h \
+    AoProject2.h \
     AoRowCol.h \
     AoToken.h \
     AoLexer.h \
     AoTokenType.h \
-    AoFileSystem.h \
     AoParser2.h \
     AoAst.h \
-    AoProject.h \
-    AoCodeNavigator2.h \
     AoHighlighter2.h \
     AoClosureLifter.h \
     AoValidator2.h

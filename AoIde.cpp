@@ -1,7 +1,7 @@
 /*
 * Copyright 2026 Rochus Keller <mailto:me@rochus-keller.ch>
 *
-* This file is part of the Active Oberon parser/compiler library.
+* This file is part of the Active Oberon IDE application.
 *
 * The following is the license that applies to this copy of the
 * library. For a license to use the library under conditions
@@ -17,13 +17,14 @@
 * http://www.gnu.org/copyleft/gpl.html.
 */
 
+
 // Adopted from the Luon IDE
 
 #include "AoIde.h"
 #include "AoHighlighter2.h"
 #include "AoAst.h"
 #include "AoLexer.h"
-#include "AoProject.h"
+#include "AoProject2.h"
 #include <QtDebug>
 #include <QDockWidget>
 #include <QApplication>
@@ -81,22 +82,22 @@ using namespace Ast;
 class Ide::Editor : public CodeEditor
 {
 public:
-    Editor(Ide* p, Project* pro):CodeEditor(p),d_pro(pro),d_ide(p),dbgRow(0),dbgCol(0)
+    Editor(Ide* p, Project2* pro):CodeEditor(p),d_pro(pro),d_ide(p),dbgRow(0),dbgCol(0)
     {
         setCharPerTab(2);
         setTypingLatency(400);
         setPaintIndents(false);
-        d_hl = new OberonPainter2( document() );
+        d_hl = new OberonPainter2(this);
+        d_hl->addBuiltIns();
+        d_hl->setDocument(document());
         updateTabWidth();
         QSettings set;
         if( !set.contains("CodeEditor/Font") )
         {
-            QFont monospace("Monospace",9);
+            QFont monospace("Monospace");
             if( !monospace.exactMatch() )
-            {
-                monospace = QFont("DejaVu Sans Mono",9);
-                monospace.setStyleName("Book");
-            }
+                monospace = QFont("DejaVu Sans Mono");
+            monospace.setPointSizeF(10.5);
             setFont(monospace);
         }
     }
@@ -107,13 +108,12 @@ public:
 
     Ide* d_ide;
     OberonPainter2* d_hl;
-    Project* d_pro;
+    Project2* d_pro;
     int dbgRow, dbgCol;
 
     void setExt( bool on )
     {
 #if 0
-        // TODO
         for( int i = Builtin::ABS; i < Builtin::Max; i++ )
             d_hl->addBuiltIn(Builtin::name[i]);
         for( int i = BasicType::Nil; i <= BasicType::Max; i++ )
@@ -170,7 +170,7 @@ public:
             errorFormat.setUnderlineColor(Qt::magenta);
             for( int i = 0; i < d_pro->getErrors().size(); i++ )
             {
-                const Project::Error& e = d_pro->getErrors().at(i);
+                const Project2::Error& e = d_pro->getErrors().at(i);
                 if( e.path != getPath() )
                     continue;
                 QTextCursor c( document()->findBlockByNumber(e.pos.d_row - 1) );
@@ -216,11 +216,8 @@ public:
                     decl = imp.resolved;
                 }else if( decl->kind == Declaration::Procedure )
                 {
-#if 0
-                    // TODO
-                    if( decl->mode == Declaration::Receiver && decl->super )
+                    if( decl->receiver && decl->super )
                         decl = decl->super;
-#endif
                 }
                 d_ide->showEditor( decl, false, true );
                 //setCursorPosition( sym->pos.d_row - 1, sym->pos.d_col - 1, true );
@@ -308,11 +305,11 @@ static void report(QtMsgType type, const QString& message )
             // NOP s_this->logMessage(QLatin1String("INF: ") + message);
             break;
         case QtWarningMsg:
-            // TODO s_this->logMessage(QLatin1String("WRN: ") + message);
+            s_this->logMessage(QLatin1String("WRN: ") + message);
             break;
         case QtCriticalMsg:
         case QtFatalMsg:
-            // TODO s_this->logMessage(QLatin1String("ERR: ") + message, true);
+            s_this->logMessage(QLatin1String("ERR: ") + message, true);
             break;
         }
     }
@@ -325,11 +322,19 @@ void messageHander(QtMsgType type, const QMessageLogContext& ctx, const QString&
     report(type,message);
 }
 
+static void log( const QString& msg )
+{
+    if( s_this )
+        s_this->logMessage(msg);
+}
+
 Ide::Ide(QWidget *parent)
     : QMainWindow(parent),d_lock(false),d_filesDirty(false),d_pushBackLock(false),
       d_lock2(false),d_lock3(false),d_lock4(false),d_curModule(0)
 {
     s_this = this;
+
+    d_pro = new Project2(this);
 
     d_tab = new DocTab(this);
     d_tab->setCloserIcon( ":/images/close.png" );
@@ -393,7 +398,7 @@ void Ide::loadFile(const QString& path)
 {
     QFileInfo info(path);
 
-    if( info.isDir() && info.suffix() != ".lnpro" )
+    if( info.isDir() && info.suffix() != ".obpro" )
     {
         d_pro->initializeFromDir( path );
     }else
@@ -408,6 +413,10 @@ void Ide::loadFile(const QString& path)
     onCompile();
 }
 
+void Ide::logMessage(const QString& str, bool err)
+{
+    // TODO d_term->printText(str,err);
+}
 
 void Ide::closeEvent(QCloseEvent* event)
 {
@@ -416,6 +425,8 @@ void Ide::closeEvent(QCloseEvent* event)
     const bool ok = checkSaved( tr("Quit Application"));
     event->setAccepted(ok);
 }
+
+
 
 void Ide::createMods()
 {
@@ -552,13 +563,6 @@ void Ide::createMenu()
     //pop->addCommand( "File System Root...", this, SLOT( onWorkingDir() ) );
     pop->addSeparator();
     pop->addCommand( "Compile", this, SLOT(onCompile()), tr("CTRL+T"), false );
-    pop->addCommand( "Compile && Generate", this, SLOT(onGenerate()), tr("CTRL+SHIFT+T"), false );
-    pop->addCommand( "JIT Enabled", this, SLOT(onJitEnabled()) );
-    pop->addCommand( "Restart LuaJIT", this, SLOT(onRestartLua()), tr("CTRL+SHIFT+R"), false );
-    pop->addCommand( "Set Command...", this, SLOT(onRunCommand()) );
-    pop->addCommand( "Set Arguments...", this, SLOT( onSetArguments()) );
-    pop->addCommand( "Run on LuaJIT", this, SLOT(onRun()), tr("CTRL+R"), false );
-    addDebugMenu(pop);
     addTopCommands(pop);
 
     new Gui::AutoShortcut( tr("CTRL+O"), this, this, SLOT(onOpenPro()) );
@@ -566,14 +570,9 @@ void Ide::createMenu()
     new Gui::AutoShortcut( tr("CTRL+SHIFT+N"), this, this, SLOT(onNewModule()) );
     new Gui::AutoShortcut( tr("CTRL+SHIFT+S"), this, this, SLOT(onSavePro()) );
     new Gui::AutoShortcut( tr("CTRL+S"), this, this, SLOT(onSaveFile()) );
-    new Gui::AutoShortcut( tr("CTRL+R"), this, this, SLOT(onRun()) );
-    new Gui::AutoShortcut( tr("CTRL+SHIFT+R"), this, this, SLOT(onRestartLua()) );
     new Gui::AutoShortcut( tr("CTRL+T"), this, this, SLOT(onCompile()) );
-    new Gui::AutoShortcut( tr("CTRL+SHIFT+T"), this, this, SLOT(onGenerate()) );
     new Gui::AutoShortcut( tr(OBN_GOBACK_SC), this, this, SLOT(handleGoBack()) );
     new Gui::AutoShortcut( tr(OBN_GOFWD_SC), this, this, SLOT(handleGoForward()) );
-    new Gui::AutoShortcut( tr(OBN_TOGBP_SC), this, this, SLOT(onToggleBreakPt()) );
-    new Gui::AutoShortcut( tr(OBN_ENDBG_SC), this, this, SLOT(onEnableDebug()) );
 }
 
 void Ide::createMenuBar()
@@ -587,9 +586,6 @@ void Ide::createMenuBar()
     pop->addCommand( "Save", this, SLOT(onSaveFile()), tr("CTRL+S"), false );
     pop->addCommand( tr("Close file"), d_tab, SLOT(onCloseDoc()), tr("CTRL+W") );
     pop->addCommand( tr("Close all"), d_tab, SLOT(onCloseAll()) );
-    pop->addSeparator();
-    pop->addCommand( "Export current bytecode...", this, SLOT(onExportBc()) );
-    pop->addCommand( "Export all bytecode...", this, SLOT(onExportAllBc()) );
     pop->addSeparator();
     pop->addAutoCommand( "Print...", SLOT(handlePrint()), tr("CTRL+P"), true );
     pop->addAutoCommand( "Export PDF...", SLOT(handleExportPdf()), tr("CTRL+SHIFT+P"), true );
@@ -624,21 +620,8 @@ void Ide::createMenuBar()
     pop->addCommand( "Set Configuration Variables...", this, SLOT( onSetOptions()) );
     //pop->addCommand( "File System Root...", this, SLOT( onWorkingDir() ) );
 
-    pop = new Gui::AutoMenu( tr("Build && Run"), this );
+    pop = new Gui::AutoMenu( tr("Build"), this );
     pop->addCommand( "Compile", this, SLOT(onCompile()), tr("CTRL+T"), false );
-    pop->addCommand( "Compile && Generate", this, SLOT(onGenerate()), tr("CTRL+SHIFT+T"), false );
-    pop->addCommand( "JIT Enabled", this, SLOT(onJitEnabled()) );
-    pop->addCommand( "Restart LuaJIT", this, SLOT(onRestartLua()), tr("CTRL+SHIFT+R"), false );
-    pop->addCommand( "Set Command...", this, SLOT(onRunCommand()) );
-    pop->addCommand( "Set Arguments...", this, SLOT( onSetArguments()) );
-    pop->addCommand( "Run on LuaJIT", this, SLOT(onRun()), tr("CTRL+R"), false );
-
-    pop = new Gui::AutoMenu( tr("Debug"), this );
-    pop->addCommand( "Enable Debugging", this, SLOT(onEnableDebug()),tr(OBN_ENDBG_SC), false );
-    pop->addCommand( "Row/Column mode", this, SLOT(onRowColMode()) );
-    pop->addCommand( "Bytecode mode", this, SLOT(onBcDebug()) );
-    pop->addCommand( "Toggle Breakpoint", this, SLOT(onToggleBreakPt()), tr(OBN_TOGBP_SC), false);
-
 
     pop = new Gui::AutoMenu( tr("Window"), this );
     pop->addCommand( tr("Next Tab"), d_tab, SLOT(onDocSelect()), tr(OBN_NEXTDOC_SC) );
@@ -693,34 +676,10 @@ void Ide::onSetOptions()
     d_pro->setOptions(l);
 }
 
-void Ide::onSetArguments()
-{
-    ENABLED_IF(true);
-
-    QStringList l = d_pro->getArguments();
-
-    bool ok;
-    const QString args = QInputDialog::getMultiLineText(this,tr("Set Arguments"),
-                                                           tr("Please enter an argument per line:"),
-                                                           l.join('\n'), &ok );
-    if( !ok )
-        return;
-
-    l = args.split('\n');
-
-    d_pro->setArguments(l);
-}
-
 void Ide::onCompile()
 {
     ENABLED_IF(true);
     compile();
-}
-
-void Ide::onGenerate()
-{
-    ENABLED_IF(true);
-    compile(true);
 }
 
 void Ide::onNewPro()
@@ -733,15 +692,15 @@ void Ide::onNewPro()
     // we need a path up front because this path is also the first root path to the source code
     QString fileName = QFileDialog::getSaveFileName(this, tr("New Project"),
                                                           QFileInfo(d_pro->getProjectPath()).absolutePath(),
-                                                          tr("Luon Project (*.lnpro)") );
+                                                          tr("Oberon Project (*.obpro)") );
 
     if (fileName.isEmpty())
         return;
 
     QDir::setCurrent(QFileInfo(fileName).absolutePath());
 
-    if( !fileName.endsWith(".lnpro",Qt::CaseInsensitive ) )
-        fileName += ".lnpro";
+    if( !fileName.endsWith(".obpro",Qt::CaseInsensitive ) )
+        fileName += ".obpro";
 
     d_pro->createNew();
     d_tab->onCloseAll();
@@ -760,7 +719,7 @@ void Ide::onOpenPro()
         return;
 
     const QString fileName = QFileDialog::getOpenFileName(this, tr("Open Project"),QString(),
-                                                          tr("Luon Project (*.lnpro)") );
+                                                          tr("Oberon Project (*.obpro)") );
     if (fileName.isEmpty())
         return;
 
@@ -789,7 +748,7 @@ void Ide::onSaveFile()
     ENABLED_IF( edit && edit->isModified() );
 
     edit->saveToFile( edit->getPath() );
-    Project::File* f = d_pro->findFile( edit->getPath() );
+    Project2::File* f = d_pro->findFile( edit->getPath() );
     if( f )
         f->d_cache.clear();
 }
@@ -800,15 +759,15 @@ void Ide::onSaveAs()
 
     QString fileName = QFileDialog::getSaveFileName(this, tr("Save Project"),
                                                           QFileInfo(d_pro->getProjectPath()).absolutePath(),
-                                                          tr("Luon Project (*.lnpro)") );
+                                                          tr("Oberon Project (*.obpro)") );
 
     if (fileName.isEmpty())
         return;
 
     QDir::setCurrent(QFileInfo(fileName).absolutePath());
 
-    if( !fileName.endsWith(".lnpro",Qt::CaseInsensitive ) )
-        fileName += ".lnpro";
+    if( !fileName.endsWith(".obpro",Qt::CaseInsensitive ) )
+        fileName += ".obpro";
 
     d_pro->saveTo(fileName);
     onCaption();
@@ -921,7 +880,7 @@ void Ide::onTabChanged()
 
     if( !path.isEmpty() )
     {
-        Project::File* f = d_pro->findFile(path);
+        Project2::File* f = d_pro->findFile(path);
         if( f )
         {
             fillModule(f->d_mod);
@@ -949,7 +908,7 @@ void Ide::onEditorChanged()
         if( e->isModified() )
             d_filesDirty = true;
         const QString path = d_tab->getDoc(i).toString();
-        Project::File* f = d_pro->findFile(path);
+        Project2::File* f = d_pro->findFile(path);
         QString name;
         if( f && f->d_mod )
             name = f->d_mod->name;
@@ -971,7 +930,7 @@ void Ide::onErrorsDblClicked()
 void Ide::onErrors()
 {
     d_errs->clear();
-    QList<Project::Error> errs = d_pro->getErrors();
+    QList<Project2::Error> errs = d_pro->getErrors();
 
     for( int i = 0; i < errs.size(); i++ )
     {
@@ -984,7 +943,7 @@ void Ide::onErrors()
         else
             item->setIcon(0, QPixmap(":/images/exclamation-circle.png") );
 #endif
-        Project::File* f = d_pro->findFile(errs[i].path);
+        Project2::File* f = d_pro->findFile(errs[i].path);
         if( f && f->d_mod )
             item->setText(0, f->d_mod->name );
         else
@@ -1036,12 +995,24 @@ void Ide::onAddFiles()
     const QStringList files = QFileDialog::getOpenFileNames(this,tr("Add Modules"),QString(),filter );
     foreach( const QString& f, files )
     {
-        if( !d_pro->addFile(f,QByteArray()) ) // TODO
+        if( !d_pro->addFile(f,path) )
             qWarning() << "cannot add module" << f;
     }
     compile();
 }
 
+static bool isValidIdent( const QString& name )
+{
+    Q_ASSERT(!name.isEmpty());
+    if( !name[0].isLetter() || name[0].unicode() > 255 )
+        return false;
+    for( int i = 1; i < name.size(); i++ )
+    {
+        if( !name[0].isLetterOrNumber() || name[0].unicode() > 255 )
+            return false;
+    }
+    return true;
+}
 void Ide::onNewModule()
 {
     ENABLED_IF(true);
@@ -1052,17 +1023,17 @@ void Ide::onNewModule()
     if( sel.size() == 1 && sel.first()->type() == 1 )
         path = sel.first()->text(0).toLatin1().split('.');
 
-    const QByteArray name = QInputDialog::getText(this,tr("New Module"), tr("Enter a unique module name:") ).toLatin1();
+    const QString name = QInputDialog::getText(this,tr("New Module"), tr("Enter a unique module name:") ).toLatin1();
     if( name.isEmpty() )
         return;
 
-    if( !Lexer::isValidIdent(name) )
+    if( !isValidIdent(name) )
     {
-        QMessageBox::critical(this,tr("New Module"), tr("'%1' is not a valid module name").arg(name.constData()) );
+        QMessageBox::critical(this,tr("New Module"), tr("'%1' is not a valid module name").arg(name) );
         return;
     }
     QDir dir;
-    const Project::FileGroup* fg = d_pro->findFileGroup(path);
+    const Project2::FileGroup* fg = d_pro->findFileGroup(path);
     for( int i = 0; i < fg->d_files.size(); i++ )
     {
         if( i == 0 )
@@ -1092,10 +1063,10 @@ void Ide::onNewModule()
         return;
     }
     f.write("module ");
-    f.write(name);
+    f.write(name.toUtf8());
     f.write("\n\n\n");
     f.write("end ");
-    f.write(name);
+    f.write(name.toUtf8());
     f.write("\n");
     f.close();
 
@@ -1144,7 +1115,7 @@ void Ide::onRemoveFile()
 {
     ENABLED_IF( d_mods->currentItem() && d_mods->currentItem()->type() == 0 );
 
-    Project::File* f = d_mods->currentItem()->data(0,Qt::UserRole).value<Project::File*>();
+    Project2::File* f = d_mods->currentItem()->data(0,Qt::UserRole).value<Project2::File*>();
     if( f == 0 )
         return;
 
@@ -1210,7 +1181,7 @@ bool Ide::checkSaved(const QString& title)
                 return d_pro->save();
             else
             {
-                const QString path = QFileDialog::getSaveFileName( this, title, QString(), "Luon Project (*.lnpro)" );
+                const QString path = QFileDialog::getSaveFileName( this, title, QString(), "Oberon Project (*.obpro)" );
                 if( path.isEmpty() )
                     return false;
                 QDir::setCurrent(QFileInfo(path).absolutePath());
@@ -1226,12 +1197,12 @@ bool Ide::checkSaved(const QString& title)
     return true;
 }
 
-bool Ide::compile(bool doGenerate )
+bool Ide::compile()
 {
     for( int i = 0; i < d_tab->count(); i++ )
     {
         Editor* e = static_cast<Editor*>( d_tab->widget(i) );
-        Project::File* f = d_pro->findFile( e->getPath() );
+        Project2::File* f = d_pro->findFile( e->getPath() );
         if( f == 0 )
             continue;
         if( e->isModified() )
@@ -1239,7 +1210,7 @@ bool Ide::compile(bool doGenerate )
         else
             f->d_cache.clear();
     }
-    const bool res = d_pro->compile(doGenerate);
+    d_pro->parse();
     onErrors();
     fillMods();
     fillModule(0);
@@ -1249,7 +1220,7 @@ bool Ide::compile(bool doGenerate )
     return true;
 }
 
-static bool sortNamed( const Project::File* lhs, const Project::File* rhs )
+static bool sortNamed( const Project2::File* lhs, const Project2::File* rhs )
 {
     QByteArray l;
     l = lhs->d_name;
@@ -1258,19 +1229,19 @@ static bool sortNamed( const Project::File* lhs, const Project::File* rhs )
     return l.toLower() < r.toLower();
 }
 
-typedef QPair<QByteArray,QList<Project::File*> > Group;
+typedef QPair<QByteArray,QList<Project2::File*> > Group;
 
 static bool sortNamed1( const Group& lhs, const Group& rhs )
 {
     return lhs.first.toLower() < rhs.first.toLower();
 }
 
-typedef QList<Project::File*> ModuleSort;
+typedef QList<Project2::File*> ModuleSort;
 
 template<class T>
 static void fillModTree( T* parent, const ModuleSort& mods )
 {
-    foreach( Project::File* m, mods )
+    foreach( Project2::File* m, mods )
     {
         QTreeWidgetItem* item = new QTreeWidgetItem(parent);
         if( m->d_mod )
@@ -1292,10 +1263,10 @@ void Ide::fillMods()
 {
     d_mods->clear();
 
-    const Project::FileGroups& paths = d_pro->getFileGroups();
+    const Project2::FileGroups& paths = d_pro->getFileGroups();
     typedef QList<Group> Sort1;
     Sort1 sort1;
-    foreach( const Project::FileGroup& fg, paths )
+    foreach( const Project2::FileGroup& fg, paths )
         sort1.append( qMakePair( fg.d_package.join('.'), fg.d_files ) );
     std::sort( sort1.begin(), sort1.end(), sortNamed1 );
 
@@ -1310,7 +1281,7 @@ void Ide::fillMods()
             item->setIcon(0, QPixmap(":/images/folder.png") );
         }
 
-        const QList<Project::File*>& files = sort1[j].second;
+        const QList<Project2::File*>& files = sort1[j].second;
         ModuleSort sort;
         for( int i = 0; i < files.size(); i++ )
             sort << files[i];
@@ -1340,7 +1311,7 @@ void Ide::addTopCommands(Gui::AutoMenu* pop)
 Ide::Editor* Ide::showEditor(const QString& path, int row, int col, bool setMarker, bool center )
 {
     QString filePath = path;
-    Project::File* f = d_pro->findFile(path);
+    Project2::File* f = d_pro->findFile(path);
     if( f == 0 )
         return 0;
     filePath = f->d_filePath;
@@ -1362,7 +1333,6 @@ Ide::Editor* Ide::showEditor(const QString& path, int row, int col, bool setMark
 
         edit->setExt(true);
         edit->loadFromFile(filePath);
-
 
         d_tab->addDoc(edit,filePath);
         onEditorChanged();
@@ -1403,9 +1373,6 @@ void Ide::createMenu(Ide::Editor* edit)
     pop->addCommand( "Save", this, SLOT(onSaveFile()), tr("CTRL+S"), false );
     pop->addSeparator();
     pop->addCommand( "Compile", this, SLOT(onCompile()), tr("CTRL+T"), false );
-    pop->addCommand( "Run on LuaJIT", this, SLOT(onRun()), tr("CTRL+R"), false );
-    pop->addSeparator();
-    pop->addCommand( "Export current bytecode...", this, SLOT(onExportBc()) );
     pop->addSeparator();
     pop->addCommand( "Undo", edit, SLOT(handleEditUndo()), tr("CTRL+Z"), true );
     pop->addCommand( "Redo", edit, SLOT(handleEditRedo()), tr("CTRL+Y"), true );
@@ -1512,7 +1479,7 @@ static inline QString declKindName(Declaration* decl)
     case Declaration::TypeDecl:
         return "Type";
     case Declaration::ConstDecl:
-         return "Const";
+        return "Const";
     case Declaration::Import:
         return "Import";
     case Declaration::Builtin:
@@ -1532,7 +1499,7 @@ void Ide::fillXrefForSym(Symbol* sym, Declaration* module)
     Declaration* decl = sym->decl;
     Q_ASSERT( decl != 0 );
 
-    Project::UsageByMod usage = d_pro->getUsage(decl);
+    Project2::UsageByMod usage = d_pro->getUsage(decl);
 
     QFont f = d_xref->font();
     f.setBold(true);
@@ -1621,81 +1588,20 @@ Declaration*Ide::moduleOfCurrentEditor()
     Editor* edit = static_cast<Editor*>( d_tab->getCurrentTab() );
     if( edit == 0 )
         return 0;
-    Project::File* f = d_pro->findFile(edit->getPath());
+    Project2::File* f = d_pro->findFile(edit->getPath());
     if( f == 0 )
         return 0;
     return f->d_mod;
 }
 
-static inline Type* derefed( Type* type )
-{
-    if( type == 0 )
-        return 0;
-    return type->deref();
-}
-
-template <class T>
-static inline void createArrayElems( QTreeWidgetItem* parent, const void* ptr,
-                                     int bytecount, int numOfFetchedElems, char format = 0 )
-{
-    const int count = bytecount / sizeof(T);
-    parent->setText(1, QString("<array length %1>").arg(count) );
-    const T* arr = (const T*)ptr;
-    for( int i = 0; i < qMin(count,numOfFetchedElems); i++ )
-    {
-        QTreeWidgetItem* item = new QTreeWidgetItem(parent);
-        item->setText(0,QString::number(i));
-        switch(format)
-        {
-        case 'b':
-            item->setText(1, arr[i] ? "true" : "false" );
-            break;
-        case 's':
-            item->setText(1,QString("{%1}").arg((quint32)arr[i],32,2,QChar('0')));
-            break;
-        default:
-            item->setText(1,QString::number(arr[i]));
-            break;
-        }
-    }
-}
-
-static QString nameOf( Type* r, bool frame = false )
-{
-    QString name;
-    Declaration* decl = r->decl;
-    if( decl )
-        name = decl->scopedName(true);
-    else if( frame )
-        name = "<record>";
-    else
-        name = "record";
-    return name;
-}
-
-static Type* lookupType(Declaration* scope, const QByteArrayList& path)
-{
-    int i = 0;
-    while( i < path.size() && scope )
-    {
-        const QByteArray name = Token::getSymbol(path[i]);
-        scope = scope->find(name,false);
-        i++;
-    }
-    if( scope && scope->kind == Declaration::TypeDecl )
-        return scope->type();
-    else
-        return 0;
-}
-
 static void fillModItems(QTreeWidgetItem* item, Declaration* n, Declaration* p, Type* r,
-                         bool sort, QHash<Declaration*,QTreeWidgetItem*>& idx , Project* pro);
+                         bool sort, QHash<Declaration*,QTreeWidgetItem*>& idx , Project2* pro);
 
 static void fillRecord(QTreeWidgetItem* item, Declaration* n, Type* r, bool sort,
-                       QHash<Declaration*,QTreeWidgetItem*>& idx, Project* pro )
+                       QHash<Declaration*,QTreeWidgetItem*>& idx, Project2* pro )
 {
     fillModItems(item,n, 0, r, sort, idx, pro);
-    if( r->base )
+    if( r->type() )
         item->setText(0, item->text(0) + " ⇑");
     if( n->hasSubs )
     {
@@ -1707,11 +1613,11 @@ static void fillRecord(QTreeWidgetItem* item, Declaration* n, Type* r, bool sort
 
 template<class T>
 static void createModItem(T* parent, Declaration* n, Type* t, bool nonbound, bool sort,
-                          QHash<Declaration*,QTreeWidgetItem*>& idx, Project* pro )
+                          QHash<Declaration*,QTreeWidgetItem*>& idx, Project2* pro )
 {
     bool isAlias = false;
     if( t == 0 )
-        t = n->type;
+        t = n->type();
     else
         isAlias = true;
     if( t == 0 )
@@ -1761,7 +1667,7 @@ static void createModItem(T* parent, Declaration* n, Type* t, bool nonbound, boo
 
 template <class T>
 static void walkModItems(T* parent, Declaration* p, Type* r, bool sort,
-                         QHash<Declaration*,QTreeWidgetItem*>& idx, Project* pro)
+                         QHash<Declaration*,QTreeWidgetItem*>& idx, Project2* pro)
 {
     typedef QMultiMap<QByteArray,Declaration*> Sort;
     if( p && sort)
@@ -1807,7 +1713,7 @@ static void walkModItems(T* parent, Declaration* p, Type* r, bool sort,
 }
 
 static void fillModItems( QTreeWidgetItem* item, Declaration* n, Declaration* p, Type* r,
-                          bool sort, QHash<Declaration*,QTreeWidgetItem*>& idx, Project* pro )
+                          bool sort, QHash<Declaration*,QTreeWidgetItem*>& idx, Project2* pro )
 {
     const bool pub = n->visi > Declaration::Private;
     item->setText(0,n->name);
@@ -1816,7 +1722,7 @@ static void fillModItems( QTreeWidgetItem* item, Declaration* n, Declaration* p,
     switch( n->kind )
     {
     case Declaration::TypeDecl:
-        if( r && r->base == 0 && r->subs.isEmpty() )
+        if( r && r->type() == 0 && r->subs.isEmpty() )
             item->setIcon(0, QPixmap( pub ? ":/images/struct.png" : ":/images/struct_priv.png" ) );
         else if( r == 0 && p == 0 )
             item->setIcon(0, QPixmap( pub ? ":/images/alias.png" : ":/images/alias_priv.png" ) );
@@ -1842,7 +1748,7 @@ void Ide::fillModule(Declaration* m)
 }
 
 template<class T>
-static QTreeWidgetItem* fillHierProc( T* parent, Declaration* p, Declaration* ref, Project* pro )
+static QTreeWidgetItem* fillHierProc( T* parent, Declaration* p, Declaration* ref, Project2* pro )
 {
     QTreeWidgetItem* item = new QTreeWidgetItem(parent);
     Q_ASSERT( p->receiver && p->link && p->link->receiver && p->link->type() );
@@ -1867,7 +1773,7 @@ static QTreeWidgetItem* fillHierProc( T* parent, Declaration* p, Declaration* re
 }
 
 template<class T>
-static QTreeWidgetItem* fillHierClass( T* parent, Declaration* n, Type* p, Type* ref, Project* pro )
+static QTreeWidgetItem* fillHierClass( T* parent, Declaration* n, Type* p, Type* ref, Project2* pro )
 {
     QTreeWidgetItem* item = new QTreeWidgetItem(parent);
     Declaration* name = p->decl;
@@ -1915,8 +1821,8 @@ void Ide::fillHier(Declaration* n)
                 Type* r = n->type();
                 Type* r0 = r;
                 d_hierTitle->setText( QString("Inheritance of class '%1'").arg( n->name.constData() ) );
-                while( r->base )
-                    r = r->base;
+                while( r->type() )
+                    r = r->type();
                 ref = fillHierClass( d_hier, n, r, r0, d_pro );
                 Q_ASSERT( ref );
             }
@@ -1944,6 +1850,15 @@ void Ide::fillHier(Declaration* n)
         ref->setExpanded(true);
         d_hier->scrollToItem(ref,QAbstractItemView::PositionAtCenter);
         d_hier->setCurrentItem(ref);
+    }
+}
+
+void Ide::removePosMarkers()
+{
+    for( int i = 0; i < d_tab->count(); i++ )
+    {
+        Editor* e = static_cast<Editor*>( d_tab->widget(i) );
+        e->setPositionMarker(-1);
     }
 }
 
@@ -2025,9 +1940,7 @@ void Ide::clear()
     d_mod->clear();
     d_hier->clear();
     d_modIdx.clear();
-    d_stack->clear();
     d_scopes.clear();
-    d_locals->clear();
     d_xrefTitle->clear();
     d_modTitle->clear();
     d_hierTitle->clear();
@@ -2042,8 +1955,8 @@ void Ide::onAbout()
     QMessageBox::about( this, qApp->applicationName(),
       tr("<html>Release: %1   Date: %2<br><br>"
 
-      "Welcome to the Luon IDE.<br>"
-      "See <a href=\"https://github.com/rochus-keller/Luon\">"
+      "Welcome to the ActiveOberon IDE.<br>"
+      "See <a href=\"https://github.com/rochus-keller/ActiveOberon\">"
          "here</a> for more information.<br><br>"
 
       "Author: Rochus Keller, me@rochus-keller.ch<br><br>"
@@ -2058,14 +1971,30 @@ void Ide::onQt()
     QMessageBox::aboutQt(this,tr("About the Qt Framework") );
 }
 
+void Ide::onExpMod()
+{
+    ENABLED_IF( d_mods->currentItem() );
+
+    Declaration* m = d_mods->currentItem()->data(0,Qt::UserRole).value<Declaration*>();
+    if( m == 0 || m->kind != Declaration::Module )
+        return;
+
+    const QString path = QFileDialog::getSaveFileName( this, tr("Export Module"), m->getModuleFullName(true) + ".luon" );
+
+    if( path.isEmpty() )
+        return;
+    ModuleData md = m->data.value<ModuleData>();
+    // TODO d_pro->printTreeShaken( md.source, path );
+}
+
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
-    a.setApplicationName("Active Oberon IDE");
+    a.setApplicationName("ActiveOberon IDE");
     a.setApplicationVersion("0.1.");
-    a.setStyle("Fusion");    
+    a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 
 #ifdef QT_STATIC

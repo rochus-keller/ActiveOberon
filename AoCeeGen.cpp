@@ -358,6 +358,9 @@ bool CeeGen::generate(Ast::Declaration* module, QIODevice *header, QIODevice *bo
     hout << endl;
     hout << "#endif // " << guard;
 
+    // if we don't flush here we get "device not open" warnings
+    hout.flush();
+    bout.flush();
     return errors.isEmpty();
 }
 
@@ -2515,7 +2518,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
     case Builtin::ASSERT:
         if( a.size() < 1 || a.size() > 2 )
             return false;
-#if _DEBUG
+#ifdef _DEBUG
         out << "if(!";
         Expr(a[0], out,isConst);
         out << "){fprintf(stderr,\"assertion FAILED in %s:%d\\n\", __FILE__, __LINE__);fflush(stderr);}";
@@ -2904,8 +2907,19 @@ void CeeGen::liftedParam(QTextStream &out, Ast::Declaration *what, const QByteAr
 void CeeGen::variable(QTextStream &out, Ast::Declaration *var, bool body)
 {
     out << typePrefix2(var->type()) << typeRef(var->type()) << " " << qualident(var);
-    if( body && deref(var->type())->kind == Type::Pointer )
-        out << " = NULL";
+    if( body )
+    {
+        // the language report is unclear whether variables are initialized, but there are cases in OP2 which seem to assume so
+        Type* t = deref(var->type());
+        if( t->kind == Type::Pointer || t->kind == Type::NIL || t->kind == Type::Procedure )
+            out << " = NULL";
+        else if( t->kind < Type::MaxBasicType )
+            out << " = 0";
+        else if( t->kind == Type::Array && t->expr )
+            out << " = {0}";
+        else if( t->kind == Type::Record || t->kind == Type::Object )
+            out << " = {0}";
+    }
 }
 
 void CeeGen::procHeader(Ast::Declaration *proc, bool header)
