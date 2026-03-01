@@ -563,6 +563,7 @@ void Ide::createMenu()
     //pop->addCommand( "File System Root...", this, SLOT( onWorkingDir() ) );
     pop->addSeparator();
     pop->addCommand( "Compile", this, SLOT(onCompile()), tr("CTRL+T"), false );
+    pop->addCommand( "Export C99...", this, SLOT(onExportC()) );
     addTopCommands(pop);
 
     new Gui::AutoShortcut( tr("CTRL+O"), this, this, SLOT(onOpenPro()) );
@@ -622,6 +623,8 @@ void Ide::createMenuBar()
 
     pop = new Gui::AutoMenu( tr("Build"), this );
     pop->addCommand( "Compile", this, SLOT(onCompile()), tr("CTRL+T"), false );
+    pop->addCommand( "Export C99...", this, SLOT(onExportC()) );
+
 
     pop = new Gui::AutoMenu( tr("Window"), this );
     pop->addCommand( tr("Next Tab"), d_tab, SLOT(onDocSelect()), tr(OBN_NEXTDOC_SC) );
@@ -1987,13 +1990,30 @@ void Ide::onExpMod()
     // TODO d_pro->printTreeShaken( md.source, path );
 }
 
+void Ide::onExportC()
+{
+    ENABLED_IF( d_pro->getErrors().isEmpty() );
+
+    const QString dirPath = QFileDialog::getExistingDirectory(this, tr("Save C"), d_pro->getBuildDir(true) );
+
+    if (dirPath.isEmpty())
+        return;
+
+    if( !compile() ) // otherwise allocated flag is already set after one generator run
+        return;
+
+    if( !d_pro->generateC(dirPath) )
+        QMessageBox::critical(this,tr("Save C"),tr("There was an error when generating C; "
+                                                   "see Output window for more information"));
+}
+
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("ActiveOberon IDE");
-    a.setApplicationVersion("0.1.");
+    a.setApplicationVersion("0.1.1");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 
