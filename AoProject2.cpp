@@ -174,7 +174,8 @@ bool Project2::addFile(const QString& filePath, const QByteArrayList& package)
     fg.d_files.append(ref.data());
     ref->d_group = &fg;
     ref->d_filePath = filePath;
-    ref->d_name = QFileInfo(filePath).baseName().toUtf8();
+    if( !Lexer::findModuleName(filePath, ref->d_name) )
+        ref->d_name = QFileInfo(filePath).baseName().toUtf8();
     d_files.insert(filePath,ref);
     touch();
     return true;

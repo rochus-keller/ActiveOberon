@@ -42,6 +42,7 @@ namespace Ao
         QList<Token> tokens( const QString& code );
         QList<Token> tokens( const QByteArray& code, const QString& path = QString() );
         quint32 getSloc() const { return d_sloc; }
+
         static void parseComment( const QByteArray& str, int& pos, int& level );
 
         static bool isOberonFormat(QIODevice*);
@@ -50,6 +51,9 @@ namespace Ao
         static bool isV4File( QIODevice* );
         static QByteArray readV4Text(QIODevice*);
         static bool skipBom( QIODevice* );
+        static bool findModuleName(QIODevice*, QByteArray& name);
+        static bool findModuleName(const QString& path, QByteArray& name);
+
     protected:
         Token nextTokenImp();
         int skipWhiteSpace();

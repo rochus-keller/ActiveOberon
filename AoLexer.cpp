@@ -762,6 +762,38 @@ bool Lexer::skipBom(QIODevice* in)
         return false;
 }
 
+bool Lexer::findModuleName(QIODevice * in, QByteArray &name)
+{
+    Lexer lex;
+    lex.setIgnoreComments(true);
+    lex.setStream(in, "");
+    Token t = lex.nextToken();
+    while(t.isValid())
+    {
+        if( t.d_type == Tok_MODULE )
+        {
+            t = lex.nextToken();
+            if( t.d_type == Tok_ident )
+            {
+                name = t.d_val;
+                return true;
+            }else
+                return false;
+        }
+        t = lex.nextToken();
+    }
+    return false;
+}
+
+bool Lexer::findModuleName(const QString &path, QByteArray &name)
+{
+    QFile f(path);
+    if( !f.open(QFile::ReadOnly) )
+        return false;
+    else
+        return findModuleName( &f, name);
+}
+
 // Note: -4095 in S4.Texts corresponds to 0xf0 0x01
 //          S3.Texts: OldTextBlockId = 1X; OldTextSpex = 0F0X;
 // Oberon System 3 uses 0xf7 0x07

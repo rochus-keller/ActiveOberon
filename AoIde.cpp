@@ -206,7 +206,7 @@ public:
             QTextCursor cur = cursorForPosition(e->pos());
             Symbol* e = d_pro->findSymbolBySourcePos(
                         getPath(),cur.blockNumber() + 1,cur.positionInBlock() + 1);
-            if( e )
+            if( e && e->decl)
             {
                 Declaration* decl = e->decl;
                 d_ide->pushLocation( Ide::Location( getPath(), cur.blockNumber(), cur.positionInBlock(), verticalScrollBar()->value() ) );
@@ -237,7 +237,7 @@ public:
                         getPath(),cur.blockNumber() + 1,cur.positionInBlock() + 1);
             const bool alreadyArrow = !d_link.isEmpty();
             d_link.clear();
-            if( e )
+            if( e && e->decl)
             {
                 Declaration* sym = e->decl;
                 Q_ASSERT(sym);
@@ -1052,12 +1052,12 @@ void Ide::onNewModule()
         }
     }
 
-    QString filePath = QFileDialog::getSaveFileName(this,tr("New Module"), dir.absoluteFilePath(name + ".luon"),"*.luon");
+    QString filePath = QFileDialog::getSaveFileName(this,tr("New Module"), dir.absoluteFilePath(name + ".Mod"),"*.Mod");
     if( filePath.isEmpty() )
         return;
 
-    if( !filePath.toLower().endsWith(".luon") )
-        filePath += ".luon";
+    if( !filePath.toLower().endsWith(".Mod") )
+        filePath += ".Mod";
 
     QFile f(filePath);
     if( !f.open(QIODevice::WriteOnly) )
@@ -1982,7 +1982,7 @@ void Ide::onExpMod()
     if( m == 0 || m->kind != Declaration::Module )
         return;
 
-    const QString path = QFileDialog::getSaveFileName( this, tr("Export Module"), m->getModuleFullName(true) + ".luon" );
+    const QString path = QFileDialog::getSaveFileName( this, tr("Export Module"), m->getModuleFullName(true) + ".Mod" );
 
     if( path.isEmpty() )
         return;
@@ -2013,7 +2013,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("ActiveOberon IDE");
-    a.setApplicationVersion("0.1.1");
+    a.setApplicationVersion("0.1.3");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 
