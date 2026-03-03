@@ -405,6 +405,7 @@ namespace Ast
         void addTypeAlias(const QByteArray& name, Type*);
         void addBuiltin(const QByteArray& name, Builtin::Kind);
         void addConst(const QByteArray& name, quint8, const QVariant& = QVariant());
+        void addByteConst(const QByteArray& name, const QVariant& = QVariant());
     private:
         QList<Declaration*> scopes;
         static Declaration* globalScope;

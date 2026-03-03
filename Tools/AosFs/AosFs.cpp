@@ -27,6 +27,8 @@
 #include <QtCore/QVector>
 #include <QtCore/QByteArray>
 
+#include <QDir>
+
 // Constants from OFSAosFiles.Mod
 
 static const int DEBUG        = 0;
@@ -185,6 +187,15 @@ public:
     }
 
     bool createNew(const QString& path, qint32 blocks) {
+        // Pad the file size to QEMU's default CHS cylinder boundary
+        // 1 Cylinder = 16 heads * 63 sectors * 512 bytes = 516,096 bytes.
+        // 516,096 bytes is exactly 126 AosFS blocks (4096 bytes).
+        // Prevents QEMU from rounding down the apparent disk size and crashing Oberon.
+        qint32 remainder = blocks % 126;
+        if (remainder != 0) {
+            blocks += (126 - remainder);
+        }
+
         file.setFileName(path);
         if (!file.open(QIODevice::ReadWrite | QIODevice::Truncate)) {
             return false;
@@ -347,6 +358,239 @@ static void Search(Volume& vol, const FileName& name, DiskAdr& A) {
     }
 }
 
+static void insert(Volume& vol, const FileName& name, DiskAdr dpg0,
+                   bool& h, DirEntry& v, DiskAdr fad, DiskAdr& replacedFad) {
+    DirPage a;
+    if (!GetSector(vol, dpg0, &a)) return;
+
+    int L = 0, R = a.m;
+    while (L < R) {
+        int i = (L + R) / 2;
+        if (compareName(name, a.e[i].name) <= 0) R = i;
+        else L = i + 1;
+    }
+
+    replacedFad = 0;
+    if (R < a.m && compareName(name, a.e[R].name) == 0) {
+        replacedFad = a.e[R].adr;
+        a.e[R].adr = fad;
+        PutSector(vol, dpg0, &a); // replace
+    } else { // not on this page
+        DiskAdr dpg1 = (R == 0) ? a.p0 : a.e[R - 1].p;
+        DirEntry u;
+        if (dpg1 == 0) { // not in tree, insert
+            u.adr = fad; u.p = 0; h = true;
+            memcpy(&u.name, &name, sizeof(FileName));
+        } else {
+            insert(vol, name, dpg1, h, u, fad, replacedFad);
+        }
+
+        if (h) { // insert u to the left of e[R]
+            if (a.m < DirPgSize) {
+                h = false;
+                int i = a.m;
+                while (i > R) { a.e[i] = a.e[i - 1]; --i; }
+                a.e[R] = u;
+                a.m++;
+                PutSector(vol, dpg0, &a);
+            } else { // split page and assign the middle element to v
+                a.m = N; a.mark = DirMark;
+                DiskAdr newDpg;
+                AllocSector(vol, dpg0, newDpg);
+
+                DirPage newPage;
+                memset(&newPage, 0, sizeof(DirPage));
+                newPage.mark = DirMark;
+                newPage.m = N;
+
+                if (R < N) { // insert in left half
+                    v = a.e[N - 1];
+                    int i = N - 1;
+                    while (i > R) { a.e[i] = a.e[i - 1]; --i; }
+                    a.e[R] = u;
+                    PutSector(vol, dpg0, &a);
+
+                    i = 0;
+                    while (i < N) { newPage.e[i] = a.e[i + N]; ++i; }
+                } else { // insert in right half
+                    PutSector(vol, dpg0, &a);
+
+                    int i = 0;
+                    int R_adj = R - N;
+                    if (R_adj == 0) {
+                        v = u;
+                    } else {
+                        v = a.e[N];
+                        while (i < R_adj - 1) { newPage.e[i] = a.e[N + 1 + i]; ++i; }
+                        newPage.e[i] = u; ++i;
+                    }
+                    while (i < N) { newPage.e[i] = a.e[N + i]; ++i; }
+                }
+                newPage.p0 = v.p;
+                v.p = newDpg;
+                PutSector(vol, newDpg, &newPage);
+            }
+        }
+    }
+}
+
+static void Insert(Volume& vol, const FileName& name, DiskAdr fad, DiskAdr& replacedFad) {
+    bool h = false;
+    DirEntry U;
+    insert(vol, name, DirRootAdr, h, U, fad, replacedFad);
+    if (h) { // root overflow
+        DirPage a;
+        GetSector(vol, DirRootAdr, &a);
+
+        DiskAdr oldroot;
+        AllocSector(vol, DirRootAdr, oldroot);
+        PutSector(vol, oldroot, &a);
+
+        DirPage newRoot;
+        memset(&newRoot, 0, sizeof(DirPage));
+        newRoot.mark = DirMark;
+        newRoot.m = 1;
+        newRoot.p0 = oldroot;
+        newRoot.e[0] = U;
+        PutSector(vol, DirRootAdr, &newRoot);
+    }
+}
+
+static void underflow(Volume& vol, DirPage& c, DiskAdr dpg0, int s, bool& h) {
+    DirPage a, b;
+    DiskAdr dpg1;
+    GetSector(vol, dpg0, &a);
+
+    if (s < c.m) {
+        dpg1 = c.e[s].p;
+        GetSector(vol, dpg1, &b);
+        int k = (b.m - N + 1) / 2;
+        a.e[N - 1] = c.e[s];
+        a.e[N - 1].p = b.p0;
+        if (k > 0) {
+            int i = 0;
+            while (i < k - 1) { a.e[i + N] = b.e[i]; ++i; }
+            c.e[s] = b.e[i];
+            b.p0 = c.e[s].p;
+            c.e[s].p = dpg1;
+            b.m -= k;
+            i = 0;
+            while (i < b.m) { b.e[i] = b.e[i + k]; ++i; }
+            PutSector(vol, dpg1, &b);
+            a.m = N - 1 + k;
+            h = false;
+        } else {
+            int i = 0;
+            while (i < N) { a.e[i + N] = b.e[i]; ++i; }
+            i = s;
+            c.m--;
+            while (i < c.m) { c.e[i] = c.e[i + 1]; ++i; }
+            a.m = 2 * N;
+            h = c.m < N;
+            FreeSector(vol, dpg1);
+        }
+        PutSector(vol, dpg0, &a);
+    } else {
+        s--;
+        dpg1 = (s == 0) ? c.p0 : c.e[s - 1].p;
+        GetSector(vol, dpg1, &b);
+        int k = (b.m - N + 1) / 2;
+        if (k > 0) {
+            int i = N - 1;
+            while (i > 0) { --i; a.e[i + k] = a.e[i]; }
+            i = k - 1;
+            a.e[i] = c.e[s];
+            a.e[i].p = a.p0;
+            b.m -= k;
+            while (i > 0) { --i; a.e[i] = b.e[i + b.m + 1]; }
+            c.e[s] = b.e[b.m];
+            a.p0 = c.e[s].p;
+            c.e[s].p = dpg0;
+            a.m = N - 1 + k;
+            h = false;
+            PutSector(vol, dpg0, &a);
+        } else {
+            c.e[s].p = a.p0;
+            b.e[N] = c.e[s];
+            int i = 0;
+            while (i < N - 1) { b.e[i + N + 1] = a.e[i]; ++i; }
+            b.m = 2 * N;
+            c.m--;
+            h = c.m < N;
+            FreeSector(vol, dpg0);
+        }
+        PutSector(vol, dpg1, &b);
+    }
+}
+
+static void del(Volume& vol, DiskAdr dpg1, bool& h, DirPage& a, int R) {
+    DirPage b;
+    GetSector(vol, dpg1, &b);
+    DiskAdr dpg2 = b.e[b.m - 1].p;
+    if (dpg2 != 0) {
+        del(vol, dpg2, h, a, R);
+        if (h) {
+            underflow(vol, b, dpg2, b.m, h);
+            PutSector(vol, dpg1, &b);
+        }
+    } else {
+        b.e[b.m - 1].p = a.e[R].p;
+        a.e[R] = b.e[b.m - 1];
+        b.m--;
+        h = b.m < N;
+        PutSector(vol, dpg1, &b);
+    }
+}
+
+static void deleteNode(Volume& vol, const FileName& name, DiskAdr dpg0, bool& h, DiskAdr& fad) {
+    DirPage a;
+    if (!GetSector(vol, dpg0, &a)) return;
+
+    int L = 0, R = a.m;
+    while (L < R) {
+        int i = (L + R) / 2;
+        if (compareName(name, a.e[i].name) <= 0) R = i;
+        else L = i + 1;
+    }
+
+    DiskAdr dpg1 = (R == 0) ? a.p0 : a.e[R - 1].p;
+    if (R < a.m && compareName(name, a.e[R].name) == 0) {
+        fad = a.e[R].adr;
+        if (dpg1 == 0) {
+            a.m--;
+            h = a.m < N;
+            int i = R;
+            while (i < a.m) { a.e[i] = a.e[i + 1]; ++i; }
+        } else {
+            del(vol, dpg1, h, a, R);
+            if (h) underflow(vol, a, dpg1, R, h);
+        }
+        PutSector(vol, dpg0, &a);
+    } else if (dpg1 != 0) {
+        deleteNode(vol, name, dpg1, h, fad);
+        if (h) {
+            underflow(vol, a, dpg1, R, h);
+            PutSector(vol, dpg0, &a);
+        }
+    } else {
+        fad = 0;
+    }
+}
+
+static void DirDelete(Volume& vol, const FileName& name, DiskAdr& fad) {
+    bool h = false;
+    deleteNode(vol, name, DirRootAdr, h, fad);
+    if (h) { // root underflow
+        DirPage a;
+        GetSector(vol, DirRootAdr, &a);
+        if (a.m == 0 && a.p0 != 0) {
+            DiskAdr newroot = a.p0;
+            GetSector(vol, newroot, &a);
+            PutSector(vol, DirRootAdr, &a); // discard newroot
+            FreeSector(vol, newroot);
+        }
+    }
+}
 static void Check(const QString& s, FileName& name, int& res) {
     QByteArray ba = s.toUtf8();
     if (ba.isEmpty()) {
@@ -461,6 +705,8 @@ static File NewFile(FileSystem* fs, const FileName& name) {
     return f;
 }
 
+static void PurgeOnDisk(FileSystem* fs, DiskAdr hdadr);
+
 static bool writeHostFileIntoAos(File f, const QString& hostPath) {
     QFile host(hostPath);
     if (!host.open(QIODevice::ReadOnly)) return false;
@@ -517,6 +763,7 @@ static bool writeHostFileIntoAos(File f, const QString& hostPath) {
             // direct sector
             if (!AllocSector(vol, f->sechint, secAdr)) return false;
             f->sec.sec[pageIndex] = secAdr;
+            f->sechint = secAdr; // Update hint to keep contiguous allocation
         } else {
             // through super/sub indices
             if (!f->ext) {
@@ -536,6 +783,7 @@ static bool writeHostFileIntoAos(File f, const QString& hostPath) {
             if (!AllocSector(vol, f->sechint, secAdr)) return false;
             sub->sec.x[k] = secAdr;
             sub->mod = true;
+            f->sechint = secAdr; // Update hint
         }
 
         // zero-fill buffer to full sector
@@ -568,6 +816,7 @@ static bool writeHostFileIntoAos(File f, const QString& hostPath) {
             DiskAdr subAdr;
             if (!AllocSector(vol, f->sechint, subAdr)) return false;
             sub->adr = subAdr;
+            f->sechint = subAdr; // Update hint
             PutSector(vol, subAdr, &sub->sec);
             superSec.x[i] = subAdr;
         }
@@ -575,6 +824,7 @@ static bool writeHostFileIntoAos(File f, const QString& hostPath) {
         DiskAdr superAdr;
         if (!AllocSector(vol, f->sechint, superAdr)) return false;
         f->ext->adr = superAdr;
+        f->sechint = superAdr; // Update hint
         h.ext = superAdr;
         PutSector(vol, superAdr, &superSec);
     }
@@ -583,6 +833,13 @@ static bool writeHostFileIntoAos(File f, const QString& hostPath) {
     UpdateHeader(f, h);
     PutSector(vol, headerAdr, &h);
 
+    // Insert into the tree and safely overwrite collisions
+    DiskAdr replacedFad = 0;
+    Insert(vol, f->name, headerAdr, replacedFad);
+
+    if (replacedFad != 0 && replacedFad != headerAdr) {
+        PurgeOnDisk(f->fs, replacedFad); // Replaces existing file of same name
+    }
     return true;
 }
 
@@ -725,11 +982,10 @@ static void PurgeOnDisk(FileSystem* fs, DiskAdr hdadr) {
     }
 }
 
-// ---- Volume::rebuildUsedFromDir ----
-
 void Volume::rebuildUsedFromDir() {
     if (sizeBlocks <= 0) return;
     used.resize(sizeBlocks);
+    used.fill(false); // explicitly clear memory mapping
 
     // mark directory and files
     QVector<DiskAdr> stack;
@@ -790,17 +1046,65 @@ void Volume::rebuildUsedFromDir() {
 static bool formatVolume(FileSystem* fs) {
     Volume& vol = fs->vol;
     if (vol.size() < MinVolSize) return false;
+
+    // 1. Create the AosFS Boot Block (Block 0)
+    QByteArray blockZero(SS, 0);
+    unsigned char* boot = reinterpret_cast<unsigned char*>(blockZero.data());
+
+    // Oberon counts disk layout in 512-byte blocks.
+    // We reserve the first 4096 bytes (8 * 512-byte blocks) for the boot sector.
+    qint32 reservedBlocks = 8;
+
+    // The rest of the 4K blocks belong to the filesystem
+    qint32 fsSizeBlocks = vol.size() - 1;
+
+    // Offset 0x1F0: Reserved blocks before FS starts
+    boot[0x1F0] = (reservedBlocks & 0xFF);
+    boot[0x1F1] = ((reservedBlocks >> 8) & 0xFF);
+    boot[0x1F2] = ((reservedBlocks >> 16) & 0xFF);
+    boot[0x1F3] = ((reservedBlocks >> 24) & 0xFF);
+
+    // Offset 0x1F4: Size of the filesystem in 4K blocks
+    boot[0x1F4] = (fsSizeBlocks & 0xFF);
+    boot[0x1F5] = ((fsSizeBlocks >> 8) & 0xFF);
+    boot[0x1F6] = ((fsSizeBlocks >> 16) & 0xFF);
+    boot[0x1F7] = ((fsSizeBlocks >> 24) & 0xFF);
+
+    // Offset 0x1F8: "AOS!" Filesystem ID
+    boot[0x1F8] = 0x41; // 'A'
+    boot[0x1F9] = 0x4F; // 'O'
+    boot[0x1FA] = 0x53; // 'S'
+    boot[0x1FB] = 0x21; // '!'
+
+    // Offset 0x1FC: FS Version (1)
+    boot[0x1FC] = 1;
+
+    // Offset 0x1FD: Log2 of Sector Size (12, because 2^12 = 4096)
+    boot[0x1FD] = 12;
+
+    // Offset 0x1FE: Standard PC Boot Signature (0x55AA)
+    boot[0x1FE] = 0x55;
+    boot[0x1FF] = 0xAA;
+
+    // Write the boot metadata to physical block 0
+    if (!vol.putBlock(0, blockZero.constData())) return false;
+
+    // Create the Root Directory (Block 1)
     DirPage root;
     memset(&root, 0, sizeof(root));
     root.mark = DirMark;
     root.m    = 0;
     root.p0   = 0;
+
+    // DirRootAdr is 1*SF, which writes exactly to block 1
     if (!PutSector(vol, DirRootAdr, &root)) return false;
+
     vol.rebuildUsedFromDir();
     return true;
 }
 
-static void listVolume(FileSystem* fs, QTextStream& out) {
+typedef QList< QPair<QString,int> > Files;
+static void listVolume(FileSystem* fs, Files& out) {
     Volume& vol = fs->vol;
     QVector<DiskAdr> stack;
     stack.push_back(DirRootAdr);
@@ -822,17 +1126,26 @@ static void listVolume(FileSystem* fs, QTextStream& out) {
                     name.append(hd.name.name[k]);
                 qint64 size = (qint64)hd.aleng * SS +
                               (qint64)hd.bleng - HS;
-                out << name << "  " << size << " bytes\n";
+                out << qMakePair(name, size);
             }
             if (page.e[i].p != 0) stack.push_back(page.e[i].p);
         }
     }
 }
 
+static void listVolume(FileSystem* fs, QTextStream& out) {
+    Files files;
+    listVolume(fs, files);
+    qSort(files);
+    for( int i = 0; i < files.size(); i++ )
+        out << files[i].first << "  " << files[i].second << " bytes\n";
+
+}
+
 static int deleteFile(FileSystem* fs, const FileName& name, DiskAdr& key) {
     Volume& vol = fs->vol;
     DiskAdr adr;
-    // DirDelete(vol, name, adr);  // full B-tree deletion, as per OFSAosFiles
+    DirDelete(vol, name, adr);  // Perform full B-tree deletion
     key = adr;
     if (adr == 0) return 2;
     FileHeader hd;
@@ -956,14 +1269,19 @@ static bool detectAosFsOffset(const QString& imagePath,
     int reserved = 0;
     qint32 fsOfs = 0;
 
+    // Try boot parameters first (for Native Oberon partitioned disk images)
     if (getBootParams(imagePath, tsize, reserved, fsOfs)) {
         baseOffsetBytes = (qint64)fsOfs * BS;
         return true;
     }
 
-    // Fallback: bare AosFS volume, root directory sector at offset 0
+    // Fallback: bare AosFS volume
+    // The root directory sector (DirRootAdr) is at block 1 (offset SS / 4096 bytes)
     QFile f(imagePath);
     if (!f.open(QIODevice::ReadOnly))
+        return false;
+
+    if (!f.seek(SS)) // Seek to block 1
         return false;
 
     QByteArray first = f.read(SS);
@@ -1381,6 +1699,7 @@ static bool extractBootFileToHost(const QString& imagePath,
     return true;
 }
 
+#ifndef _AOSFS_NO_MAIN_
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -1392,7 +1711,8 @@ int main(int argc, char** argv)
         out << "  " << args[0] << " mkfs <image> <blocks>\n";
         out << "  " << args[0] << " ls   <image>\n";
         out << "  " << args[0] << " add  <image> <hostPath> <oberonName>\n";
-        out << "  " << args[0] << " get <image> <oberonName>\n";
+        out << "  " << args[0] << " addir  <image> <hostDirPath>\n";
+        out << "  " << args[0] << " get <image> <oberonName|pattern>\n";
         out << "  " << args[0] << " rm   <image> <oberonName>\n";
         out << "  " << args[0] << " getboot <image> [hostPath]\n";
         out << "  " << args[0] << " getconf <image>\n";
@@ -1429,11 +1749,11 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    // For all other commands, auto-detect AosFS offset (boot area vs bare volume)
-    // default baseOffsetBytes = 512 * 1024;
-    qint64 baseOffsetBytes = 512 * 1024;
 #if 0
-    // TODO: doesn't work yet
+    qint64 baseOffsetBytes = 512 * 1024;
+#else
+    // For all other commands, auto-detect AosFS offset (boot area vs bare volume)
+    qint64 baseOffsetBytes = 0;
     if (!detectAosFsOffset(image, baseOffsetBytes)) {
         out << "Cannot detect AosFS in image " << image << "\n";
         return 1;
@@ -1484,32 +1804,71 @@ int main(int argc, char** argv)
 
         out << "Added " << obName << "\n";
         return 0;
-    } else if (cmd == "get") {
+    }  else if (cmd == "addir") {
         if (args.size() != 4) {
-            out << "get requires <oberonName>\n";
+            out << "adddir requires <hostDirPath>\n";
+            return 1;
+        }
+        QDir dir = args[3];
+
+        QStringList files = dir.entryList( QDir::Files, QDir::Name );
+        foreach( const QString& f, files )
+        {
+            FileName fname;
+            int res;
+            Check(f, fname, res);
+            if (res != 0 && res != -1) {
+                out << "Invalid Oberon name (not added): " << f << endl;
+            }else
+            {
+                File of = NewFile(&fs, fname);
+                if (!writeHostFileIntoAos(of, dir.absoluteFilePath(f))) {
+                    out << "Failed to add " << f << endl;
+                }else
+                    out << "Added " << f << endl;
+            }
+        }
+        return 0;
+    }else if (cmd == "get") {
+        if (args.size() != 4) {
+            out << "get requires <oberonName|pattern>\n";
             return 1;
         }
 
         QString obName = args[3];
+        QStringList obNames;
+        if( obName.contains('*') || obName.contains('?') )
+        {
+            Files files;
+            listVolume(&fs, files);
+            for(int i = 0; i < files.size(); i++ )
+                obNames << files[i].first;
+            QRegExp rx(obName);
+            rx.setPatternSyntax(QRegExp::Wildcard);  // interpret * and ? as wildcards
+            rx.setCaseSensitivity(Qt::CaseInsensitive);
+            obNames = obNames.filter(rx);
+        }else
+            obNames << obName;
 
-        FileName fname;
-        int res;
-        Check(obName, fname, res);
-        if (res != 0 && res != -1) {
-            out << "Invalid Oberon name\n";
-            return 1;
+        foreach( const QString& name, obNames )
+        {
+            FileName fname;
+            int res;
+            Check(name, fname, res);
+            if (res != 0 && res != -1) {
+                out << "Invalid Oberon name\n";
+                return 1;
+            }
+
+            // Write to a file with the same name in the current directory.
+            // You could also map to a different host filename if desired.
+            QString hostPath = name;
+
+            if (!extractAosFile(&fs, fname, hostPath)) {
+                out << "Not found or failed to extract " << name << endl;
+            }else
+                out << "Extracted " << name << " -> " << hostPath << endl;
         }
-
-        // Write to a file with the same name in the current directory.
-        // You could also map to a different host filename if desired.
-        QString hostPath = obName;
-
-        if (!extractAosFile(&fs, fname, hostPath)) {
-            out << "Not found or failed to extract\n";
-            return 1;
-        }
-
-        out << "Extracted " << obName << " -> " << hostPath << "\n";
         return 0;
 
     } else if (cmd == "getboot") {
@@ -1573,4 +1932,5 @@ int main(int argc, char** argv)
         return 1;
     }
 }
+#endif
 

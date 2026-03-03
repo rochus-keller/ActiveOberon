@@ -127,6 +127,8 @@ namespace Ao
         void onQt();
         void onExpMod();
         void onExportC();
+        void onShowDepOrder();
+        void onGotoPos();
     private:
         class DocTab;
         class Debugger;

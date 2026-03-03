@@ -106,14 +106,42 @@ AstModel::AstModel()
         addTypeAlias("BYTE", types[Type::BYTE] );
         addBuiltin(Builtin::name[Builtin::HALT], Builtin::HALT);
 
-        addConst("EBP", Type::BYTE, 5);
-        addConst("ESP", Type::BYTE, 4);
-        addConst("EAX", Type::BYTE, 0);
-        addConst("EDI", Type::BYTE, 0);
-        addConst("AX", Type::BYTE, 0);
-        addConst("DX", Type::BYTE, 0);
-        addConst("AL", Type::BYTE, 0);
-        addConst("DH", Type::BYTE, 0);
+        // i386
+        addByteConst("EBP", 5);
+        addByteConst("ESP", 4);
+        addByteConst("ECX", 1);
+        addByteConst("EDX", 2);
+        addByteConst("EBX", 3);
+        addByteConst("EAX", 0);
+        addByteConst("ESI", 6);
+        addByteConst("EDI", 7);
+        addByteConst("AX", 0);
+        addByteConst("DX", 0);
+        addByteConst("AL", 0);
+        addByteConst("DH", 0);
+
+        // ARM32
+        addByteConst("R0", 0); addByteConst("R1", 1);
+        addByteConst("R2", 2); addByteConst("R3", 3);
+        addByteConst("R4", 4); addByteConst("R5", 5);
+        addByteConst("R6", 6); addByteConst("R7", 7);
+        addByteConst("R8", 8); addByteConst("R9", 9);
+        addByteConst("R10", 10);
+        addByteConst("R11", 11);
+        addByteConst("R12", 12);
+        addByteConst("R13", 13);
+        addByteConst("R14", 14);
+
+        // RV32
+
+        addByteConst("x0", 0); addByteConst("x1", 1); addByteConst("x2", 2); addByteConst("x3", 3);
+        addByteConst("x4", 4); addByteConst("x5", 5); addByteConst("x6", 6); addByteConst("x7", 7);
+        addByteConst("x8", 8); addByteConst("x9", 9); addByteConst("x10", 10); addByteConst("x11", 11);
+        addByteConst("x12", 12); addByteConst("x13", 13); addByteConst("x14", 14); addByteConst("x15", 15);
+        addByteConst("x16", 16); addByteConst("x17", 17); addByteConst("x18", 18); addByteConst("x19", 19);
+        addByteConst("x20", 20); addByteConst("x21", 21); addByteConst("x22", 22); addByteConst("x23", 23);
+        addByteConst("x24", 24); addByteConst("x25", 25); addByteConst("x26", 26); addByteConst("x27", 27);
+        addByteConst("x28", 28); addByteConst("x29", 29); addByteConst("x30", 30); addByteConst("x31", 31);
 
         closeScope();
     }else
@@ -312,6 +340,11 @@ void AstModel::addConst(const QByteArray& name, quint8 t, const QVariant& data)
     d->setType(types[t]);
     d->data = data;
     d->validated = true;
+}
+
+void AstModel::addByteConst(const QByteArray &name, const QVariant & data)
+{
+    addConst(name, Type::BYTE, data);
 }
 
 QPair<int, int> Type::countAllocRecordMembers(bool recursive)

@@ -624,6 +624,8 @@ void Ide::createMenuBar()
     pop = new Gui::AutoMenu( tr("Build"), this );
     pop->addCommand( "Compile", this, SLOT(onCompile()), tr("CTRL+T"), false );
     pop->addCommand( "Export C99...", this, SLOT(onExportC()) );
+    pop->addSeparator();
+    pop->addCommand( "Show dependency order...", this, SLOT(onShowDepOrder()) );
 
 
     pop = new Gui::AutoMenu( tr("Window"), this );
@@ -1388,7 +1390,8 @@ void Ide::createMenu(Ide::Editor* edit)
     pop->addCommand( "Find again", edit, SLOT(handleFindAgain()), tr("F3"), true );
     pop->addCommand( "Replace...", edit, SLOT(handleReplace()) );
     pop->addSeparator();
-    pop->addCommand( "&Goto...", edit, SLOT(handleGoto()), tr("CTRL+G"), true );
+    pop->addCommand( "&Goto line...", edit, SLOT(handleGoto()), tr("CTRL+G"), true );
+    pop->addCommand( "Goto position...", this, SLOT(onGotoPos()), tr("CTRL+SHIFT+G"), true);
     pop->addSeparator();
     pop->addCommand( "Indent", edit, SLOT(handleIndent()) );
     pop->addCommand( "Unindent", edit, SLOT(handleUnindent()) );
@@ -2007,13 +2010,55 @@ void Ide::onExportC()
                                                    "see Output window for more information"));
 }
 
+void Ide::onShowDepOrder()
+{
+    ENABLED_IF( d_pro->getErrors().isEmpty() );
+
+    Ast::DeclList deps = d_pro->getDependencyOrder();
+    QString buf;
+    QTextStream out(&buf);
+    for( int i = 0; i < deps.size(); i++ )
+    {
+        Declaration* module = deps[i];
+        ModuleData md = module->data.value<ModuleData>();
+        // out << i+1 << " " << module->name << endl;
+        out << QFileInfo(md.sourcePath).fileName() << endl;
+    }
+    out.flush();
+
+    QInputDialog::getMultiLineText(this, tr("Module Dependency Order"), QString(), buf);
+
+}
+
+void Ide::onGotoPos()
+{
+    Editor* edit = static_cast<Editor*>( d_tab->getCurrentTab() );
+    ENABLED_IF(edit);
+
+    QTextCursor cur = edit->textCursor();
+
+    bool ok	= false;
+    const int pos = QInputDialog::getInt( this, tr("Goto Position"),
+        tr("Please	enter a valid position:"),
+        cur.position(), 1, 999999, 1,	&ok );
+    if( !ok )
+        return;
+
+    cur.setPosition( pos );
+    const int line = cur.block().blockNumber();
+    const int col = cur.positionInBlock();
+
+    edit->setCursorPosition(line, col, true);
+    edit->setFocus();
+}
+
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("ActiveOberon IDE");
-    a.setApplicationVersion("0.1.3");
+    a.setApplicationVersion("0.1.4");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 
