@@ -636,13 +636,9 @@ Declaration*Project2::loadModule(const Import& imp)
 
     Lex2 lex;
     lex.sourcePath = file->d_filePath; // to keep file name if invalid
-    QBuffer buf;
     if( !file->d_cache.isEmpty() )
-    {
-        buf.setData(file->d_cache);
-        buf.open(QIODevice::ReadOnly);
-        lex.lex.setStream(&buf, file->d_filePath);
-    }else
+        lex.lex.setStream(file->d_cache, file->d_filePath);
+    else
         lex.lex.setStream(file->d_filePath);
     //lex.lex.reset(d_options);
     AstModel mdl;

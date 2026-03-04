@@ -266,7 +266,7 @@ void AstModel::assureCharLit(Expression *e)
 {
     if( e->kind == Expression::Literal && e->type() && e->type()->kind == Type::StrLit )
     {
-        const QByteArray str = QString::fromUtf8(e->val.toByteArray()).toLatin1();
+        const QByteArray str = e->val.toByteArray();
         Q_ASSERT(!str.isEmpty());
         e->val = (quint32)str[0];
         e->setType(getType(Type::CHAR));
@@ -277,7 +277,7 @@ void AstModel::assureCharLit(Expression *e)
         if( d->expr && d->expr->kind == Expression::Literal )
         {
             e->kind = Expression::Literal;
-            const QByteArray str = QString::fromUtf8(d->expr->val.toByteArray()).toLatin1();
+            const QByteArray str = d->expr->val.toByteArray();
             Q_ASSERT(!str.isEmpty());
             e->val = (quint32)str[0];
             e->setType(getType(Type::CHAR));
@@ -405,6 +405,18 @@ bool Type::isPtrToOpenArray() const
         if( base )
             base = base->deref();
         return base->kind == Array && base->expr == 0;
+    }else
+        return false;
+}
+
+bool Type::isPtrToSO() const
+{
+    if( kind == Pointer )
+    {
+        Type* base = type();
+        if( base )
+            base = base->deref();
+        return base->isSO();
     }else
         return false;
 }
@@ -828,7 +840,7 @@ void Expression::setByVal()
 
 static inline bool valIsLatin1Char( const QVariant& val)
 {
-    const QByteArray conv = QString::fromUtf8(val.toByteArray()).toLatin1();
+    const QByteArray conv = val.toByteArray();
     return conv.size() == 1;
 }
 

@@ -9,5 +9,5 @@ TEMPLATE = app
 
 
 SOURCES += \
-    AosFs.cpp
+    aosfstool.c
 

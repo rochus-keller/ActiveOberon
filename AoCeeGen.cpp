@@ -28,6 +28,10 @@ using namespace Ast;
 
 // result can be simply built with `gcc *.c -lm -lgc -O2`
 
+// TODO: this cannot be done on expression level, instead we must analyze the MOVE call to identify the intention
+// (copy struct, copy array, reinterpret cast, etc.) and treat the whole thing on MOVE level
+// #define _CORRECT_STRUCT_ADDRESS_FOR_MOVE_
+
 static inline void dummy() {}
 
 CeeGen::CeeGen()
@@ -905,11 +909,23 @@ void CeeGen::assig(Ast::Statement* s) {
     Type* rt = deref(s->rhs->type());
     if( lt && (lt->kind == Type::Record || lt->kind == Type::Object) )
     {
-        bout << "memcpy(&";
-        Expr(s->lhs, bout);
-        bout << ", &";
-        Expr(s->rhs, bout);
-        bout << ", sizeof(" << typeRef(lt) << "));";
+        if( lt == rt )
+        {
+            bout << "memcpy(&";
+            Expr(s->lhs, bout);
+            bout << ", &";
+            Expr(s->rhs, bout);
+            bout << ", sizeof(" << typeRef(lt) << "));";
+        }else
+        {
+            // RISK: avoid copy of the class field
+            bout << "memcpy((&";
+            Expr(s->lhs, bout);
+            bout << ") + sizeof(void*), (&";
+            Expr(s->rhs, bout);
+            bout << ") + sizeof(void*), ";
+            bout << "sizeof(" << typeRef(lt) << ") - sizeof(void*) );";
+        }
     }else if( lt && lt->kind == Type::Array )
     {
         ArrayKind lak = deriveArrayKind(s->lhs);
@@ -919,7 +935,7 @@ void CeeGen::assig(Ast::Statement* s) {
         {
             bout << "strcpy((char*)";
             renderArrayPtr(lak, s->lhs, bout);
-            bout << ", ";
+            bout << ", (const char*)";
             Expr(s->rhs, bout);
             bout << ");";
         }else
@@ -2010,9 +2026,11 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
         else if( t->kind == Type::CHAR )
         {
             const int ch = val.toULongLong();
+#if 0
             if( isprint(ch) && ch < 128 && ch != 0x5c && ch != '\'')
                 out << "'" << (char)ch << "'";
             else
+#endif
                 out << ch;
         }else if( t->isReal() )
         {
@@ -2025,8 +2043,24 @@ bool CeeGen::literal(Ast::Expression *e, QTextStream &out)
         else if( t->kind == Type::StrLit )
         {
             QByteArray str = val.toByteArray();
+#if 0
             str.replace("\"", "\\\"");
             out << "\"" << str << "\"";
+#else
+            // we get issues if we have Oberon strings with "umlaute" because those are encoded and expected by GCC as UTF-8
+            // so we avoid string literals altogether
+            out << "(const uint8_t[]){";
+            for( int i = 0; i < str.size(); i++ )
+            {
+                if( i != 0 )
+                    out << ",";
+                out << QByteArray::number((quint8)str[i]);
+            }
+            if( !str.isEmpty() )
+                out << ",";
+            out << "0";
+            out << "}";
+#endif
         }else
             Q_ASSERT(false);
         return true;
@@ -2171,7 +2205,7 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
             Type* t = deref(a[0]->type());
             if( t && t->kind == Type::StrLit )
             {
-                out << "(strlen(";
+                out << "(strlen((const char*)";
                 Expr(a[0], out, isConst);
                 out << ") + 1)";
             }else
@@ -2263,6 +2297,11 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
         if( a.size() != 1 )
             return false;
         out << "sizeof(" << typeRef(a[0]->type()) << ")";
+#ifdef _CORRECT_STRUCT_ADDRESS_FOR_MOVE_
+        // NOTE: this leads to crash in OPT because i*SIZE(RECORD) is used for "fast array copy" using MOVE
+        if( deref(a[0]->type())->isPtrToSO() )
+            out << " - sizeof(void*)"; // RISK: in Oberon, SIZE doesn't include the tag field
+#endif
         return true;
     case Builtin::ORD:
         if( a.size() != 1 )
@@ -2528,12 +2567,20 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
         out << ")";
 #endif
         return true;
-    case Builtin::SYSTEM_ADR:
+    case Builtin::SYSTEM_ADR: {
         if( a.size() != 1 )
             return false;
+        Type* t = deref(a[0]->type());
         out << "(void*)&(";
         Expr(a[0], out,isConst);
+#if 1 // _CORRECT_STRUCT_ADDRESS_FOR_MOVE_
+        // RISK: OP2 never adds a tag within the RECORD, but at offset -4 or as a separate parameters
+        // TODO: we afford this here to cover the reinterpret cast in OPM BEGIN it is only
+        if( t && t->isSO() && !t->subs.isEmpty() && a[0]->kind == Expression::DeclRef )
+            out << "." << t->subs[0]->name;
+#endif
         out << ")";
+        }
         return true;
     case Builtin::SYSTEM_VAL: {
         if( a.size() != 2 )
@@ -2546,8 +2593,17 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
             Expr(a[1], out,isConst);
         else if( toT->kind == Type::LONGINT && fromT->kind == Type::Pointer )
         {
+#ifdef _CORRECT_STRUCT_ADDRESS_FOR_MOVE_
+            const bool addOffset = fromT->isPtrToSO();
+#else
+            const bool addOffset = false;
+#endif
+            if( addOffset )
+                out << "(";
             out << "(void*)";
-            Expr(a[1], out,isConst);
+            Expr(a[1], out,isConst); // RISK: if fromT is pointer to record, move by size(void*)
+            if( addOffset )
+                out << ") + sizeof(void*)";
         }else
         {
             out << "((" << to << ")(";
@@ -2682,13 +2738,24 @@ bool CeeGen::builtin(int bi, Ast::Expression *args, QTextStream &out, bool isCon
     case Builtin::SYSTEM_MOVE:
         if( a.size() != 3 )
             return false;
-        out << "memcpy(";
-        Expr(a[1], out,isConst);
-        out << ", ";
-        Expr(a[0], out,isConst);
-        out << ", ";
-        Expr(a[2], out,isConst);
-        out << ")";
+        else {
+            // RISK: if POINTER TO RECORD/OBJECT, skip the class field
+            out << "memcpy(";
+            Expr(a[1], out,isConst);
+#ifdef _CORRECT_STRUCT_ADDRESS_FOR_MOVE_
+            if( deref(a[1]->type())->isPtrToSO() )
+                out << " + size(void*)";
+#endif
+            out << ", ";
+            Expr(a[0], out,isConst);
+#ifdef _CORRECT_STRUCT_ADDRESS_FOR_MOVE_
+            if( deref(a[0]->type())->isPtrToSO() )
+                out << " + size(void*)";
+#endif
+            out << ", ";
+            Expr(a[2], out,isConst); // the SIZE or magic number already are without the tag field
+            out << ")";
+        }
         return true;
     case Builtin::SYSTEM_NEW:
         if( a.size() < 2 )

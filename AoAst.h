@@ -184,6 +184,7 @@ namespace Ast
         bool isSO() const { return kind == Record || kind == Object; }
         bool isSOA() const { return isSO() || (kind == Array && expr); }
         bool isPtrToOpenArray() const;
+        bool isPtrToSO() const;
 
         bool isDerefCharArray() const;
         bool isDerefByteArray() const;

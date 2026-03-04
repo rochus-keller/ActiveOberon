@@ -21,11 +21,12 @@
 #include <QBuffer>
 #include <QFile>
 #include <QIODevice>
+#include <QTextCodec>
 #include <QtDebug>
 using namespace Ao;
 
 Lexer::Lexer(QObject *parent) : QObject(parent),
-    d_lastToken(Tok_Invalid),d_lineNr(0),d_colNr(0),d_in(0),
+    d_lastToken(Tok_Invalid),d_lineNr(0),d_colNr(0),
     d_ignoreComments(true), d_packComments(true),d_sloc(0),d_lineCounted(false)
 {
 
@@ -36,46 +37,44 @@ void Lexer::setStream(QIODevice* in, const QString& sourcePath)
     if( in == 0 )
         setStream( sourcePath );
     else
+        setStream(in->readAll(), sourcePath);
+}
+
+void Lexer::setStream(const QByteArray & source, const QString &sourcePath)
+{
+    d_lineNr = 0;
+    d_colNr = 0;
+    d_sourcePath = sourcePath;
+    d_lastToken = Tok_Invalid;
+    d_sloc = 0;
+    d_lineCounted = false;
+
+    if( d_in.isOpen() )
+        d_in.close();
+    d_in.buffer() = source;
+    d_in.open(QIODevice::ReadOnly);
+
+
+    if( isOberonFormat(&d_in) )
     {
-        d_in = in;
-        d_lineNr = 0;
-        d_colNr = 0;
-        d_sourcePath = sourcePath;
-        d_lastToken = Tok_Invalid;
-        d_sloc = 0;
-        d_lineCounted = false;
-
-        if( isOberonFormat(in) )
-        {
-            const QByteArray text = Lexer::extractText(d_in);
-
-            QBuffer* b = new QBuffer( this );
-            b->buffer() = text;
-            b->open(QIODevice::ReadOnly);
-
-            if( d_in != 0 && d_in->parent() == this )
-                d_in->deleteLater();
-
-            d_in = b;
-
-        }
+        const QByteArray text = Lexer::extractText(&d_in);
+        d_in.close();
+        d_in.buffer() = text;
+        d_in.open(QIODevice::ReadOnly);
+    }else
+    {
+        // we assume Latin-1
     }
 }
 
 bool Lexer::setStream(const QString& sourcePath)
 {
-    QIODevice* in = 0;
-
-    QFile* file = new QFile(sourcePath, this);
-    if( !file->open(QIODevice::ReadOnly) )
-    {
-        delete file;
+    QFile file(sourcePath);
+    if( !file.open(QIODevice::ReadOnly) )
         return false;
-    }
-    in = file;
 
      // else
-    setStream( in, sourcePath );
+    setStream( &file, sourcePath );
     return true;
 }
 
@@ -125,22 +124,12 @@ QList<Token> Lexer::tokens(const QByteArray& code, const QString& path)
 
 Token Lexer::nextTokenImp()
 {
-    if( d_in == 0 )
-        return token(Tok_Eof);
     skipWhiteSpace();
 
     while( d_colNr >= d_line.size() )
     {
-        if( d_in->atEnd() )
-        {
-            Token t = token( Tok_Eof, 0 );
-            if( d_in->parent() == this )
-            {
-                d_in->deleteLater();
-                d_in = 0;
-            }
-            return t;
-        }
+        if( d_in.atEnd() )
+            return token( Tok_Eof, 0 );
         nextLine();
         skipWhiteSpace();
     }
@@ -184,7 +173,7 @@ void Lexer::nextLine()
 {
     d_colNr = 0;
     d_lineNr++;
-    d_line = d_in->readLine();
+    d_line = d_in.readLine();
     d_lineCounted = false;
 
     if( d_line.endsWith("\r\n") )
@@ -222,7 +211,7 @@ Token Lexer::ident()
     while( true )
     {
         const char c = lookAhead(off);
-        if( !QChar(c).isLetterOrNumber() ) // QChar wegen möglichen Umlauten
+        if( !QChar::fromLatin1(c).isLetterOrNumber() ) // QChar wegen möglichen Umlauten
             break;
         else
             off++;
@@ -409,7 +398,7 @@ Token Lexer::comment()
     int pos = d_colNr;
     parseComment( d_line, pos, level );
     QByteArray str = d_line.mid(d_colNr,pos-d_colNr);
-    while( level > 0 && !d_in->atEnd() )
+    while( level > 0 && !d_in.atEnd() )
     {
         nextLine();
         pos = 0;
@@ -418,7 +407,7 @@ Token Lexer::comment()
             str += '\n';
         str += d_line.mid(d_colNr,pos-d_colNr);
     }
-    if( d_packComments && level > 0 && d_in->atEnd() )
+    if( d_packComments && level > 0 && d_in.atEnd() )
     {
         d_colNr = d_line.size();
         Token t( Tok_Invalid, startLine, startCol + 1, str.size(), tr("non-terminated comment").toLatin1() );
@@ -448,7 +437,7 @@ Token Lexer::assembler()
 
     int pos = d_line.indexOf("END", d_colNr);
     QByteArray str = pos==-1 ? d_line.mid(d_colNr) : d_line.mid(d_colNr,pos-d_colNr);
-    while( pos == -1 && !d_in->atEnd() )
+    while( pos == -1 && !d_in.atEnd() )
     {
         nextLine();
         pos = d_line.indexOf("END", d_colNr);
@@ -578,13 +567,11 @@ QByteArray Lexer::extractText(QIODevice* in)
     if( isV4File(in) )
     {
         text = readV4Text(in);
-        if( convertCharSet(text) )
-            text = QString::fromLatin1(text).toUtf8();
+        convertCharSet(text);
         return text;
     }
     QPair<quint32,quint32> r = inferTextRange(in);
     in->reset();
-    skipBom(in);
     in->read(r.first);
     if( r.second )
         text = in->read(r.second);
@@ -595,10 +582,23 @@ QByteArray Lexer::extractText(QIODevice* in)
     {
         text.replace( '\r', '\n' );
         text.replace( 0x00, 0x20 );
-        if( convertCharSet(text) )
-            text = QString::fromLatin1(text).toUtf8();
+        convertCharSet(text);
     }
 
+    return text;
+}
+
+QByteArray Lexer::extractText(const QByteArray & text)
+{
+
+    if( (text.size() >= 2 && text[0] == (char)0xf0 && text[1] == (char)0x01) ||
+            (!text.isEmpty() && (text[0] == (char)0xF7 || text[0] == (char)0xF0 || text[0] == (char)0x01 ) ) )
+    {
+        QBuffer buf;
+        buf.buffer() = text;
+        buf.open(QIODevice::ReadOnly);
+        return extractText(&buf);
+    }
     return text;
 }
 
@@ -751,17 +751,6 @@ QByteArray Lexer::readV4Text(QIODevice* in)
     return QByteArray();
 }
 
-bool Lexer::skipBom(QIODevice* in)
-{
-    const QByteArray buf = in->peek(3);
-    if( buf.size() == 3 && buf[0] == 0xef && buf[1] == 0xbb && buf[2] == 0xbf )
-    {
-        in->read(3);
-        return true;
-    }else
-        return false;
-}
-
 bool Lexer::findModuleName(QIODevice * in, QByteArray &name)
 {
     Lexer lex;
@@ -794,6 +783,27 @@ bool Lexer::findModuleName(const QString &path, QByteArray &name)
         return findModuleName( &f, name);
 }
 
+QString Lexer::fromLatin1OrUtf8(const QByteArray & source)
+{
+    if( source.size() >= 3 && source[0] == 0xef && source[1] == 0xbb && source[2] == 0xbf )
+    {
+        // we found UTF-8 bom, convert the text.
+        return QString::fromUtf8(source.mid(3));
+    } // else
+
+    QTextCodec::ConverterState state;
+    QTextCodec *utf8Codec = QTextCodec::codecForName("UTF-8");
+    const QString unicode = utf8Codec->toUnicode(source.constData(), source.size(), &state);
+
+    if (state.invalidChars == 0 && source.size() > 0) {
+        // It's valid UTF-8. Convert it to Latin-1 for the lexer.
+        // Note: Characters > U+00FF will be replaced by '?' in toLatin1()
+        return unicode;
+    } // else
+
+    return QString::fromLatin1(source);
+}
+
 // Note: -4095 in S4.Texts corresponds to 0xf0 0x01
 //          S3.Texts: OldTextBlockId = 1X; OldTextSpex = 0F0X;
 // Oberon System 3 uses 0xf7 0x07
@@ -805,8 +815,6 @@ QPair<quint32, quint32> Lexer::inferTextRange(QIODevice* in)
     QPair<quint32, quint32> res;
     if( in == 0 )
         return res;
-
-    skipBom(in);
 
     quint8 ch = readUInt8(in);
 

@@ -21,6 +21,7 @@
 */
 
 #include <QObject>
+#include <QBuffer>
 #include <ActiveOberon/AoToken.h>
 
 class QIODevice;
@@ -32,8 +33,11 @@ namespace Ao
     public:
         explicit Lexer(QObject *parent = 0);
 
+        // all setStream expect Latin-1, Ascii or Oberon files
         void setStream( QIODevice*, const QString& sourcePath );
+        void setStream( const QByteArray&, const QString& sourcePath );
         bool setStream(const QString& sourcePath);
+
         void setIgnoreComments( bool b ) { d_ignoreComments = b; }
         void setPackComments( bool b ) { d_packComments = b; }
 
@@ -46,13 +50,14 @@ namespace Ao
         static void parseComment( const QByteArray& str, int& pos, int& level );
 
         static bool isOberonFormat(QIODevice*);
-        static QByteArray extractText(QIODevice*); // recognizes Oberon file format and ASCII, returns Latin-1 UTF-8
+        static QByteArray extractText(QIODevice*); // recognizes Oberon file format and returns Latin1 if so, original otherwise
+        static QByteArray extractText(const QByteArray&);
         static QPair<quint32,quint32> inferTextRange(QIODevice*); // offset, len (or 0 for all)
         static bool isV4File( QIODevice* );
         static QByteArray readV4Text(QIODevice*);
-        static bool skipBom( QIODevice* );
         static bool findModuleName(QIODevice*, QByteArray& name);
         static bool findModuleName(const QString& path, QByteArray& name);
+        static QString fromLatin1OrUtf8(const QByteArray&);
 
     protected:
         Token nextTokenImp();
@@ -67,7 +72,7 @@ namespace Ao
         Token assembler();
         void countLine();
     private:
-        QIODevice* d_in;
+        QBuffer d_in;
         quint32 d_sloc;
         quint32 d_lineNr;
         quint16 d_colNr;

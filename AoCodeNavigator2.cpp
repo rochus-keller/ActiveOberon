@@ -121,7 +121,7 @@ public:
         if( !in.open(QIODevice::ReadOnly) )
             return false;
         QByteArray buf = Ao::Lexer::extractText(&in);
-        setPlainText( QString::fromUtf8(buf) );
+        setPlainText( Ao::Lexer::fromLatin1OrUtf8(buf));
         markMissing();
         that()->syncModuleList();
         return true;
@@ -1394,7 +1394,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("AoCodeNavigator");
-    a.setApplicationVersion("0.6.11");
+    a.setApplicationVersion("0.6.12");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); 
 #ifdef Q_OS_LINUX

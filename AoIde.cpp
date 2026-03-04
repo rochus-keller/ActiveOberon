@@ -271,6 +271,21 @@ public:
     {
         markNonTerms(SymList());
     }
+
+    bool saveToFile(const QString& path)
+    {
+        QFile file(path);
+        if( !file.open(QIODevice::WriteOnly ) )
+        {
+            QMessageBox::critical(this,tr("Save File"), tr("Cannot save file to '%1'. %2").
+                                  arg(path).arg(file.errorString()));
+            return false;
+        }
+        file.write( toPlainText().toLatin1() );
+        document()->setModified( false );
+        d_path = path;
+        return true;
+    }
 };
 
 class Ide::DocTab : public DocTabWidget
@@ -288,7 +303,7 @@ public:
     bool save(int i)
     {
         Ide::Editor* edit = static_cast<Ide::Editor*>( widget(i) );
-        if( !edit->saveToFile( edit->getPath(), false ) )
+        if( !edit->saveToFile( edit->getPath() ) )
             return false;
         return true;
     }
@@ -671,7 +686,7 @@ void Ide::onSetOptions()
         if( t.d_type == Tok_ident )
             l << t.d_val;
         else
-            errs << QString::fromUtf8(t.d_val);
+            errs << QString::fromLatin1(t.d_val);
     }
 
     if( !errs.isEmpty() )
@@ -1067,12 +1082,12 @@ void Ide::onNewModule()
         QMessageBox::critical(this,tr("New Module"), tr("Cannot open file for writing: '%1'").arg(filePath) );
         return;
     }
-    f.write("module ");
-    f.write(name.toUtf8());
-    f.write("\n\n\n");
-    f.write("end ");
-    f.write(name.toUtf8());
-    f.write("\n");
+    f.write("MODULE ");
+    f.write(name.toLatin1());
+    f.write(";\n\n\n");
+    f.write("END ");
+    f.write(name.toLatin1());
+    f.write(".\n");
     f.close();
 
     if( !d_pro->addFile(filePath,path) )
@@ -1337,7 +1352,9 @@ Ide::Editor* Ide::showEditor(const QString& path, int row, int col, bool setMark
         connect(edit,SIGNAL(sigUpdateLocation(int,int)),this,SLOT(onUpdateLocation(int,int)));
 
         edit->setExt(true);
-        edit->loadFromFile(filePath);
+        QFile in(filePath);
+        in.open(QIODevice::ReadOnly);
+        edit->loadFromString(Lexer::fromLatin1OrUtf8(Lexer::extractText(&in)), filePath);
 
         d_tab->addDoc(edit,filePath);
         onEditorChanged();
@@ -1626,8 +1643,6 @@ static void createModItem(T* parent, Declaration* n, Type* t, bool nonbound, boo
         t = n->type();
     else
         isAlias = true;
-    if( t == 0 )
-        return;
     if( idx.contains(n) )
     {
         // qWarning() << "fillMod recursion at" << n->getModule()->d_file << n->pos.d_row << n->name;
@@ -1636,6 +1651,8 @@ static void createModItem(T* parent, Declaration* n, Type* t, bool nonbound, boo
     switch( n->kind )
     {
     case Declaration::TypeDecl:
+        if( t == 0 )
+            return;
         switch( t->kind )
         {
         case Type::Record:
@@ -2058,7 +2075,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("ActiveOberon IDE");
-    a.setApplicationVersion("0.1.4");
+    a.setApplicationVersion("0.1.5");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 
