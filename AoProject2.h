@@ -54,7 +54,8 @@ namespace Ao
             FileGroup* d_group;
             Ast::Declaration* d_mod;
             bool d_isLib;
-            File():d_isLib(false),d_group(0),d_mod(0){}
+            bool d_notExist;
+            File():d_isLib(false),d_notExist(false),d_group(0),d_mod(0){}
         };
         typedef QExplicitlySharedDataPointer<File> FileRef;
 
@@ -99,7 +100,7 @@ namespace Ao
         QStringList getArguments() const { return d_arguments; }
         void setArguments( const QStringList& );
 
-        bool addFile(const QString& filePath, const QByteArrayList& package = QByteArrayList() );
+        bool addFile(const QString& filePath, const QByteArrayList& package = QByteArrayList(), bool notFound = false );
         bool removeFile( const QString& filePath );
         bool addPackagePath(const QByteArrayList& path );
         bool removePackagePath( const QByteArrayList& path );

@@ -90,6 +90,7 @@ namespace Ao
         void removePosMarkers();
         void pushLocation( const Location& );
         void clear();
+        void fillAll();
 
     protected slots:
         void onCompile();

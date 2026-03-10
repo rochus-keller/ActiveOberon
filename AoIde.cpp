@@ -421,9 +421,17 @@ void Ide::loadFile(const QString& path)
         d_pro->loadFrom(path);
     }
 
+    onCaption();
+
+    if( !d_pro->getErrors().isEmpty() )
+    {
+        onErrors();
+        fillAll();
+        return;
+    }
+
     QDir::setCurrent(QFileInfo(path).absolutePath());
 
-    onCaption();
 
     onCompile();
 }
@@ -1232,11 +1240,7 @@ bool Ide::compile()
     }
     d_pro->parse();
     onErrors();
-    fillMods();
-    fillModule(0);
-    fillHier(0);
-    fillXref();
-    onTabChanged();
+    fillAll();
     return true;
 }
 
@@ -1269,11 +1273,9 @@ static void fillModTree( T* parent, const ModuleSort& mods )
         else
             item->setText(0, m->d_name.constData() );
         item->setToolTip(0,m->d_filePath);
-#if 0
-        if( m->d_isDef )
-            item->setIcon(0, QPixmap(":/images/definition.png") );
+        if( m->d_notExist )
+            item->setIcon(0, QPixmap(":/images/exclamation-red.png") );
         else
-#endif
             item->setIcon(0, QPixmap(":/images/module.png") );
         item->setData(0,Qt::UserRole,QVariant::fromValue(m) );
     }
@@ -1971,6 +1973,15 @@ void Ide::clear()
     d_errs->clear();
 }
 
+void Ide::fillAll()
+{
+    fillMods();
+    fillModule(0);
+    fillHier(0);
+    fillXref();
+    onTabChanged();
+}
+
 void Ide::onAbout()
 {
     ENABLED_IF(true);
@@ -2075,7 +2086,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("ActiveOberon IDE");
-    a.setApplicationVersion("0.1.5");
+    a.setApplicationVersion("0.1.6");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 

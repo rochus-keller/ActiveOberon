@@ -158,7 +158,7 @@ void Project2::setUseBuiltInOakwood(bool on)
     touch();
 }
 
-bool Project2::addFile(const QString& filePath, const QByteArrayList& package)
+bool Project2::addFile(const QString& filePath, const QByteArrayList& package, bool notFound)
 {
     if( d_files.contains(filePath) )
         return false;
@@ -174,6 +174,7 @@ bool Project2::addFile(const QString& filePath, const QByteArrayList& package)
     fg.d_files.append(ref.data());
     ref->d_group = &fg;
     ref->d_filePath = filePath;
+    ref->d_notExist = notFound;
     if( !Lexer::findModuleName(filePath, ref->d_name) )
         ref->d_name = QFileInfo(filePath).baseName().toUtf8();
     d_files.insert(filePath,ref);
@@ -741,7 +742,8 @@ bool Project2::parse()
         {
             QFileInfo info(d_groups[i].d_files[j]->d_filePath);
             Import imp;
-            imp.moduleName = Token::getSymbol(info.baseName().toUtf8());
+            QByteArrayList path = info.completeBaseName().toUtf8().split('.');
+            imp.moduleName = Token::getSymbol(path.last());
             Declaration* module = loadModule(imp); // recursively compiles all imported files
             all++;
             if( module && !module->hasErrors )
@@ -920,10 +922,12 @@ bool Project2::loadFrom(const QString& filePath)
         {
             absPath = dir.absoluteFilePath(relPath);
             QFileInfo info(absPath);
-            if( info.exists() && info.isFile() )
+            if( !info.exists() || !info.isFile() )
+            {
+                errors << Error("cannot find file", RowCol(), relPath);
+                addFile(absPath, QByteArrayList(), true);
+            }else
                 addFile(absPath);
-            else
-                qCritical() << "Could not open module" << relPath;
         }
     }
     in.endArray();
@@ -952,10 +956,12 @@ bool Project2::loadFrom(const QString& filePath)
             else
             {
                 absPath = dir.absoluteFilePath(relPath);
-                if( QFileInfo(absPath).exists() )
+                if( !QFileInfo(absPath).exists() )
+                {
+                    errors << Error("cannot find file", RowCol(), relPath);
+                    addFile(absPath, paths[j], true);
+                }else
                     addFile(absPath, paths[j]);
-                else
-                    qCritical() << "Could not open module" << relPath;
             }
         }
         in.endArray();

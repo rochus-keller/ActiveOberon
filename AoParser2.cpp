@@ -521,8 +521,6 @@ void Parser2::Module() {
         procDecl->body = Body();
         mdl->closeScope();
     }
-    if( m->name == "OFSBoot" )
-        dummy();
 	expect(Tok_END, false, "Module");
 	expect(Tok_ident, false, "Module");
     md.end = cur.toRowCol();

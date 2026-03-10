@@ -271,6 +271,9 @@ void Validator2::Assembler(Ast::Declaration* proc) {
     //expect(Tok_CODE, false, "Assembler");
     // TODO
     // qDebug() << "###" << module->name.constData() << proc->pos.d_row << proc->name.constData() << "\n" << proc->data.toByteArray().mid(5).constData();
+    ModuleData md = module->data.value<ModuleData>();
+    if( md.sourcePath.contains("portable/") )
+        qDebug() << "WARNING: remove CODE in" << module->name << proc->pos.d_row;
 #if 0
     // TEST
     QString err;
