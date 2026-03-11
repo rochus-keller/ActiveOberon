@@ -364,6 +364,7 @@ Ide::Ide(QWidget *parent)
     new Gui::AutoShortcut( tr(OBN_NEXTDOC_SC), this, d_tab, SLOT(onDocSelect()) );
     new Gui::AutoShortcut( tr(OBN_PREVDOC_SC), this, d_tab, SLOT(onDocSelect()) );
     new Gui::AutoShortcut( tr("CTRL+W"), this, d_tab, SLOT(onCloseDoc()) );
+    new Gui::AutoShortcut( tr("CTRL+SHIFT+F"), this, this, SLOT(onSearchSym()) );
 
     connect( d_tab, SIGNAL( currentChanged(int) ), this, SLOT(onTabChanged() ) );
     connect( d_tab, SIGNAL(closing(int)), this, SLOT(onTabClosing(int)) );
@@ -624,11 +625,12 @@ void Ide::createMenuBar()
     pop->addAutoCommand( "Copy", SLOT(handleEditCopy()), tr("CTRL+C"), true );
     pop->addAutoCommand( "Paste", SLOT(handleEditPaste()), tr("CTRL+V"), true );
     pop->addSeparator();
-    pop->addAutoCommand( "Find...", SLOT(handleFind()), tr("CTRL+F"), true );
+    pop->addAutoCommand( "Find...", SLOT(handleFind()), tr("CTRL+F"), false );
     pop->addAutoCommand( "Find again", SLOT(handleFindAgain()), tr("F3"), true );
     pop->addAutoCommand( "Replace...", SLOT(handleReplace()) );
     pop->addSeparator();
     pop->addAutoCommand( "&Go to line...", SLOT(handleGoto()), tr("CTRL+G"), true );
+    pop->addAutoCommand( "Go to symbol...", SLOT(onSearchSym()), tr("CTRL+SHIFT+F"), true );
     pop->addSeparator();
     pop->addAutoCommand( "Indent", SLOT(handleIndent()) );
     pop->addAutoCommand( "Unindent", SLOT(handleUnindent()) );
@@ -1380,7 +1382,19 @@ void Ide::showEditor(Declaration* n, bool setMarker, bool center)
     {
         d_curModule = mod;
         ModuleData md = mod->data.value<ModuleData>();
-        showEditor( md.sourcePath, n->pos.d_row, n->pos.d_col, setMarker, center );
+        if( !md.sourcePath.isEmpty() )
+            showEditor( md.sourcePath, n->pos.d_row, n->pos.d_col, setMarker, center );
+        else
+        {
+            Symbol hit;
+            hit.kind = Symbol::Decl;
+            hit.pos = n->pos;
+            hit.decl = mod;
+            hit.len = n->name.size();
+            Declaration* module = moduleOfCurrentEditor();
+            fillXrefForSym(&hit, module);
+
+        }
     }
 }
 
@@ -2080,13 +2094,55 @@ void Ide::onGotoPos()
     edit->setFocus();
 }
 
+void Ide::onSearchSym()
+{
+    ENABLED_IF(true);
+
+    d_xref->clear();
+    d_xrefTitle->clear();
+
+    const QString text = QInputDialog::getText(this, "Search by symbols", "Qualident:");
+    const QByteArrayList components = text.toUtf8().split('.');
+    if( components.isEmpty() || components.size() > 2 )
+        return;
+    Ast::Declaration* module = 0;
+    if( components.size() == 2 )
+    {
+        const QByteArray mod = Token::getSymbol(components.first());
+        module = d_pro->findModule(mod);
+        if( module == 0 )
+            module = AstModel::getGlobalScope()->find(mod);
+    }else
+        module = d_curModule;
+
+    Declaration* sym = 0;
+    QByteArray name;
+    if( components.size() == 1 )
+        name = Token::getSymbol(components.first());
+    else
+        name = Token::getSymbol(components.last());
+    if( module )
+        sym = module->find(name);
+    if( sym == 0 )
+        sym = AstModel::getGlobalScope()->find(name);
+    if( sym == 0 )
+        sym = d_pro->findModule(name);
+
+    if( sym == 0 )
+        return;
+
+    Symbol s;
+    s.decl = sym;
+    fillXrefForSym(&s, module);
+}
+
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("ActiveOberon IDE");
-    a.setApplicationVersion("0.1.6");
+    a.setApplicationVersion("0.1.7");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 

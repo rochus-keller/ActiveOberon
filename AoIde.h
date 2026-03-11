@@ -130,6 +130,7 @@ namespace Ao
         void onExportC();
         void onShowDepOrder();
         void onGotoPos();
+        void onSearchSym();
     private:
         class DocTab;
         class Debugger;

@@ -655,7 +655,7 @@ bool Parser2::ProcDecl() {
         Declaration* procDecl = ProcHead(false);
 		expect(Tok_Semi, false, "ProcDecl");
         hasProcedures = true;
-        if( !procDecl->extern_ )
+        if( procDecl && !procDecl->extern_ )
         {
             mdl->openScope(procDecl);
             DeclSeq();

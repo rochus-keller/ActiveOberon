@@ -154,7 +154,17 @@ void Validator2::ImportDecl(Ast::Declaration* import) {
         i.resolved = mod;
         mod->imported = true;
         import->data = QVariant::fromValue(i);
-        markRef(mod, i.importedAt);
+        if( import->name.constData() == mod->name.constData() )
+        {
+            // Import name is the Module
+            markDecl(import);
+            markRef(i.resolved, i.importedAt);
+        }else
+        {
+            // Import name is separate from the Module
+            markRef(mod, i.importedAt);
+            markDecl(import);
+        }
     }else
     {
         error(import->pos,QString("cannot import module '%1'").arg(i.moduleName.constData()));

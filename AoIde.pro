@@ -58,7 +58,7 @@ HEADERS  += AoIde.h \
     AoValidator2.h
 
 
-include( AoParser.pri )
+#include( AoParser.pri )
 include( ../GuiTools/Menu.pri )
 
 CONFIG(debug, debug|release) {
