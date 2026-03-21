@@ -286,6 +286,18 @@ public:
         d_path = path;
         return true;
     }
+
+    void goToPos(const QTextCursor& cur, bool center)
+    {
+        setTextCursor( cur );
+        if( center )
+            centerCursor();
+        else
+            ensureCursorVisible();
+        updateExtraSelections();
+        onUpdateLocation();
+
+    }
 };
 
 class Ide::DocTab : public DocTabWidget
@@ -2087,11 +2099,7 @@ void Ide::onGotoPos()
         return;
 
     cur.setPosition( pos );
-    const int line = cur.block().blockNumber();
-    const int col = cur.positionInBlock();
-
-    edit->setCursorPosition(line, col, true);
-    edit->setFocus();
+    edit->goToPos(cur, true);
 }
 
 void Ide::onSearchSym()
@@ -2142,7 +2150,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("ActiveOberon IDE");
-    a.setApplicationVersion("0.1.7");
+    a.setApplicationVersion("0.1.8");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 
