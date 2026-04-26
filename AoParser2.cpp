@@ -431,10 +431,15 @@ Parser2::~Parser2()
 void Parser2::RunParser() {
 	errors.clear();
     count = 0;
+    codeSectionCount = 0;
     hasProcedures = false;
     hasAnyBody = false;
 	next();
 	Module();
+#if 0
+    if( codeSectionCount != 0 )
+        qDebug() << "module" << thisMod->name << "has" << codeSectionCount << "assembler procedures";
+#endif
 }
 
 Declaration* Parser2::takeResult()
@@ -665,6 +670,7 @@ bool Parser2::ProcDecl() {
                 } else if( FIRST_Assembler(la.d_type) ) {
                     procDecl->data = Assembler();
                     procDecl->body = new Ast::Statement(Ast::Statement::Assembler);
+                    codeSectionCount++;
                 } else
                     invalid("ProcDecl");
             }

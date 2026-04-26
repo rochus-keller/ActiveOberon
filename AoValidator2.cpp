@@ -66,7 +66,7 @@ static inline bool isTextual( Expression* e )
 }
 
 Validator2::Validator2(Ast::AstModel *mdl, Ast::Importer *imp, bool haveXref):module(0),mdl(mdl),imp(imp),
-    first(0),last(0),curObj(0), allowPtrToLongint(true)
+    first(0),last(0),curObj(0), allowPtrToLongint(true), forceOberon90(false)
 {
     Q_ASSERT(mdl);
     if( haveXref )
@@ -245,6 +245,16 @@ bool Validator2::checkIfPointerInit(Type* t)
     }
 }
 
+Type *Validator2::getGuardedType(Ast::Declaration *d)
+{
+    for (int i = typeOverrides.size() - 1; i >= 0; --i) {
+        if (typeOverrides[i].first == d) {
+            return typeOverrides[i].second;
+        }
+    }
+    return d->type();
+}
+
 void Validator2::TypeDecl(Ast::Declaration* d) {
     Type* t = d->type();
     Type_(t);
@@ -314,7 +324,7 @@ void Validator2::ProcDecl(Ast::Declaration * proc) {
     {
         Type_(proc->type());
         Type* t = deref(proc->type());
-        if( t->kind == Type::Array || t->kind == Type::Record )
+        if( forceOberon90 && (t->kind == Type::Array || t->kind == Type::Record) )
             error(proc->pos, "return type cannot be an array nor a record");
         //arrayStats(proc->type(), proc->pos, 'r');
     }
@@ -594,8 +604,11 @@ void Validator2::assig(Ast::Statement* s) {
 
     if( !assigCompat(s->lhs->type(), s->rhs) )
     {
-        //assigCompat(s->lhs->type(), s->rhs); // TEST
-        error(s->pos, "rhs is not assignment compatible with lhs");
+        Type* lt = deref(s->lhs->type());
+        Type* rt = deref(s->rhs->type());
+
+        // assigCompat(s->lhs->type(), s->rhs); // TEST
+        error(s->pos, QString("rhs is not assignment compatible with lhs (%1,%2)").arg(Type::name[lt->kind]).arg(Type::name[rt->kind]));
     }
 }
 
@@ -713,7 +726,7 @@ bool Validator2::isPtrOrVarWithRecordObject(Expression* e)
     Declaration* d = e->val.value<Declaration*>();
     if( d == 0 || !d->isLvalue() )
         return false;
-    Type* t = deref(d->type());
+    Type* t = deref(e->type()); // use e->type to consider typeOverrides
     if( t->kind == Type::Object )
         return true;
     if( t->kind == Type::PTR )
@@ -764,9 +777,9 @@ Ast::Statement *Validator2::WithStat(Ast::Statement *s) {
     }
 
     Declaration* d = s->lhs->val.value<Declaration*>();
-    Ast::Type* t = d->overrideType(s->rhs->type());
+    typeOverrides.push_back(qMakePair(d, s->rhs->type()));
     StatSeq(s->body);
-    d->overrideType(t);
+    typeOverrides.pop_back();
 
     return s;
 }
@@ -967,7 +980,7 @@ bool Validator2::relation(Ast::Expression *e)
                     error(e->pos, "IS cannot be applied to these operand types");
             }else if( rhsT->kind != Type::Object )
                 error(e->pos, "IS cannot be applied to these operand types");
-            else if( !assigCompat(lhsT,rhsT) )
+            else if( !lhsIsBaseOfRhs(lhsT,rhsT) )
                 error(e->pos, "OBJECT operands not related, so IS cannot be applied");
         }else if( lhsT->kind == Type::PTR )
         {
@@ -980,14 +993,11 @@ bool Validator2::relation(Ast::Expression *e)
                 rhsT = deref(rhsT->type());
             if( lhsT->kind != Type::Record )
                 error(e->pos, "IS can only be applied to RECORD or OBJECT types");
-            else if( !assigCompat(lhsT, rhsT) )
-            {
-                assigCompat(lhsT, rhsT); // TEST
+            else if( !lhsIsBaseOfRhs(lhsT, rhsT) )
                 error(e->pos, "RECORD operands not related, so IS cannot be applied");
-            }
         }else if( lhsT->kind == Type::Record )
         {
-            if( !assigCompat(lhsT, rhsT) )
+            if( !lhsIsBaseOfRhs(lhsT, rhsT) )
                 error(e->pos, "RECORD operands not related, so IS cannot be applied");
         }
 #ifdef _SUPPORT_STRANGE_RELATIONS
@@ -1178,7 +1188,7 @@ bool Validator2::declRef(Ast::Expression *e)
     {
         if( !d->validated )
             decl(d);
-        e->setType(d->type());
+        e->setType(getGuardedType(d));
         return true;
     }
     e->setType(mdl->getType(Type::NoType));
@@ -1295,7 +1305,11 @@ bool Validator2::depoint(Ast::Expression *e)
     if( lhsT->kind == Type::Pointer
             || lhsT->kind == Type::Object // this happens in some places and is likely an error
             )
-        e->setType(lhsT->type());
+    {
+        if( lhsT->kind == Type::Pointer )
+            lhsT = lhsT->type();
+        e->setType(lhsT);
+    }
     else
         return error(e->pos,"can only dereference a pointer");
     return true;
@@ -1345,7 +1359,12 @@ bool Validator2::call(Ast::Expression *e)
         {
             Expr(args[i]);
             if( proc && proc->kind != Declaration::Builtin && !paramCompat(formals[i]->type(), args[i]) )
-                error(args[i]->pos, "actual argument is not compatible with formal parameter");
+            {
+                Type* tf = deref(formals[i]->type());
+                Type* ta = deref(args[i]->type());
+                // paramCompat(formals[i]->type(), args[i]); // TEST
+                error(args[i]->pos, QString("actual argument is not compatible with formal parameter (%1,%2)").arg(Type::name[tf->kind]).arg(Type::name[ta->kind]));
+            }
         }
 
     const bool isTypeCast = (proc == 0 || proc->kind != Declaration::Builtin) &&
@@ -1497,7 +1516,7 @@ bool Validator2::nameRef(Ast::Expression * nameRef)
         decl(r.second); // AosTV does use ConstDecls in expressions before they were visited
     // TODO: maybe we should conduct a separate initial run to just import and resolve NameRefs.
 
-    nameRef->setType(r.second->type());
+    nameRef->setType(getGuardedType(r.second));
 
     if( r.second->kind == Declaration::LocalDecl || r.second->kind == Declaration::ParamDecl ||
             (r.second->kind == Declaration::Procedure && r.second->outer->kind == Declaration::Procedure) )
@@ -1602,19 +1621,32 @@ bool Validator2::assigCompat(Ast::Type *lhs, Ast::Type *rhs)
         return lhsIncludeRhs(lhs, rhs);
     if( lhs->kind == Type::BYTE && (rhs->kind == Type::CHAR || rhs->kind == Type::SHORTINT) )
         return true;
+
     if(lhs->kind == Type::Pointer && rhs->kind == Type::Pointer )
         return assigCompat(lhs->type(), rhs->type());
+
     if( (lhs->kind == Type::Object && rhs->kind == Type::Object) ||
-        (lhs->kind == Type::Record && rhs->kind == Type::Record) )
+        (lhs->kind == Type::Record && rhs->kind == Type::Record) ||
+            (lhs->kind == Type::Pointer && rhs->kind == Type::Object) ||
+            (lhs->kind == Type::Object && rhs->kind == Type::Pointer))
         return lhsIsBaseOfRhs(lhs, rhs);
+
     if( lhs->kind == Type::ANYOBJ && rhs->kind == Type::Object )
         return true;
+
     if( (lhs->kind == Type::Pointer || lhs->kind == Type::Object || lhs->kind == Type::ANYOBJ ||
-         lhs->kind == Type::PTR || lhs->kind == Type::Procedure)
+         lhs->kind == Type::PTR || lhs->kind == Type::Procedure || lhs->kind == Type::ANY)
             && rhs->kind == Type::NIL )
         return true;
     if( lhs->kind == Type::PTR && rhs->kind == Type::Pointer )
         return true; // happens in Oberon Systen 2.3.7
+
+    if( !forceOberon90 && lhs->kind == Type::PTR && (rhs->kind == Type::Object || rhs->kind == Type::ANY) )
+        return true;
+
+    if( !forceOberon90 && lhs->kind == Type::ANY && (rhs->kind == Type::Pointer || rhs->kind == Type::Object || rhs->kind == Type::PTR))
+        return true;
+
     if( allowPtrToLongint && lhs->kind == Type::LONGINT && rhs->kind == Type::PTR )
         return true;
     return false;
@@ -1633,7 +1665,8 @@ bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
                      // or, there are LONGREAL consts assigned to REAL, e.g. JPEG.Mod:1559
                      // there are LONGREAL consts used in arith exprs and assigned to REAL, e.g. JPEG.Mod:2027, same for integers
 
-    if( lhsT->kind == Type::Array && lhsT->expr != 0 && deref(lhsT->type())->kind == Type::CHAR && rhsT->kind == Type::StrLit )
+    if( lhsT->kind == Type::Array /* && lhsT->expr != 0 */ && deref(lhsT->type())->kind == Type::CHAR && rhsT->kind == Type::StrLit )
+        // there is at least one case where str := "" and str is VAR ARRAY OF CHAR
         return true; // TODO: check m < n for ARRAY n OF CHAR and string constant with m characters
 
     if( (lhsT->kind == Type::CHAR || lhsT->kind == Type::BYTE) && rhsT->kind == Type::StrLit )
@@ -1644,7 +1677,7 @@ bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
         return true;
     }
 
-    if( lhsT->kind == Type::Procedure && rhs->kind == Expression::DeclRef )
+    if( lhsT->kind == Type::Procedure && (rhs->kind == Expression::DeclRef || rhs->kind == Expression::Select) )
     {
         Declaration* d = rhs->val.value<Declaration*>();
         if( d && d->kind == Declaration::Procedure )
@@ -1652,9 +1685,14 @@ bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
             if( d->outer && d->outer->kind == Declaration::Procedure )
             {
                 error(rhs->pos, "cannot take address of nested procedures");
-                return false;
+                return true;
             }
-            return paramListsMatch(lhsT->subs, lhsT->type(), d->getParams(true), d->type());
+            if( !paramListsMatch(lhsT->subs, lhsT->type(), d->getParams(true), d->type()) )
+            {
+                // paramListsMatch(lhsT->subs, lhsT->type(), d->getParams(true), d->type()); // TEST
+                error(rhs->pos, "incompatible parameter list");
+            }
+            return true;
         } // else: lhs could be a variable of proc type
     }
 
@@ -1701,6 +1739,8 @@ bool Validator2::paramCompat(Ast::Type *lhs, Ast::Expression *rhs)
             if( (ta->kind == Type::Pointer && taa->kind == Type::Array && taaa->kind == Type::CHAR) || ta->kind == Type::NIL )
                 return true; // happens in OFSFATVolumes v2.3.7
         }
+        if( tf->kind == Type::PTR && (ta->kind == Type::Pointer || ta->kind == Type::Object))
+            return true;
     }
     return res;
 }
@@ -1721,6 +1761,13 @@ bool Validator2::arrayCompat(Ast::Type *lhs, Ast::Type *rhs)
     // Tf is ARRAY OF CHAR and a is a string
     if( tf->kind == Type::Array && deref(tf->type())->kind == Type::CHAR && ta->kind == Type::StrLit)
         return true;
+
+    if( tf->kind == Type::Array && deref(tf->type())->kind == Type::CHAR && ta->kind == Type::CHAR)
+        return true; // happens once in AOS apps
+
+    if( !forceOberon90 && tf->kind == Type::Array && tf->expr == 0 && ta->isPtrToArray() )
+        return arrayCompat(tf->type(), deref(ta->type())->type());
+
 
     return false;
 }
@@ -1802,6 +1849,9 @@ bool Validator2::equals(Ast::Type * lhs, Ast::Type * rhs)
         return equals( lhs->type(), rhs->type() );
     if( lhs->kind == Type::Procedure && rhs->kind == Type::Procedure )
         return paramListsMatch(lhs->subs, lhs->type(), rhs->subs, rhs->type() );
+    if( (lhs->kind == Type::ANY && rhs->kind == Type::PTR) ||
+            (lhs->kind == Type::PTR && rhs->kind == Type::ANY) )
+        return true; // happens often in bluebottle (and only there)
     return false;
 }
 

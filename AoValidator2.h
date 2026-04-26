@@ -121,6 +121,7 @@ namespace Ao {
         void arrayStats(Ast::Type * t, const RowCol & rc, char what);
         bool checkIfObjectInit(Ast::Type* t);
         bool checkIfPointerInit(Ast::Type* t);
+        Ast::Type* getGuardedType(Ast::Declaration* d);
 
     private:
         Ast::Declaration* module;
@@ -134,7 +135,9 @@ namespace Ao {
         Ast::Symbol* last;
         QHash<Ast::Declaration*,Ast::SymList> xref;
         QHash<Ast::Declaration*,Ast::DeclList> subs;
+        QList<QPair<Ast::Declaration*, Ast::Type*>> typeOverrides;
         bool allowPtrToLongint;
+        bool forceOberon90;
 
 	};
 }

@@ -42,7 +42,15 @@ const char* Type::name[] = {
     "SET",
     "PTR",
     "ANY",
-    "OBJECT" // any object
+    "OBJECT", // any object
+    "",
+    "Pointer",
+    "Reference",
+    "Procedure",
+    "Array",
+    "Record",
+    "Object",
+    ""
 };
 
 const char* Builtin::name[] = {
@@ -405,6 +413,18 @@ bool Type::isPtrToOpenArray() const
         if( base )
             base = base->deref();
         return base->kind == Array && base->expr == 0;
+    }else
+        return false;
+}
+
+bool Type::isPtrToArray() const
+{
+    if( kind == Pointer )
+    {
+        Type* base = type();
+        if( base )
+            base = base->deref();
+        return base->kind == Array;
     }else
         return false;
 }
@@ -840,7 +860,7 @@ void Expression::setByVal()
 
 static inline bool valIsLatin1Char( const QVariant& val)
 {
-    const QByteArray conv = val.toByteArray();
+    const QString conv = QString::fromLatin1(val.toByteArray());
     return conv.size() == 1;
 }
 
@@ -855,9 +875,9 @@ bool Expression::isCharLiteral()
         return valIsLatin1Char(val);
     if( kind == Expression::DeclRef && t && t->kind == Type::StrLit )
     {
-        Declaration* d = val.value<Declaration*>();
-        if( d && d->kind == Declaration::ConstDecl && d->expr && d->expr->kind == Expression::Literal )
-            return valIsLatin1Char(d->expr->val);
+        Expression* val = resolveConstDecl();
+        if( val && val->kind == Expression::Literal )
+            return valIsLatin1Char(val->val);
     }
     return false;
 }
@@ -890,6 +910,18 @@ qint64 Expression::getCaseValue(bool* ok) const
             *ok = false;
         return 0;
     }
+}
+
+Expression *Expression::resolveConstDecl() const
+{
+    Expression* e = const_cast<Expression*>(this);
+    while( e->kind == Expression::DeclRef )
+    {
+        Declaration* d = e->val.value<Declaration*>();
+        if( d && d->kind == Declaration::ConstDecl )
+            e = d->expr;
+    }
+    return e;
 }
 
 void Expression::appendRhs(Expression* e)
@@ -1092,23 +1124,6 @@ void Node::setType(Type * t)
         t->owned = true;
     }
     _ty = t;
-}
-
-Type *Node::overrideType(Type * t)
-{
-    if( _ty && _ty->kind == Type::Reference )
-    {
-        // in case the declaration has a reference type (indicating it is a var parameter)
-        // replace the type the reference points to instead
-        Type* old = _ty->_ty;
-        _ty->_ty = t;
-        return old;
-    }else
-    {
-        Type* old = _ty;
-        _ty = t;
-        return old;
-    }
 }
 
 Node::~Node()

@@ -99,7 +99,6 @@ namespace Ast
 
         Type* type() const { return _ty; }
         void setType(Type*);
-        Type* overrideType(Type*);
 
         Node():meta(0),
     #ifndef _DEBUG
@@ -184,6 +183,7 @@ namespace Ast
         bool isSO() const { return kind == Record || kind == Object; }
         bool isSOA() const { return isSO() || (kind == Array && expr); }
         bool isPtrToOpenArray() const;
+        bool isPtrToArray() const;
         bool isPtrToSO() const;
 
         bool isDerefCharArray() const;
@@ -279,7 +279,7 @@ namespace Ast
         Kind kind;
 #endif
 
-        QVariant val; // set elements and call args are ExpList embedded in val
+        QVariant val; // set elements and call args are ExpList embedded in val, also DeclRef and Select
         Expression* lhs; // for unary and binary ops
         Expression* rhs; // for binary ops
         Expression* next; // for args, set elems, and caselabellist
@@ -289,6 +289,7 @@ namespace Ast
         void setByVal();
         bool isCharLiteral();
         qint64 getCaseValue(bool* ok = 0) const;
+        Expression* resolveConstDecl() const;
         void appendRhs(Expression*);
         static int getCount(const Expression* list);
         static void append(Expression* list, Expression* elem);

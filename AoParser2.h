@@ -142,6 +142,7 @@ namespace Ao {
         QByteArray BEGIN;
         bool hasAnyBody;
         bool hasProcedures;
+        quint16 codeSectionCount;
     };
 }
 #endif // include
