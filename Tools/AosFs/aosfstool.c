@@ -25,7 +25,6 @@
 #include <time.h>
 #include <errno.h>
 
-/* ---- Constants ---- */
 
 #define SF          29        /* SectorFactor: DiskAdr = blockNum * SF */
 #define SS          4096      /* SectorSize (bytes per block) */
@@ -55,7 +54,6 @@
 
 #define MAX_FILES   8192  /* Max files we support listing */
 
-/* ---- On-disk types (all little-endian, packed) ---- */
 
 typedef int32_t  DiskAdr;
 typedef uint8_t  Sector[SS];
@@ -99,7 +97,6 @@ typedef struct {
     uint32_t map[MapSize];            /* 1024 * 4 = 4096 */
 } MapSector;
 
-/* ---- Volume structure ---- */
 
 typedef struct {
     FILE    *fp;
@@ -110,7 +107,6 @@ typedef struct {
     int32_t  bitmap_words;
 } Volume;
 
-/* ---- Public file info struct ---- */
 
 typedef struct {
     char     name[FnLength];
@@ -124,7 +120,6 @@ typedef struct {
     int32_t  size;        /* computed file size in bytes (data only) */
 } FileInfo;
 
-/* ---- Helpers ---- */
 
 static void put4(uint8_t *buf, int off, uint32_t val) {
     buf[off+0] = (uint8_t)(val);
@@ -140,7 +135,6 @@ static uint32_t get4(const uint8_t *buf, int off) {
          | ((uint32_t)buf[off+3] << 24);
 }
 
-/* ---- Sector I/O ---- */
 
 /* Read a 4096-byte block at DiskAdr (which is block_num * SF).
    block_num is 1-based. Byte offset = (reserved + (block_num-1)*8) * 512 */
@@ -188,7 +182,6 @@ static int PutSector(Volume *vol, DiskAdr adr, const void *src) {
     return 0;
 }
 
-/* ---- Bitmap operations ---- */
 
 static int IsMarked(Volume *vol, DiskAdr adr) {
     int32_t block = adr / SF;
@@ -233,9 +226,7 @@ static DiskAdr AllocSector(Volume *vol, DiskAdr hint) {
     return 0;
 }
 
-/* ---- Build bitmap by traversing directory ---- */
 
-/* Forward declarations */
 static void TraverseDirForBitmap(Volume *vol, DiskAdr dpg, DiskAdr *file_addrs, int *file_count);
 static void MarkFileSectors(Volume *vol, DiskAdr *file_addrs, int file_count);
 
@@ -309,8 +300,6 @@ static void MarkFileSectors(Volume *vol, DiskAdr *file_addrs, int file_count) {
     }
 }
 
-/* ---- Save bitmap to disk (MapIndex at last sector) ---- */
-
 static int SaveBitmap(Volume *vol) {
     /* Mirrors OFSAosFiles.DirCleanup behavior:
        - choose free sectors near the end to temporarily store map sectors
@@ -369,7 +358,6 @@ done:
     return 0;
 }
 
-/* ---- MBR partition detection ---- */
 
 /* Oberon partition type used in MBR partition tables */
 #define OBERON_PTYPE  0x4C
@@ -429,8 +417,6 @@ static long FindAosPartition(FILE *fp) {
     }
     return -1;
 }
-
-/* ---- Open an existing volume ---- */
 
 static Volume *OpenVolume(const char *path, const char *mode) {
     FILE *fp = fopen(path, mode);
@@ -509,7 +495,6 @@ static void CloseVolume(Volume *vol) {
     free(vol);
 }
 
-/* ---- Directory search ---- */
 
 static DiskAdr DirSearch(Volume *vol, const char *name) {
     DiskAdr dadr = DirRootAdr;
@@ -536,7 +521,6 @@ static DiskAdr DirSearch(Volume *vol, const char *name) {
     }
 }
 
-/* ---- Directory insert ---- */
 
 static int dir_insert(Volume *vol, char fn[FnLength], DiskAdr dpg0,
                       int *h, DirEntry *v, DiskAdr fad, DiskAdr *replacedFad);
@@ -655,8 +639,6 @@ static int dir_insert(Volume *vol, char fn[FnLength], DiskAdr dpg0,
     }
     return 0;
 }
-
-/* ---- Directory delete ---- */
 
 static int dir_delete(Volume *vol, char fn[FnLength], DiskAdr dpg0,
                       int *h, DiskAdr *fad);
@@ -816,8 +798,6 @@ static int underflow(Volume *vol, DirPage *c, DiskAdr dpg0, int s, int *h) {
     return 0;
 }
 
-/* ---- Free all sectors of a file on disk ---- */
-
 static int PurgeFile(Volume *vol, DiskAdr hdadr) {
     FileHeader hd;
     if (GetSector(vol, hdadr, &hd) != 0) return -1;
@@ -850,8 +830,6 @@ static int PurgeFile(Volume *vol, DiskAdr hdadr) {
     }
     return 0;
 }
-
-/* ---- Enumerate directory (collect FileInfo array) ---- */
 
 static void EnumDir(Volume *vol, DiskAdr dpg, FileInfo *files, int *count, int max_files) {
     DirPage a;
@@ -896,8 +874,6 @@ static int ListFiles(Volume *vol, FileInfo *files, int max_files) {
     return count;
 }
 
-/* ---- Date/Time encoding/decoding ---- */
-
 static void DecodeDateTime(int32_t date, int32_t time_val,
                            int *year, int *month, int *day,
                            int *hour, int *min, int *sec) {
@@ -924,8 +900,6 @@ static void GetCurrentDateTime(int32_t *date, int32_t *time_val) {
                    date, time_val);
 }
 
-/* ---- Check file name validity ---- */
-
 static int CheckName(const char *s, char fn[FnLength]) {
     memset(fn, 0, FnLength);
     int i = 0;
@@ -949,8 +923,6 @@ static int CheckName(const char *s, char fn[FnLength]) {
     }
     return 0;
 }
-
-/* ---- Read file data from volume ---- */
 
 static int ReadFileData(Volume *vol, DiskAdr headerAdr, uint8_t *buf, int32_t bufsize, int32_t *bytesRead) {
     FileHeader hd;
@@ -1020,8 +992,6 @@ static int ReadFileData(Volume *vol, DiskAdr headerAdr, uint8_t *buf, int32_t bu
     *bytesRead = pos;
     return 0;
 }
-
-/* ---- Write a new file to volume ---- */
 
 static int WriteNewFile(Volume *vol, const char *oberon_name, const uint8_t *data, int32_t dataLen) {
     char fn[FnLength];
@@ -1155,8 +1125,6 @@ static int WriteNewFile(Volume *vol, const char *oberon_name, const uint8_t *dat
     return 0;
 }
 
-/* ---- Create a new empty volume ---- */
-
 /* QEMU default CHS geometry: 16 heads, 63 sectors/track, 512 bytes/sector.
    1 cylinder = 16 * 63 * 512 = 516096 bytes = 126 AosFS blocks (4096 bytes).
    Padding the image to a cylinder boundary prevents QEMU from rounding down
@@ -1260,8 +1228,6 @@ static int CreateVolume(const char *path, int32_t size_mb) {
     return 0;
 }
 
-/* ---- Command: list ---- */
-
 static int cmd_list(const char *vol_path) {
     Volume *vol = OpenVolume(vol_path, "rb");
     if (!vol) return -1;
@@ -1296,8 +1262,6 @@ static int cmd_list(const char *vol_path) {
     return 0;
 }
 
-/* ---- Command: getall ---- */
-
 static int cmd_get(const char *vol_path, const char *oberon_name, const char *host_path);
 
 static int cmd_getall(const char *vol_path, const char *host_path) {
@@ -1322,15 +1286,17 @@ static int cmd_getall(const char *vol_path, const char *host_path) {
     for (int i = 0; i < count; i++) {
         if( len )
             strcpy( path + len, files[i].name);
-        cmd_get(vol_path, files[i].name, path);
+        if( cmd_get(vol_path, files[i].name, path) != 0 )
+        {
+            fprintf(stderr, "terminating\n");
+            break;
+        }
     }
 
     free(files);
     CloseVolume(vol);
     return 0;
 }
-
-/* ---- Command: get ---- */
 
 static int cmd_get(const char *vol_path, const char *oberon_name, const char *host_path) {
     Volume *vol = OpenVolume(vol_path, "rb");
@@ -1387,8 +1353,6 @@ static int cmd_get(const char *vol_path, const char *oberon_name, const char *ho
     return 0;
 }
 
-/* ---- Command: add ---- */
-
 static int cmd_add(const char *vol_path, const char *host_path, const char *oberon_name) {
     /* Read host file */
     FILE *in = fopen(host_path, "rb");
@@ -1441,8 +1405,6 @@ static int cmd_add(const char *vol_path, const char *host_path, const char *ober
     return 0;
 }
 
-/* ---- Command: remove ---- */
-
 static int cmd_remove(const char *vol_path, const char *oberon_name) {
     Volume *vol = OpenVolume(vol_path, "r+b");
     if (!vol) return -1;
@@ -1486,8 +1448,6 @@ static int cmd_remove(const char *vol_path, const char *oberon_name) {
     return 0;
 }
 
-/* ---- Command: new ---- */
-
 static int cmd_new(const char *vol_path, const char *size_str) {
     int size_mb = atoi(size_str);
     if (size_mb < 1) {
@@ -1496,8 +1456,6 @@ static int cmd_new(const char *vol_path, const char *size_str) {
     }
     return CreateVolume(vol_path, size_mb);
 }
-
-/* ---- Usage ---- */
 
 static void usage(const char *prog) {
     fprintf(stderr, "Oberon Aos File System Tool\n\n");
@@ -1509,8 +1467,6 @@ static void usage(const char *prog) {
     fprintf(stderr, "  %s getall <volume> [host_dir]             Export all files\n", prog);
     fprintf(stderr, "  %s remove <volume> <ob_name>              Remove a file\n", prog);
 }
-
-/* ---- Main ---- */
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
