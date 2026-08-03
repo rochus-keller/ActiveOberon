@@ -291,6 +291,7 @@ void Validator2::Assembler(Ast::Declaration* proc) {
     //expect(Tok_CODE, false, "Assembler");
     // TODO
     // qDebug() << "###" << module->name.constData() << proc->pos.d_row << proc->name.constData() << "\n" << proc->data.toByteArray().mid(5).constData();
+    // qDebug() << module->data.value<ModuleData>().sourcePath << proc->name.constData();
     ModuleData md = module->data.value<ModuleData>();
     if( md.sourcePath.contains("portable/") )
         qDebug() << "WARNING: remove CODE in" << module->name << proc->pos.d_row;
@@ -1015,7 +1016,7 @@ bool Validator2::relation(Ast::Expression *e)
     {
         if( e->kind == Expression::In || e->kind == Expression::Is )
             error(e->pos, "string operands not compatible with IN or IS operator");
-    }else if( lhsT->isNumber() && rhsT->isNumber() )
+    }else if( lhsT->isNumberOrByte() && rhsT->isNumberOrByte() )
     {
         if( e->kind == Expression::In || e->kind == Expression::Is )
             error(e->pos, "numeric operands not compatible with IN or IS operator");
@@ -1023,7 +1024,7 @@ bool Validator2::relation(Ast::Expression *e)
     {
         if( e->kind != Expression::Eq && e->kind != Expression::Neq )
             error(e->pos, "SET operands not compatible with given operator");
-    }else if( lhsT->isInteger() && rhsT->isSet() )
+    }else if( lhsT->isIntegerOrByte() && rhsT->isSet() )
     {
         if( e->kind != Expression::In )
             error(e->pos, "operands not compatible with IN operator");
@@ -1617,10 +1618,14 @@ bool Validator2::assigCompat(Ast::Type *lhs, Ast::Type *rhs)
 
     if( lhs == rhs )
         return true;
-    if(lhs->isNumber() && rhs->isNumber() )
-        return lhsIncludeRhs(lhs, rhs);
+
     if( lhs->kind == Type::BYTE && (rhs->kind == Type::CHAR || rhs->kind == Type::SHORTINT) )
         return true;
+    if( lhs->kind == Type::CHAR && rhs->kind == Type::BYTE )
+        return true;
+
+    if(lhs->isNumberOrByte() && rhs->isNumberOrByte() )
+        return lhsIncludeRhs(lhs, rhs);
 
     if(lhs->kind == Type::Pointer && rhs->kind == Type::Pointer )
         return assigCompat(lhs->type(), rhs->type());
@@ -1660,7 +1665,7 @@ bool Validator2::assigCompat(Ast::Type *lhsT, Ast::Expression *rhs)
     lhsT = deref(lhsT);
     Type* rhsT = deref(rhs->type());
 
-    if( /*rhs->isConst() && */ lhsT->isNumber() && rhsT->isNumber() )
+    if( /*rhs->isConst() && */ lhsT->isNumberOrByte() && rhsT->isNumberOrByte() )
         return true; // NOTE: joker added because we don't do const eval here so that e.g. OPM.Mod:169 is INTEGER instead of SHORTINT,
                      // or, there are LONGREAL consts assigned to REAL, e.g. JPEG.Mod:1559
                      // there are LONGREAL consts used in arith exprs and assigned to REAL, e.g. JPEG.Mod:2027, same for integers
@@ -1775,7 +1780,7 @@ bool Validator2::arrayCompat(Ast::Type *lhs, Ast::Type *rhs)
 Type *Validator2::includingType(Ast::Type * lhs, Ast::Type * rhs)
 {
     Q_ASSERT( lhs && rhs );
-    if( !lhs->isNumber() || !rhs->isNumber() )
+    if( !lhs->isNumberOrByte() || !rhs->isNumberOrByte() )
         return mdl->getType(Ast::Type::NoType);
     if( (lhs->kind == rhs->kind) && (rhs->kind == Type::BYTE) )
         return mdl->getType(Type::SHORTINT);
@@ -1788,9 +1793,11 @@ Type *Validator2::includingType(Ast::Type * lhs, Ast::Type * rhs)
 bool Validator2::lhsIncludeRhs(Ast::Type *lhs, Ast::Type *rhs)
 {
     Q_ASSERT( lhs && rhs );
-    if( !lhs->isNumber() || !rhs->isNumber() )
+    if( !lhs->isNumberOrByte() || !rhs->isNumberOrByte() )
         return false;
-    // LONGREAL ⊇ REAL ⊇ HUGEINT ⊇ LONGINT ⊇ INTEGER ⊇ SHORTINT
+    // LONGREAL ⊇ REAL ⊇ HUGEINT ⊇ LONGINT ⊇ INTEGER ⊇ SHORTINT/BYTE
+    if( lhs->kind == Type::BYTE && rhs->kind == Type::SHORTINT || lhs->kind == Type::SHORTINT && rhs->kind == Type::BYTE )
+        return mdl->getType(Type::SHORTINT);
     return lhs->kind >= rhs->kind;
 }
 

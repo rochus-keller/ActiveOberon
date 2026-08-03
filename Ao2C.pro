@@ -10,7 +10,9 @@ TEMPLATE = app
 
 INCLUDEPATH += . ..
 
-#DEFINES += _DEBUG
+CONFIG(debug, debug|release) {
+        DEFINES += _DEBUG
+}
 
 SOURCES += \
         ./AoBuilins.cpp \

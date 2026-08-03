@@ -27,27 +27,50 @@ int main(int argc, char *argv[])
 {
     QCoreApplication a(argc, argv);
 
-    Project2 pro;
-
-    QDir where;
-    if( a.arguments().size() == 2 )
-    {
-        QFileInfo info(a.arguments()[1]);
-        if( info.isFile() )
-            where = info.absoluteDir();
-        else
-            where = info.absoluteFilePath();
-    }
-    pro.initializeFromDir(where);
-
     QTextStream out(stdout);
     out << "o2c (c) 2026 by me@rochus-keller.ch" << endl;
+
+    const QStringList args = a.arguments();
+    if (args.size() < 2) {
+        out << "Usage:\n" << "  o2c [-p] [-r] <files_or_dir>\n";
+        return 2;
+    }
+
+    QDir where;
+    bool justParse = false;
+    bool recursive = false;
+    bool hasPath = false;
+    QStringList files;
+    for( int i=1;i<args.size();++i ) {
+        if (args[i] == "-p")
+            justParse = true;
+        else if (args[i] == "-r")
+            recursive = true;
+        else {
+            QFileInfo info(a.arguments()[i]);
+            if( info.isFile() )
+                files << info.absoluteFilePath();
+            else {
+                hasPath = true;
+                where = info.absoluteDir();
+            }
+        }
+    }
+    Project2 pro;
+    if( hasPath )
+        pro.initializeFromDir(where, recursive);
+    else
+    {
+        foreach( const QString& file, files )
+            pro.addFile(file);
+    }
+
     if( pro.getFiles().isEmpty() )
     {
         out << "ERROR: no Oberon source files found in " << where.absolutePath() << endl;
         return 1;
     }else
-        out << "found " << pro.getFiles().size() << " Oberon source files in " << where.absolutePath() << endl;
+        out << "found " << pro.getFiles().size() << " Oberon source files in " << where.absolutePath() << (recursive ? " and subdirectories" : "" ) << endl;
     if( !pro.parse() )
     {
         foreach( const Project2::Error& e, pro.getErrors() )
@@ -56,6 +79,8 @@ int main(int argc, char *argv[])
     }
     out << "Successfully parsed " << pro.getFiles().size() << " Oberon source files" << endl;
 
+    if( justParse )
+        return 0;
     if( pro.generateC(where.absolutePath() ) )
         out << "Successfully generated " << pro.getFiles().size() << " C source files" << endl;
     else
