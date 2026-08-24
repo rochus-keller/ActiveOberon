@@ -24,6 +24,10 @@
 #include "AoLexer.h"
 #include "AoValidator2.h"
 #include "AoCeeGen.h"
+#ifdef AO_PROJECT2_MICRON_GEN
+#include "AoMicronGen.h"
+#endif
+#include "AoComments.h"
 #include <QBuffer>
 #include <QDir>
 #include <QtDebug>
@@ -90,7 +94,8 @@ struct HitTest
     }
 };
 
-Project2::Project2(QObject *parent) : QObject(parent),d_dirty(false),d_useBuiltInOakwood(false)
+Project2::Project2(QObject *parent) : QObject(parent),d_dirty(false),d_useBuiltInOakwood(false),
+    d_aggregateComments(false)
 {
     d_suffixes << ".Mod" << ".mod";
     d_groups.append( FileGroup() );    // root
@@ -157,6 +162,21 @@ void Project2::setUseBuiltInOakwood(bool on)
     d_useBuiltInOakwood = on;
     touch();
 }
+
+#ifdef AO_PROJECT2_MICRON_GEN
+void Project2::setAggregateComments(bool on)
+{
+    d_aggregateComments = on;
+}
+
+CommentTable* Project2::getComments(Declaration* module) const
+{
+    const ModuleSlot* ms = findModule(module);
+    if( ms == 0 )
+        return 0;
+    return ms->cmts;
+}
+#endif
 
 bool Project2::addFile(const QString& filePath, const QByteArrayList& package, bool notFound)
 {
@@ -619,6 +639,16 @@ Declaration*Project2::loadModule(const Import& imp)
     modules.append(ModuleSlot(imp,file->d_filePath,0));
     ms = &modules.back();
 
+#ifdef AO_PROJECT2_MICRON_GEN
+    if( d_aggregateComments )
+        ms->cmts = new CommentTable();
+
+    CommentScanner lex(ms->cmts);
+    if( !file->d_cache.isEmpty() )
+        lex.setStream(file->d_cache, file->d_filePath);
+    else
+        lex.setStream(file->d_filePath);
+#else
     class Lex2 : public Scanner2
     {
     public:
@@ -634,14 +664,15 @@ Declaration*Project2::loadModule(const Import& imp)
         }
         QString source() const { return sourcePath; }
     };
-
     Lex2 lex;
     lex.sourcePath = file->d_filePath; // to keep file name if invalid
+
     if( !file->d_cache.isEmpty() )
         lex.lex.setStream(file->d_cache, file->d_filePath);
     else
         lex.lex.setStream(file->d_filePath);
     //lex.lex.reset(d_options);
+#endif
     AstModel mdl;
     Parser2 p(&mdl,&lex);
     p.RunParser();
@@ -712,6 +743,9 @@ void Project2::clearModules()
     {
         Symbol::deleteAll((*i).xref.syms);
         Declaration::deleteAll((*i).decl);
+#ifdef AO_PROJECT2_MICRON_GEN
+        delete (*i).cmts;
+#endif
     }
     modules.clear();
     subs.clear();
@@ -826,6 +860,57 @@ bool Project2::generateC(const QString &outDir, bool genMain)
     out << "}" << endl;
     return true;
 }
+
+#ifdef AO_PROJECT2_MICRON_GEN
+bool Project2::generateMicron(const QString& outDir, int level, bool obDiv)
+{
+    QDir dir(outDir);
+
+    QList<Declaration*> mods;
+    foreach( const ModuleSlot& module, modules )
+    {
+        if( module.decl && module.decl->validated )
+            mods << module.decl;
+    }
+    MicronModel model;
+    model.analyze(mods);
+
+    QStringList manual;
+    foreach( const ModuleSlot& module, modules )
+    {
+        if( module.decl == 0 || !module.decl->validated || module.decl->extern_ )
+            continue;
+        QFile out( dir.absoluteFilePath(module.decl->name + ".mic"));
+        if( !out.open(QFile::WriteOnly) )
+        {
+            errors << Error("cannot open file for writing", RowCol(), out.fileName());
+            continue;
+        }
+        MicronGen mg(&model);
+        mg.setLevel(level);
+        mg.setObDiv(obDiv);
+        if( !mg.generate(module.decl, &out, module.cmts) )
+        {
+            foreach( const MicronGen::Error& e, mg.errors )
+                errors << Error(e.msg,e.pos,e.path);
+        }
+        manual << mg.manual;
+    }
+
+    // the places which cannot be translated automatically are collected in a report
+    QFile report(dir.absoluteFilePath("o2m_todo.txt"));
+    if( report.open(QFile::WriteOnly) )
+    {
+        QTextStream rout(&report);
+        rout << MicronGen::genDedication() << endl;
+        rout << "// the following places require manual post processing" << endl << endl;
+        foreach( const QString& m, manual )
+            rout << m << endl;
+    }
+
+    return true;
+}
+#endif
 
 bool Project2::save()
 {

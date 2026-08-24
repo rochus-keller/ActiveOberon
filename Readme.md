@@ -14,7 +14,11 @@ Here is a screenshot of the code navigator:
 
 There is now also an IDE which supports project files (obpro) and better structuring of a project.
 
-The Oberon to C transpiler is available from the navigator, the IDE and a stand-alone application.
+The Oberon to C transpiler is available from the navigator, the IDE and a stand-alone application. The C transpiler was used
+e.g. to create a [cross-platform version of OP2](https://github.com/rochus-keller/op2/) used to build the 
+[native Oberon System 3](https://github.com/rochus-keller/oberonsystem3native/) for the Raspberry Pi.
+
+There is also an Oberon to Micron transpiler; it is available from the IDE and another stand-alone application.
 
 NOTE that this project is work in progress.
 

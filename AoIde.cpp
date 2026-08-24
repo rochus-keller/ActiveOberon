@@ -600,6 +600,7 @@ void Ide::createMenu()
     pop->addSeparator();
     pop->addCommand( "Compile", this, SLOT(onCompile()), tr("CTRL+T"), false );
     pop->addCommand( "Export C99...", this, SLOT(onExportC()) );
+    pop->addCommand( "Export Micron...", this, SLOT(onExportMic()) );
     addTopCommands(pop);
 
     new Gui::AutoShortcut( tr("CTRL+O"), this, this, SLOT(onOpenPro()) );
@@ -661,6 +662,7 @@ void Ide::createMenuBar()
     pop = new Gui::AutoMenu( tr("Build"), this );
     pop->addCommand( "Compile", this, SLOT(onCompile()), tr("CTRL+T"), false );
     pop->addCommand( "Export C99...", this, SLOT(onExportC()) );
+    pop->addCommand( "Export Micron...", this, SLOT(onExportMic()) );
     pop->addSeparator();
     pop->addCommand( "Show dependency order...", this, SLOT(onShowDepOrder()) );
 
@@ -2064,6 +2066,29 @@ void Ide::onExportC()
                                                    "see Output window for more information"));
 }
 
+void Ide::onExportMic()
+{
+    ENABLED_IF( d_pro->getErrors().isEmpty() );
+
+    const QString dirPath = QFileDialog::getExistingDirectory(this, tr("Save Micron"), d_pro->getBuildDir(true) );
+
+    if (dirPath.isEmpty())
+        return;
+
+    d_pro->setAggregateComments(true);
+    if( !compile() ) // otherwise allocated flag is already set after one generator run
+        return;
+
+    if( !d_pro->generateMicron(dirPath) )
+    {
+        onErrors();
+        fillAll();
+        QMessageBox::critical(this,tr("Save C"),tr("There was an error when generating Micron; "
+                                                   "see Output window for more information"));
+    }
+    d_pro->setAggregateComments(false);
+}
+
 void Ide::onShowDepOrder()
 {
     ENABLED_IF( d_pro->getErrors().isEmpty() );
@@ -2150,7 +2175,7 @@ int main(int argc, char *argv[])
     a.setOrganizationName("me@rochus-keller.ch");
     a.setOrganizationDomain("github.com/rochus-keller/ActiveOberon");
     a.setApplicationName("ActiveOberon IDE");
-    a.setApplicationVersion("0.1.10");
+    a.setApplicationVersion("0.1.11");
     a.setStyle("Fusion");
     QFontDatabase::addApplicationFont(":/fonts/DejaVuSansMono.ttf"); // "DejaVu Sans Mono"
 

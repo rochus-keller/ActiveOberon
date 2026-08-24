@@ -128,6 +128,7 @@ namespace Ao
         void onQt();
         void onExpMod();
         void onExportC();
+        void onExportMic();
         void onShowDepOrder();
         void onGotoPos();
         void onSearchSym();

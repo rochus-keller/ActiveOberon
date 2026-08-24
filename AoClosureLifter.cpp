@@ -42,36 +42,40 @@ bool ClosureLifter::analyze(Declaration* module)
     procIndex_.clear();
     procList_.clear();
     pathStack_.clear();
+
     if (!module || module->kind != Declaration::Module || !module->validated)
         return false;
 
     moduleName = module->name;
 
-    // Seed path with module name.
+    // seed path with module name
     pathStack_.append(module->name);
 
-    // 1) Index all procedures and gather per-proc basics.
-    for (Declaration* d = module->link; d; d = d->next) {
+    // index all procedures and gather per-proc basics
+    for (Declaration* d = module->link; d; d = d->next)
+    {
         if (d->kind == Declaration::Procedure)
             indexProcedure(d);
     }
 
-    // 2) Compute direct free-variable captures (i.e. non-local accesses) per proc.
-    for (int i = 0; i < procList_.size(); ++i) {
+    // compute direct free-variable captures (i.e. non-local accesses) per proc
+    for (int i = 0; i < procList_.size(); ++i)
+    {
         Declaration* p = procList_[i];
         ProcState& st = procIndex_[p];
         st.directFree = findDirectFree(p);
         st.required = st.directFree;
     }
 
-    // 3) Build direct call graph among nested procedures (by DeclRef).
-    for (int i = 0; i < procList_.size(); ++i) {
+    // build direct call graph among nested procedures (by DeclRef)
+    for (int i = 0; i < procList_.size(); ++i)
+    {
         Declaration* p = procList_[i];
         ProcState& st = procIndex_[p];
         st.callees = findDirectCallees(p);
     }
 
-    // 4) Fixpoint propagate required declarations along calls, stopping at owners.
+    // fixpoint propagate required declarations along calls, stopping at owners
     bool changed = true;
     while (changed) {
         changed = false;
@@ -94,7 +98,7 @@ bool ClosureLifter::analyze(Declaration* module)
         }
     }
 
-    // 5) Emit plans for procs that need to accept/forward anything or capture directly.
+    // emit plans for procs that need to accept/forward anything or capture directly.
     for (int i = 0; i < procList_.size(); ++i) {
         Declaration* p = procList_[i];
         ProcState& st = procIndex_[p];
@@ -145,7 +149,6 @@ bool ClosureLifter::analyze(Declaration* module)
         plans_.append(plan);
     }
 
-    // Pop module name.
     pathStack_.removeLast();
     return true;
 }
@@ -195,13 +198,15 @@ const ClosureLifter::ProcPlan* ClosureLifter::plan(Declaration * module) const
 
 void ClosureLifter::indexProcedure(Declaration* proc)
 {
-    if (!proc || proc->kind != Declaration::Procedure) return;
+    // index a procedure and recurse into nested ones
 
-    // Enter stack.
+    if (!proc || proc->kind != Declaration::Procedure)
+        return;
+
     procStack_.append(proc);
     pathStack_.append(proc->name);
 
-    // Register state if first time.
+    // Register state if first time
     if (!procIndex_.contains(proc)) {
         ProcState st;
         st.path = pathStack_;
@@ -210,19 +215,19 @@ void ClosureLifter::indexProcedure(Declaration* proc)
         procList_.append(proc);
     }
 
-    // Recurse into nested procedures declared within this procedure.
+    // Recurse into nested procedures declared within this procedure
     for (Declaration* d = proc->link; d; d = d->next) {
         if (d->kind == Declaration::Procedure)
             indexProcedure(d);
     }
 
-    // Leave stack.
     pathStack_.removeLast();
     procStack_.removeLast();
 }
 
 QSet<Declaration*> ClosureLifter::findDirectFree(Declaration* proc) const
 {
+    // scan body for outer locals/params used by proc (i.e. "free variables")
     QSet<Declaration*> acc;
     if (!proc || !proc->body)
         return acc;
@@ -233,16 +238,20 @@ QSet<Declaration*> ClosureLifter::findDirectFree(Declaration* proc) const
 void ClosureLifter::scanStmt(Statement* s, Declaration* currentProc, QSet<Declaration*>& acc) const
 {
     while (s) {
-        if (s->lhs) scanExpr(s->lhs, currentProc, acc);
-        if (s->rhs) scanExpr(s->rhs, currentProc, acc);
-        if (s->body) scanStmt(s->body, currentProc, acc);
+        if (s->lhs)
+            scanExpr(s->lhs, currentProc, acc);
+        if (s->rhs)
+            scanExpr(s->rhs, currentProc, acc);
+        if (s->body)
+            scanStmt(s->body, currentProc, acc);
         s = s->getNext();
     }
 }
 
 void ClosureLifter::scanExpr(Expression* e, Declaration* currentProc, QSet<Declaration*>& acc) const
 {
-    if (!e) return;
+    if (!e)
+        return;
 
     if (e->kind == Expression::DeclRef) {
         Declaration* d = qvariant_cast<Declaration*>(e->val);
@@ -251,29 +260,39 @@ void ClosureLifter::scanExpr(Expression* e, Declaration* currentProc, QSet<Decla
         }
     }
 
-    // Calls: nothing special here; callees are collected separately.
-    if (e->lhs)  scanExpr(e->lhs,  currentProc, acc);
-    if (e->rhs)  scanExpr(e->rhs,  currentProc, acc);
-    if (e->next) scanExpr(e->next, currentProc, acc);
+    if (e->lhs)
+        scanExpr(e->lhs,  currentProc, acc);
+    if (e->rhs)
+        scanExpr(e->rhs,  currentProc, acc);
+    if (e->next)
+        scanExpr(e->next, currentProc, acc);
 }
 
 bool ClosureLifter::isFreeVarUse(Declaration* d, Declaration* currentProc) const
 {
-    if (!d || !currentProc) return false;
+    // A declaration use in currentProc is a free variable if it is a local var/param
+    // whose owner is an outer (i.e. "ancestor") procedure of currentProc (and not currentProc itself)
+    if (!d || !currentProc)
+        return false;
     if (d->kind != Declaration::VarDecl &&
             d->kind != Declaration::LocalDecl &&
-            d->kind != Declaration::ParamDecl) return false;
+            d->kind != Declaration::ParamDecl)
+        return false;
 
     Declaration* owner = ownerProc(d);
-    if (!owner) return false;               // module-level → ignore
-    if (owner == currentProc) return false; // not free for current proc
+    if (!owner)
+        return false; // module-level -> ignore
+    if (owner == currentProc)
+        return false; // not free for current proc
     return isAncestor(owner, currentProc);
 }
 
 Declaration* ClosureLifter::ownerProc(Declaration* d) const
 {
+    // Find owner procedure that declares d.
     for (Declaration* o = d ? d->outer : 0; o; o = o->outer) {
-        if (o->kind == Declaration::Procedure) return o;
+        if (o->kind == Declaration::Procedure)
+            return o;
     }
     return 0;
 }
@@ -281,15 +300,18 @@ Declaration* ClosureLifter::ownerProc(Declaration* d) const
 bool ClosureLifter::isAncestor(Declaration* anc, Declaration* desc) const
 {
     for (Declaration* o = desc ? desc->outer : 0; o; o = o->outer) {
-        if (o == anc) return true;
+        if (o == anc)
+            return true;
     }
     return false;
 }
 
 QList<Declaration*> ClosureLifter::findDirectCallees(Declaration* proc) const
 {
+    // Build list of direct nested-proc callees by scanning calls whose lhs resolves to a proc decl.
     QList<Declaration*> out;
-    if (!proc || !proc->body) return out;
+    if (!proc || !proc->body)
+        return out;
     QSet<Declaration*> seen;
     collectCallees(proc->body, out, seen);
     return out;
@@ -300,18 +322,21 @@ void ClosureLifter::collectCallees(Statement* s, QList<Declaration*>& out, QSet<
     while (s) {
         collectCalleesExpr(s->lhs, out, seen);
         collectCalleesExpr(s->rhs, out, seen);
-        if (s->body) collectCallees(s->body, out, seen);
+        if (s->body)
+            collectCallees(s->body, out, seen);
         s = s->getNext();
     }
 }
 
 void ClosureLifter::collectCalleesExpr(Expression* e, QList<Declaration*>& out, QSet<Declaration*>& seen) const
 {
-    if (!e) return;
+    if (!e)
+        return;
     if (e->kind == Expression::Call) {
         // Super call: target in e->lhs->lhs
         Expression* tgt = e->lhs;
-        if (tgt && tgt->kind == Expression::Super) tgt = tgt->lhs;
+        if (tgt && tgt->kind == Expression::Super)
+            tgt = tgt->lhs;
 
         Declaration* callee = 0;
         if (tgt && (tgt->kind == Expression::DeclRef || tgt->kind == Expression::Select)) {
@@ -324,17 +349,22 @@ void ClosureLifter::collectCalleesExpr(Expression* e, QList<Declaration*>& out, 
             }
         }
     }
-    if (e->lhs)  collectCalleesExpr(e->lhs,  out, seen);
-    if (e->rhs)  collectCalleesExpr(e->rhs,  out, seen);
-    if (e->next) collectCalleesExpr(e->next, out, seen);
+    if (e->lhs)
+        collectCalleesExpr(e->lhs,  out, seen);
+    if (e->rhs)
+        collectCalleesExpr(e->rhs,  out, seen);
+    if (e->next)
+        collectCalleesExpr(e->next, out, seen);
 }
 
 void ClosureLifter::stripOwned(Declaration* p, QSet<Declaration*>& s) const
 {
+    // remove declarations owned by p (p provides actuals, no param needed for own locals/params)
     QSet<Declaration*> toRemove;
     for (QSet<Declaration*>::const_iterator it = s.begin(); it != s.end(); ++it) {
         Declaration* d = *it;
-        if (ownerProc(d) == p) toRemove.insert(d);
+        if (ownerProc(d) == p)
+            toRemove.insert(d);
     }
     for (QSet<Declaration*>::const_iterator it = toRemove.begin(); it != toRemove.end(); ++it) {
         s.remove(*it);
@@ -344,9 +374,11 @@ void ClosureLifter::stripOwned(Declaration* p, QSet<Declaration*>& s) const
 QSet<QByteArray> ClosureLifter::existingParamNames(Declaration* proc) const
 {
     QSet<QByteArray> names;
-    if (!proc || proc->kind != Declaration::Procedure) return names;
+    if (!proc || proc->kind != Declaration::Procedure)
+        return names;
     QList<Declaration*> params = proc->getParams(/*skipReceiver*/false);
-    for (int i = 0; i < params.size(); ++i) names.insert(params[i]->name);
+    for (int i = 0; i < params.size(); ++i)
+        names.insert(params[i]->name);
     return names;
 }
 
@@ -369,15 +401,20 @@ QList<QByteArray> ClosureLifter::buildPathFor(Declaration* proc) const
             rev.append(o->name);
         }
     }
-    for (int i = rev.size() - 1; i >= 0; --i) path.append(rev[i]);
+    for (int i = rev.size() - 1; i >= 0; --i)
+        path.append(rev[i]);
     return path;
 }
 
 QByteArray ClosureLifter::join(const QList<QByteArray>& path)
 {
-    if (path.isEmpty()) return QByteArray();
+    if (path.isEmpty())
+        return QByteArray();
     QByteArray s = path[0];
-    for (int i = 1; i < path.size(); ++i) { s += '.'; s += path[i]; }
+    for (int i = 1; i < path.size(); ++i) {
+        s += '.';
+        s += path[i];
+    }
     return s;
 }
 
@@ -386,7 +423,8 @@ int ClosureLifter::depthOfOwner(Declaration* d) const
     Declaration* o = ownerProc(d);
     int depth = 0;
     for (Declaration* x = o ? o->outer : 0; x; x = x->outer) {
-        if (x->kind == Declaration::Procedure) ++depth;
+        if (x->kind == Declaration::Procedure)
+            ++depth;
     }
     return depth;
 }

@@ -21,6 +21,8 @@ QT       += core gui widgets
 TARGET = OberonIDE
 TEMPLATE = app
 
+DEFINES += AO_PROJECT2_MICRON_GEN
+
 INCLUDEPATH += .. 
 
 SOURCES += AoIde.cpp \
@@ -29,6 +31,8 @@ SOURCES += AoIde.cpp \
     ../GuiTools/DocTabWidget.cpp \
     AoBuilins.cpp \
     AoCeeGen.cpp \
+    AoComments.cpp \
+    AoMicronGen.cpp \
     AoProject2.cpp \
     AoRowCol.cpp \
     AoToken.cpp \
@@ -46,6 +50,8 @@ HEADERS  += AoIde.h \
     ../GuiTools/DocTabWidget.h \
     AoBuilins.h \
     AoCeeGen.h \
+    AoComments.h \
+    AoMicronGen.h \
     AoProject2.h \
     AoRowCol.h \
     AoToken.h \

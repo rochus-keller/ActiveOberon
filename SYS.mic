@@ -1,0 +1,64 @@
+module SYS [level=2]  // RK 2026
+
+type AnyPtr = pointer to byte // helper type for Oberon addresses and SYSTEM.PTR
+type Int32ArrPtr = pointer to array of int32 // helper type for an address moved by an offset
+
+
+procedure ROT*(x, n: int32): int32
+  // x rotated left by n bits, right if n is negative; two shifts, see DESIGN.md
+  var m: uint32
+    u: uint32
+begin
+  m := usig(obmod(n, 32)) // 0 <= m < 32, also for a negative n
+  u := usig(x)
+  if m = 0 then
+    return x
+  end
+  return cast(int32,shl(u, m) + shr(u, 32 - m))
+end ROT
+
+procedure MOVE*(src, dst: AnyPtr; n: int32)
+  // n bytes from src to dst; the blocks may overlap, see DESIGN.md
+  var s, d: AnyPtr
+    sw, dw: Int32ArrPtr
+    i, w: int32
+begin
+  if (n <= 0) or (src = dst) or (src = nil) or (dst = nil) then return end
+  if val(uint32, ord(dst)) > val(uint32, ord(src)) then
+    s := ptroff(src, n - 1)
+    d := ptroff(dst, n - 1)
+    i := 0
+    while i < n do
+      d^ := s^
+      s := ptroff(s, -1)
+      d := ptroff(d, -1)
+      inc(i)
+    end
+  else
+    if band(bor(val(uint32, ord(src)), val(uint32, ord(dst))), 3) = 0 then
+      // both blocks are word aligned, so whole words are moved
+      sw := cast(Int32ArrPtr, src)
+      dw := cast(Int32ArrPtr, dst)
+      w := n div 4
+      i := 0
+      while i < w do
+        dw[i] := sw[i]
+        inc(i)
+      end
+      i := w * 4
+    else
+      i := 0
+    end
+    s := ptroff(src, i)
+    d := ptroff(dst, i)
+    while i < n do
+      d^ := s^
+      s := ptroff(s, 1)
+      d := ptroff(d, 1)
+      inc(i)
+    end
+  end
+end MOVE
+
+
+end SYS.

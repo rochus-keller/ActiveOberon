@@ -31,46 +31,40 @@
 #include <QByteArray>
 #include <QTextStream>
 
-namespace Ao { namespace Ast {
+namespace Ao {
+namespace Ast {
 
 // Lambda-lifting analyzer (per module).
 class ClosureLifter {
 public:
     struct LiftParam {
-        QByteArray   name;          // chosen name (may be renamed)
-        QByteArray   originalName;  // source identifier
-        Declaration* sourceProc;    // declaring procedure (owner of the var/param/local)
-        Declaration* sourceDecl;    // the captured declaration
-        bool         renamed;       // true if name had to be changed
+        QByteArray   name;
+        QByteArray   originalName;
+        Declaration* sourceProc;
+        Declaration* sourceDecl;
+        bool         renamed;
     };
 
     struct ProcPlan {
-        Declaration*          proc;           // this nested procedure
-        QList<QByteArray>     path;           // module → … → proc
-        QList<LiftParam>      addedParams;    // VAR-form parameters to add (ordered)
-        QSet<Declaration*>    required;       // set of required declarations (fixpoint)
-        QSet<Declaration*>    directFree;     // direct free variables used in body
-        QList<Declaration*>   outerProcs;     // lexical ancestors (outermost first)
-        QList<Declaration*>   callees;        // direct nested-proc callees (by DeclRef)
+        Declaration* proc;
+        QList<QByteArray> path; // from module to nested proc
+        QList<LiftParam> addedParams; // ordered
+        QSet<Declaration*> required;  // set of required declarations, fixpoint
+        QSet<Declaration*> directFree; // direct free variables used in body
+        QList<Declaration*> outerProcs; // lexical ancestors, outermost first
+        QList<Declaration*> callees;  // direct nested-proc callees, by DeclRef
         const LiftParam* findFromSourceDecl(Declaration* sourceDecl) const;
     };
 
-
     ClosureLifter() { }
 
-    // Analyze a module and return true on success
     bool analyze(Declaration* module);
-
-    // Pretty print resulting plans.
     void printPlans(QTextStream& out) const;
 
-    // return plans for all nested procedures that need to accept
-    // and/or forward extra VAR parameters (including intermediates).
     const QVector<ProcPlan>& plans() const { return plans_; }
     const ProcPlan* plan(Declaration*) const;
 
 private:
-    // Internal per-procedure state during analysis.
     struct ProcState {
         QList<QByteArray>   path;
         QList<Declaration*> outers;
@@ -79,32 +73,20 @@ private:
         QList<Declaration*> callees;
     };
 
-    // Step 1: index a procedure and recurse into nested ones.
     void indexProcedure(Declaration* proc);
 
-    // Scan body for outer locals/params used by proc (i.e. "free variables").
     QSet<Declaration*> findDirectFree(Declaration* proc) const;
 
     void scanStmt(Statement* s, Declaration* currentProc, QSet<Declaration*>& acc) const;
     void scanExpr(Expression* e, Declaration* currentProc, QSet<Declaration*>& acc) const;
-
-    // A declaration use in currentProc is a free variable if it is a local var/param
-    // whose owner is an outer (i.e. "ancestor") procedure of currentProc (and not currentProc itself).
     bool isFreeVarUse(Declaration* d, Declaration* currentProc) const;
-
-    // Find owner procedure that declares d.
     Declaration* ownerProc(Declaration* d) const;
-
     bool isAncestor(Declaration* anc, Declaration* desc) const;
-
-    // Build list of direct nested-proc callees by scanning calls whose lhs resolves to a proc decl.
     QList<Declaration*> findDirectCallees(Declaration* proc) const;
 
     void collectCallees(Statement* s, QList<Declaration*>& out, QSet<Declaration*>& seen) const;
-
     void collectCalleesExpr(Expression* e, QList<Declaration*>& out, QSet<Declaration*>& seen) const;
 
-    // Remove declarations owned by p (p provides actuals, no param needed for own locals/params).
     void stripOwned(Declaration* p, QSet<Declaration*>& s) const;
 
     QSet<QByteArray> existingParamNames(Declaration* proc) const;
@@ -117,14 +99,14 @@ private:
     struct DeclLess;
     int depthOfOwner(Declaration* d) const;
 private:
-    QVector<ProcPlan>                plans_;
-    QHash<Declaration*, ProcState>   procIndex_;
-    QList<Declaration*>              procList_;
-    QList<Declaration*>              procStack_;
-    QList<QByteArray>                pathStack_;
-    QByteArray                       moduleName;
+    QVector<ProcPlan> plans_;
+    QHash<Declaration*, ProcState> procIndex_;
+    QList<Declaration*> procList_;
+    QList<Declaration*> procStack_;
+    QList<QByteArray> pathStack_;
+    QByteArray moduleName;
 };
 
-}} // namespace Ao::Ast
+}}
 
 #endif // CLOSURE_LIFTER_H
