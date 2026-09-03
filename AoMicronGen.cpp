@@ -1204,7 +1204,7 @@ QByteArray MicronGen::escape(const QByteArray& name)
 }
 
 MicronGen::MicronGen(MicronModel* m):mdl(m),curMod(0),curProc(0),cmts(0),curLevel(0),level(4),
-    obDiv(false),lastRow(0),curPlan(0),no2d(false),constCtx(0),noPromote(0),addSys(false)
+    obDiv(false),genCmds(false),lastRow(0),curPlan(0),no2d(false),constCtx(0),noPromote(0),addSys(false)
 {
     if( mdl == 0 )
         mdl = &ownModel;
@@ -2170,6 +2170,9 @@ void MicronGen::Module(Declaration* module)
 
     DeclSeq(d);
 
+    if( genCmds )
+        CmdProc(module);
+
     Declaration* body = 0;
     d = module->link;
     while( d )
@@ -2196,6 +2199,38 @@ void MicronGen::Module(Declaration* module)
     }
     flushUntil(module->data.value<ModuleData>().end.d_row + 1);
     out << "end " << escape(module->name) << "." << endl;
+}
+
+void MicronGen::CmdProc(Declaration* module)
+{
+    DeclList cmds;
+    Declaration* d = module->link;
+    while( d )
+    {
+        Type* ret = deref(d->type());
+        if( d->kind == Declaration::Procedure && d->isPublic() && !d->begin && !d->receiver &&
+                d->getParams(true).isEmpty() && ( ret == 0 || ret->kind == Type::NoType ) )
+            cmds << d;
+        d = d->next;
+    }
+    if( cmds.isEmpty() )
+        return;
+
+    const QByteArray type = uniqueName(module, "CMD_");
+    const QByteArray name = uniqueName(module, "cmd_");
+    out << endl << "type " << type << " = procedure" << endl;
+    out << endl << "procedure " << name
+        << "*(i: int32; name: ^array " << cmdNameLen << " of char): " << type << endl;
+    out << "begin" << endl;
+    curLevel++;
+    for( int i = 0; i < cmds.size(); i++ )
+    {
+        out << ws() << "if i = " << i << " then if name # nil then name^ := \"" << cmds[i]->name
+            << "\" end return " << escape(cmds[i]->name) << " end" << endl;
+    }
+    out << ws() << "return nil" << endl;
+    curLevel--;
+    out << "end " << name << endl;
 }
 
 Declaration* MicronGen::ImportList(Declaration* import)

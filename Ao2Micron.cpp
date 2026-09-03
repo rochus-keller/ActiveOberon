@@ -36,6 +36,7 @@ int main(int argc, char *argv[])
     args.removeFirst();
     int level = 4; // target language level
     bool obDiv = true; // generate Oberon's DIV/MOD -> obdiv/obmod
+    bool cmds = false; // generate the cmd_ lookup procedure per module
     for( int i = 0; i < args.size(); i++ )
     {
         if( args[i] == "-l" && i + 1 < args.size() )
@@ -49,14 +50,20 @@ int main(int argc, char *argv[])
             obDiv = false;
             args.removeAt(i);
             i--;
+        }else if( args[i] == "--cmds" )
+        {
+            cmds = true;
+            args.removeAt(i);
+            i--;
         }
     }
     if( args.isEmpty() )
     {
-        out << "usage: o2m [-l <level>] [--plaindiv] <project>.obpro [<outdir>]" << endl;
-        out << "       o2m [-l <level>] [--plaindiv] <source dir> [<outdir>]" << endl;
+        out << "usage: o2m [-l <level>] [--plaindiv] [--cmds] <project>.obpro [<outdir>]" << endl;
+        out << "       o2m [-l <level>] [--plaindiv] [--cmds] <source dir> [<outdir>]" << endl;
         out << "  -l <level>   the Micron language level of the generated modules (default 4)" << endl;
         out << "  --plaindiv   use DIV/MOD instead of OBDIV/OBMOD where an operand could be negative" << endl;
+        out << "  --cmds       generate a cmd_ procedure per module to look up its commands" << endl;
         return 1;
     }
 
@@ -106,7 +113,7 @@ int main(int argc, char *argv[])
     }
     out << "successfully parsed " << pro.getFiles().size() << " Oberon source files" << endl;
 
-    if( !pro.generateMicron(outDir.absolutePath(), level, obDiv) || !pro.getErrors().isEmpty() )
+    if( !pro.generateMicron(outDir.absolutePath(), level, obDiv, cmds) || !pro.getErrors().isEmpty() )
     {
         foreach( const Project2::Error& e, pro.getErrors() )
            out << "Generator ERROR: " << QFileInfo(e.path).baseName() << ":" << e.pos.d_row << ":"

@@ -112,7 +112,7 @@ namespace Ao
         bool generateC(const QString& outDir, bool genMain = false);
 
 #ifdef AO_PROJECT2_MICRON_GEN
-        bool generateMicron(const QString& outDir, int level = 5, bool obDiv = false);
+        bool generateMicron(const QString& outDir, int level = 5, bool obDiv = false, bool cmds = false);
         void setAggregateComments(bool);
         bool aggregateComments() const { return d_aggregateComments; }
         Ast::CommentTable* getComments(Ast::Declaration* module) const;

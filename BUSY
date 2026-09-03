@@ -2,8 +2,6 @@
 # License: GPL
 # https://github.com/rochus-keller/BUSY/blob/main/README.md on how to use this file
 
-# NOTE: This is still for the old AoNavigator. The newer BUSY build is pending.
-
 if busy_version < "2023-01-15" {
     error("this version of BUSY is not compatible with this build")
 }
@@ -16,20 +14,15 @@ if (build_mode == `optimized) && (target_toolchain == `msvc) {
     set_defaults(target_toolchain,mtconf)
 }
 
-submod qtcore = ../LeanQt (HAVE_COREAPP,HAVE_FILEIO)
+submod qtmini = ../LeanQt (HAVE_COREAPP,HAVE_FILEIO)
+submod qtfull = ../LeanQt (HAVE_ITEMVIEWS)
 
-let run_moc : Moc {
-    .sources += [
-    ]
-}
 
 let o2c_conf : Config {
     .include_dirs += [ . .. ]
 }
 
-let aofront : SourceSet {
-    .configs += [ qtcore.qt_client_config o2c_conf ]
-    .sources += [
+let aofront = [
         ./AoBuilins.cpp
         ./AoRowCol.cpp
         ./AoToken.cpp
@@ -39,25 +32,52 @@ let aofront : SourceSet {
         ./AoAst.cpp
         ./AoValidator2.cpp
     ]
-}
 
-let aoback : SourceSet {
-    .configs += [ qtcore.qt_client_config o2c_conf ]
-    .sources += [
+let aoback = [
         ./AoCeeGen.cpp
         ./AoClosureLifter.cpp
     ]
+
+let navigator_moc : Moc {
+    .sources += [
+        ./AoCodeNavigator2.h
+        ./AoProject.h
+        ./AoAst.h
+    ]
 }
 
-let o2c ! : Executable {
-    .configs += [ qtcore.qt_client_config o2c_conf ]
+let navigator_rcc : Rcc {
+    .sources += ./AoCodeNavigator.qrc
+}
+
+let navigator* : Executable {
+    .configs += [ qtfull.qt_client_config o2c_conf ]
+    .sources = [
+        ./AoCodeNavigator2.cpp
+        ./AoHighlighter2.cpp
+        ./AoProject.cpp
+        ./AoFileSystem.cpp
+    ]
+    .sources += aofront;
+    .sources += aoback;
+    .deps += [ qtfull.libqt navigator_moc navigator_rcc ]
+    if target_os == `win32 {
+        .deps += qtfull.libqtwinmain
+    }
+    .name = "AoCodeNavigator"
+}
+
+let o2c* : Executable {
+    .configs += [ qtmini.qt_client_config o2c_conf ]
     .sources = [
         ./Ao2C.cpp
         ./AoProject2.cpp
     ]
-    .deps += [ qtcore.libqt aofront aoback ]
+    .sources += aofront;
+    .sources += aoback;
+    .deps += [ qtmini.libqt ]
     if target_os == `win32 {
-        .deps += qtcore.libqtwinmain
+        .deps += qtmini.libqtwinmain
     }
 }
 

@@ -862,7 +862,7 @@ bool Project2::generateC(const QString &outDir, bool genMain)
 }
 
 #ifdef AO_PROJECT2_MICRON_GEN
-bool Project2::generateMicron(const QString& outDir, int level, bool obDiv)
+bool Project2::generateMicron(const QString& outDir, int level, bool obDiv, bool cmds)
 {
     QDir dir(outDir);
 
@@ -889,6 +889,7 @@ bool Project2::generateMicron(const QString& outDir, int level, bool obDiv)
         MicronGen mg(&model);
         mg.setLevel(level);
         mg.setObDiv(obDiv);
+        mg.setGenCmds(cmds);
         if( !mg.generate(module.decl, &out, module.cmts) )
         {
             foreach( const MicronGen::Error& e, mg.errors )

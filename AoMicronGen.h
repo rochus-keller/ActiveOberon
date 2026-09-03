@@ -139,11 +139,14 @@ namespace Ao
         QStringList manual; // list of places which need manual post processing
         QStringList srcLines; // the Oberon source of the module being generated
 
+        enum { cmdNameLen = 32 };
+
         MicronGen(MicronModel* = 0);
 
         void setModel(MicronModel* m) { mdl = m; }
         void setLevel(int l) { level = l; }
         void setObDiv(bool on) { obDiv = on; }
+        void setGenCmds(bool on) { genCmds = on; }
 
         bool generate(Ast::Declaration* module, QIODevice* out, Ast::CommentTable* comments = 0);
 
@@ -155,6 +158,7 @@ namespace Ao
         static qint64 constVal(Ast::Expression*, bool* ok = 0);
     protected:
         void Module(Ast::Declaration* module);
+        void CmdProc(Ast::Declaration* module);
         Ast::Declaration* ImportList(Ast::Declaration*);
         Ast::Declaration* DeclSeq(Ast::Declaration*);
         void ConstSection(const Ast::DeclList&);
@@ -319,6 +323,7 @@ namespace Ao
         int curLevel;
         int level;
         bool obDiv;
+        bool genCmds;       
         quint32 lastRow;
         Ast::ClosureLifter cl;
         const Ast::ClosureLifter::ProcPlan* curPlan;
